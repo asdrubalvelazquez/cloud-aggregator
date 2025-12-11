@@ -63,12 +63,12 @@ export default function DriveFilesPage() {
       } catch (e: any) {
         setError(e.message || "Error cargando archivos");
       } finally {
+        setLoading(false);
+      }
+    };
 
-  const handleCopyFile = async (fileId: string, fileName: string) => {
-    if (!selectedTargetAccount) {
-      alert("Please select a target account first");
     const fetchCopyOptions = async () => {
-        method: "POST",
+      try {
         const res = await fetch(
           `${API_BASE_URL}/drive/${accountId}/copy-options`
         );
@@ -91,9 +91,9 @@ export default function DriveFilesPage() {
   const handleCopyFile = async (fileId: string, targetId: number) => {
     if (!targetId) {
       setCopyStatus("Selecciona una cuenta destino");
-        headers: { "Content-Type": "application/json" },
+      return;
     }
-        body: JSON.stringify({
+
     try {
       setCopying(true);
       setCopyStatus("Copiando archivo...");
