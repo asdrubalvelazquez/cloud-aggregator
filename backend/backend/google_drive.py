@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from dateutil import parser as dateutil_parser
 import httpx
 
-from db import supabase
+from backend.db import supabase
 
 GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 GOOGLE_DRIVE_API_BASE = "https://www.googleapis.com/drive/v3"

@@ -7,8 +7,8 @@ from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from db import supabase
-from google_drive import (
+from backend.db import supabase
+from backend.google_drive import (
     get_storage_quota,
     list_drive_files,
     copy_file_between_accounts,
