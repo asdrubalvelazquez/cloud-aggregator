@@ -4,18 +4,18 @@ import { useEffect, useState } from "react";
 
 type Account = {
   id: number;
-  account_email: string;
-  google_account_id: string;
-  limit_gb?: number | null;
-  usage_gb?: number | null;
+  email: string;
+  limit: number;
+  usage: number;
+  usage_percent: number;
   error?: string;
 };
 
 type StorageSummary = {
   accounts: Account[];
-  total_limit_gb: number;
-  total_usage_gb: number;
-  total_free_gb: number | null;
+  total_limit: number;
+  total_usage: number;
+  total_usage_percent: number;
 };
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
@@ -111,7 +111,7 @@ export default function Home() {
                   Total espacio
                 </h2>
                 <p className="text-2xl font-bold">
-                  {data.total_limit_gb.toFixed(2)} GB
+                  {(data.total_limit / (1024 ** 3)).toFixed(2)} GB
                 </p>
               </div>
               <div className="bg-slate-800 rounded-xl p-4 shadow">
@@ -119,15 +119,15 @@ export default function Home() {
                   Usado
                 </h2>
                 <p className="text-2xl font-bold">
-                  {data.total_usage_gb.toFixed(2)} GB
+                  {(data.total_usage / (1024 ** 3)).toFixed(2)} GB
                 </p>
               </div>
               <div className="bg-slate-800 rounded-xl p-4 shadow">
                 <h2 className="text-sm text-slate-300 uppercase tracking-wide">
-                  Libre
+                  % Utilizado
                 </h2>
                 <p className="text-2xl font-bold">
-                  {data.total_free_gb?.toFixed(2) ?? "--"} GB
+                  {data.total_usage_percent}%
                 </p>
               </div>
             </section>
@@ -169,12 +169,12 @@ export default function Home() {
                           key={acc.id}
                           className="border-b border-slate-800 hover:bg-slate-700/40"
                         >
-                          <td className="py-2 pr-4">{acc.account_email}</td>
+                          <td className="py-2 pr-4">{acc.email}</td>
                           <td className="py-2 pr-4">
-                            {acc.usage_gb != null ? acc.usage_gb.toFixed(2) : "—"}
+                            {(acc.usage / (1024 ** 3)).toFixed(2)}
                           </td>
                           <td className="py-2 pr-4">
-                            {acc.limit_gb != null ? acc.limit_gb.toFixed(2) : "—"}
+                            {(acc.limit / (1024 ** 3)).toFixed(2)}
                           </td>
                           <td className="py-2 pr-4">
                             <a
