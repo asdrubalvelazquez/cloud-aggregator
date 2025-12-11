@@ -186,9 +186,12 @@ async def storage_summary():
             print(f"Error getting quota for account {account['id']}: {e}")
             continue
 
+    total_free = total_limit - total_usage if total_limit > 0 else 0
+    
     return {
         "total_limit": total_limit,
         "total_usage": total_usage,
+        "total_free": total_free,
         "total_usage_percent": round((total_usage / total_limit * 100) if total_limit > 0 else 0, 2),
         "accounts": account_details
     }
