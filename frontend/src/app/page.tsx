@@ -24,6 +24,7 @@ export default function Home() {
   const [data, setData] = useState<StorageSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
 
   const fetchSummary = async () => {
     try {
@@ -43,7 +44,32 @@ export default function Home() {
   };
 
   useEffect(() => {
-    fetchSummary();
+    // Verificar si el usuario acaba de autenticarse
+    const params = new URLSearchParams(window.location.search);
+    const authStatus = params.get("auth");
+    const authError = params.get("error");
+
+    if (authStatus === "success") {
+      setAuthMessage("✅ Cuenta de Google conectada exitosamente");
+      // Limpiar URL sin recargar la página
+      window.history.replaceState({}, "", window.location.pathname);
+      // Esperar 1 segundo antes de cargar los datos para que se procese en el backend
+      setTimeout(() => {
+        fetchSummary();
+      }, 1000);
+    } else if (authError) {
+      setError(`Error de autenticación: ${authError}`);
+      window.history.replaceState({}, "", window.location.pathname);
+      fetchSummary();
+    } else {
+      fetchSummary();
+    }
+
+    // Limpiar mensaje de éxito después de 5 segundos
+    if (authStatus === "success") {
+      const timer = setTimeout(() => setAuthMessage(null), 5000);
+      return () => clearTimeout(timer);
+    }
   }, []);
 
   const handleConnectGoogle = () => {
@@ -63,6 +89,13 @@ export default function Home() {
             Conectar nueva cuenta de Google Drive
           </button>
         </header>
+
+        {/* Mensaje de autenticación exitosa */}
+        {authMessage && (
+          <div className="bg-emerald-500/20 border border-emerald-500 rounded-lg p-4 text-emerald-100">
+            {authMessage}
+          </div>
+        )}
 
         {loading && <p>Cargando resumen de almacenamiento…</p>}
         {error && (
