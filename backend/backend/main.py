@@ -153,6 +153,32 @@ async def list_accounts():
     return {"accounts": resp.data}
 
 
+@app.get("/drive/{account_id}/copy-options")
+async def get_copy_options(account_id: int):
+    """Get list of target accounts for copying files"""
+    try:
+        # Verify source account exists
+        source = supabase.table("cloud_accounts").select("id, account_email").eq("id", account_id).single().execute()
+        if not source.data:
+            raise HTTPException(status_code=404, detail=f"Account {account_id} not found")
+        
+        # Get all other accounts
+        all_accounts = supabase.table("cloud_accounts").select("id, account_email").execute()
+        targets = [
+            {"id": acc["id"], "email": acc["account_email"]}
+            for acc in all_accounts.data
+            if acc["id"] != account_id
+        ]
+        
+        return {
+            "source_account": {
+                "id": source.data["id"],
+                "email": source.data["account_email"]
+            },
+            "target_accounts": targets
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 @app.get("/storage/summary")
 async def storage_summary():
     """Get aggregated storage summary across all accounts"""
@@ -199,12 +225,23 @@ async def storage_summary():
 
 @app.get("/drive/{account_id}/files")
 async def get_drive_files(account_id: int, page_token: Optional[str] = None):
-    """List files for a specific Drive account with pagination"""
+    """List files for a specific Drive account with pagination and token refresh"""
     try:
+        # Verify account exists
+        account = supabase.table("cloud_accounts").select("id").eq("id", account_id).single().execute()
+        if not account.data:
+            raise HTTPException(status_code=404, detail=f"Account {account_id} not found")
+        
+        # Ensure token is valid (auto-refresh if needed)
+        from backend.google_drive import get_valid_token
+        await get_valid_token(account_id)
+        
         result = await list_drive_files(account_id, page_size=20, page_token=page_token)
         return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
 
 
 class CopyFileRequest(BaseModel):
@@ -215,20 +252,35 @@ class CopyFileRequest(BaseModel):
 
 @app.post("/drive/copy-file")
 async def copy_file(request: CopyFileRequest):
-    """Copy a file from one Drive account to another"""
+    """Copy a file from one Drive account to another with token refresh"""
     try:
+        # Validate accounts exist and refresh tokens
+        source_acc = supabase.table("cloud_accounts").select("id").eq("id", request.source_account_id).single().execute()
+        target_acc = supabase.table("cloud_accounts").select("id").eq("id", request.target_account_id).single().execute()
+        
+        if not source_acc.data or not target_acc.data:
+            raise HTTPException(status_code=404, detail="One or both accounts not found")
+        
+        # Get tokens with auto-refresh
+        from backend.google_drive import get_valid_token
+        await get_valid_token(request.source_account_id)
+        await get_valid_token(request.target_account_id)
+        
         result = await copy_file_between_accounts(
             source_account_id=request.source_account_id,
             target_account_id=request.target_account_id,
             file_id=request.file_id
         )
+        
         return {
             "success": True,
             "message": "File copied successfully",
             "file": result
         }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Copy failed: {str(e)}")
 
 
 if __name__ == "__main__":
