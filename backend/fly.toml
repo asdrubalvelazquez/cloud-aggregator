@@ -2,7 +2,7 @@ app = "cloud-aggregator-api"
 primary_region = "iad"
 
 [build]
-  builder = "depot"
+  dockerfile = "Dockerfile"
 
 [env]
   PORT = "8080"
