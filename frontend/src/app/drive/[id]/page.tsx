@@ -1,11 +1,5 @@
 "use client";
 
-import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
-
-
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
@@ -33,7 +27,7 @@ type CopyOptions = {
   target_accounts: TargetAccount[];
 };
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
 export default function DriveFilesPage() {
   const params = useParams();
@@ -47,6 +41,7 @@ export default function DriveFilesPage() {
   const [selectedTarget, setSelectedTarget] = useState<number | null>(null);
   const [copying, setCopying] = useState(false);
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const loadingCopy = copying;
 
   useEffect(() => {
     const fetchFiles = async () => {
@@ -145,6 +140,15 @@ export default function DriveFilesPage() {
     });
   };
   
+  const handleCopyClick = (fileId: string) => {
+    const fallbackTarget = copyOptions?.target_accounts?.[0]?.id ?? null;
+    const target = selectedTarget ?? fallbackTarget;
+    if (!target) {
+      setCopyStatus("Selecciona una cuenta destino");
+      return;
+    }
+    handleCopyFile(fileId, target);
+  };
 
   if (loading) {
     return (
@@ -219,76 +223,48 @@ export default function DriveFilesPage() {
                       {files.map((file) => (
                         <tr
                           key={file.id}
-                          className={`border-b border-slate-800 hover:bg-slate-700/40 transition ${
-                            selectedFile === file.id ? "bg-slate-700/60" : ""
-                          }`}
+                          className="border-b border-slate-800 hover:bg-slate-700/40"
                         >
-                          <td className="py-3 px-4">
-                            <a
-                              href={file.webViewLink}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-emerald-400 hover:underline truncate block max-w-sm"
-                              title={file.name}
+                          {/* Nombre */}
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-100">
+                            {file.name}
+                          </td>
+
+                          {/* Tipo (extensión simple) */}
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
+                            {file.mimeType ? file.mimeType.split("/").pop() : "-"}
+                          </td>
+
+                          {/* Tamaño */}
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
+                            {file.size
+                              ? `${(Number(file.size) / 1024 / 1024).toFixed(2)} MB`
+                              : "-"}
+                          </td>
+
+                          {/* Ver */}
+                          <td className="px-6 py-4 whitespace-nowrap text-sm">
+                            {file.webViewLink && (
+                              <a
+                                href={file.webViewLink}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-emerald-400 hover:underline"
+                              >
+                                Abrir
+                              </a>
+                            )}
+                          </td>
+
+                          {/* Copiar */}
+                          <td className="px-6 py-4 whitespace-nowrap text-sm">
+                            <button
+                              disabled={loadingCopy}
+                              onClick={() => handleCopyClick(file.id)}
+                              className="rounded bg-emerald-500 hover:bg-emerald-600 px-3 py-1 text-xs font-semibold disabled:opacity-50"
                             >
-                              📄 {file.name}
-                            </a>
-                          </td>
-                          <td className="py-3 px-4 text-slate-400">
-                            {formatFileSize(file.size)}
-                          </td>
-                          <td className="py-3 px-4 text-slate-400">
-                            {formatDate(file.modifiedTime)}
-                          </td>
-                          <td className="py-3 px-4">
-                            <div className="flex gap-2 items-center">
-                              {selectedFile === file.id ? (
-                                <>
-                                  <select
-                                    value={selectedTarget || ""}
-                                    onChange={(e) =>
-                                      setSelectedTarget(
-                                        e.target.value ? parseInt(e.target.value) : null
-                                      )
-                                    }
-                                    className="bg-slate-700 text-slate-100 rounded px-2 py-1 text-xs border border-slate-600"
-                                  >
-                                    <option value="">Elegir cuenta...</option>
-                                    {copyOptions?.target_accounts.map((acc) => (
-                                      <option key={acc.id} value={acc.id}>
-                                        {acc.email}
-                                      </option>
-                                    ))}
-                                  </select>
-                                  <button
-                                    onClick={() =>
-                                      handleCopyFile(file.id, selectedTarget!)
-                                    }
-                                    disabled={!selectedTarget || copying}
-                                    className="bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white rounded px-2 py-1 text-xs font-semibold transition"
-                                  >
-                                    {copying ? "Copiando..." : "✓"}
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setSelectedFile(null);
-                                      setSelectedTarget(null);
-                                    }}
-                                    className="bg-slate-600 hover:bg-slate-500 text-white rounded px-2 py-1 text-xs transition"
-                                  >
-                                    ✕
-                                  </button>
-                                </>
-                              ) : (
-                                <button
-                                  onClick={() => setSelectedFile(file.id)}
-                                  disabled={!copyOptions || copyOptions.target_accounts.length === 0}
-                                  className="text-emerald-400 hover:underline text-xs disabled:text-slate-500 disabled:cursor-not-allowed"
-                                >
-                                  Copiar →
-                                </button>
-                              )}
-                            </div>
+                              {loadingCopy ? "Copiando..." : "Copiar"}
+                            </button>
                           </td>
                         </tr>
                       ))}
@@ -307,34 +283,15 @@ export default function DriveFilesPage() {
               )}
             </div>
           </main>
-        );
-                      {file.mimeType.split("/").pop()}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {file.size
-                        ? `${(parseInt(file.size) / 1024 / 1024).toFixed(2)} MB`
-                        : "-"}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {new Date(file.modifiedTime).toLocaleDateString()}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      {selectedTargetAccount && (
-                        <button
-                          onClick={() => handleCopyFile(file.id, file.name)}
-                          disabled={copying === file.id}
-                          className="bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-                        >
-                          {copying === file.id ? "Copying..." : "Copy"}
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
         </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-8">
+      <div className="max-w-6xl mx-auto">
+        {/* Content rendered above in non-error path */}
       </div>
     </div>
   );
