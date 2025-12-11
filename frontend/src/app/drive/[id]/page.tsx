@@ -144,26 +144,7 @@ export default function DriveFilesPage() {
       day: "numeric",
     });
   };
-          source_account_id: parseInt(accountId),
-          target_account_id: parseInt(selectedTargetAccount),
-          file_id: fileId,
-        }),
-      });
-
-      const data = await res.json();
-      
-      if (data.success) {
-        alert(`File "${fileName}" copied successfully!`);
-      } else {
-        alert(`Failed to copy file: ${data.detail || "Unknown error"}`);
-      }
-    } catch (err) {
-      alert("Error copying file");
-      console.error(err);
-    } finally {
-      setCopying(null);
-    }
-  };
+  
 
   if (loading) {
     return (
