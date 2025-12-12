@@ -88,9 +88,10 @@ async def get_storage_quota(account_id: int) -> dict:
         return resp.json()
 
 
-async def list_drive_files(account_id: int, page_size: int = 20, page_token: str = None) -> dict:
+async def list_drive_files(account_id: int, page_size: int = 20, page_token: str = None, folder_id: str = None) -> dict:
     """
     List files in Google Drive with pagination.
+    If folder_id is provided, lists files in that folder.
     Returns dict with 'files' array and optional 'nextPageToken'.
     """
     token = await get_valid_token(account_id)
@@ -100,6 +101,13 @@ async def list_drive_files(account_id: int, page_size: int = 20, page_token: str
         "fields": "nextPageToken, files(id, name, mimeType, size, createdTime, modifiedTime, webViewLink)",
         "orderBy": "modifiedTime desc"
     }
+    
+    # Filter by parent folder if provided
+    if folder_id:
+        params["q"] = f"'{folder_id}' in parents and trashed=false"
+    else:
+        # Root: exclude items in trash
+        params["q"] = "trashed=false"
     
     if page_token:
         params["pageToken"] = page_token
