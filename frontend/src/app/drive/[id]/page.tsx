@@ -237,18 +237,6 @@ export default function DriveFilesPage() {
     });
   };
 
-  // Abrir carpeta dentro de la app
-  const openFolder = (folderId: string, folderName: string) => {
-    if (!folderId) return;
-    console.log("📂 Opening folder:", folderName, "ID:", folderId);
-    router.push(`?folder_id=${encodeURIComponent(folderId)}`);
-  };
-
-  const goUp = () => {
-    // Go back to root by removing the folder_id param
-    router.push("");
-  };
-
   // Derived sorted files
   const sortedFiles = (() => {
     if (!files || !sortBy) return files;
