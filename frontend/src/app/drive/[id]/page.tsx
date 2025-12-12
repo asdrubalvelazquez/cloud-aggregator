@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useCopyContext } from "@/context/CopyContext";
 
@@ -32,7 +32,10 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8
 
 export default function DriveFilesPage() {
   const params = useParams();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const accountId = params.id as string;
+  const currentFolderId = searchParams.get("folder_id");
 
   // Use global copy context
   const {
@@ -47,9 +50,7 @@ export default function DriveFilesPage() {
   } = useCopyContext();
 
   const [files, setFiles] = useState<File[]>([]);
-  // Navegación dentro de carpetas
-  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
-  const [folderStack, setFolderStack] = useState<string[]>([]);
+  const [folderStack, setFolderStack] = useState<Array<{ id: string; name: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copyOptions, setCopyOptions] = useState<CopyOptions | null>(null);
@@ -209,21 +210,32 @@ export default function DriveFilesPage() {
   };
 
   // Abrir carpeta dentro de la app
-  const openFolder = (folderId: string) => {
+  const openFolder = (folderId: string, folderName: string) => {
     if (!folderId) return;
-    setFolderStack((prev) => (currentFolderId ? [...prev, currentFolderId] : prev));
-    setCurrentFolderId(folderId);
+    // Push new folder to stack before navigating
+    setFolderStack((prev) => [
+      ...prev,
+      { id: currentFolderId || "root", name: currentFolderId ? "..." : "Drive" },
+    ]);
+    // Navigate with folder_id in URL
+    router.push(`?folder_id=${folderId}`);
   };
 
   const goUp = () => {
     if (folderStack.length === 0) {
-      setCurrentFolderId(null);
+      // Go back to root
+      router.push("");
       return;
     }
-    const prev = [...folderStack];
-    const parent = prev.pop()!;
-    setFolderStack(prev);
-    setCurrentFolderId(parent);
+    const newStack = [...folderStack];
+    const parent = newStack.pop()!;
+    setFolderStack(newStack);
+    
+    if (parent.id === "root") {
+      router.push("");
+    } else {
+      router.push(`?folder_id=${parent.id}`);
+    }
   };
 
   // Derived sorted files
@@ -314,6 +326,44 @@ export default function DriveFilesPage() {
             </div>
           )}
         </header>
+
+        {/* Breadcrumb Navigation */}
+        {currentFolderId && (
+          <div className="flex items-center gap-2 text-sm text-slate-400">
+            <button
+              onClick={() => router.push("")}
+              className="hover:text-emerald-400 transition"
+            >
+              Drive
+            </button>
+            <span>/</span>
+            {folderStack.map((folder, idx) => (
+              <div key={`${folder.id}-${idx}`} className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    const newStack = folderStack.slice(0, idx + 1);
+                    setFolderStack(newStack);
+                    if (folder.id === "root") {
+                      router.push("");
+                    } else {
+                      router.push(`?folder_id=${folder.id}`);
+                    }
+                  }}
+                  className="hover:text-emerald-400 transition"
+                >
+                  {folder.name}
+                </button>
+                <span>/</span>
+              </div>
+            ))}
+            <button
+              onClick={goUp}
+              className="ml-2 px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs font-semibold transition text-emerald-400"
+            >
+              ← Subir
+            </button>
+          </div>
+        )}
 
         {/* Copy Status with Progress Bar */}
         {/* (Progreso ahora en floating bar sticky abajo) */}
@@ -423,7 +473,7 @@ export default function DriveFilesPage() {
                       {file.mimeType === "application/vnd.google-apps.folder" ? (
                         <button
                           type="button"
-                          onClick={() => openFolder(file.id)}
+                          onClick={() => openFolder(file.id, file.name)}
                           className="text-emerald-400 hover:underline"
                         >
                           Abrir carpeta
