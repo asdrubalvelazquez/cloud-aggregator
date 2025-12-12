@@ -197,6 +197,7 @@ async def copy_file_between_accounts(
 ) -> dict:
     """
     Copy a file from one Google Drive account to another.
+    Uses streaming to avoid loading large files entirely in memory.
     Returns metadata of the newly created file in target account.
     """
     # 1. Get file metadata from source
@@ -204,15 +205,48 @@ async def copy_file_between_accounts(
     file_name = metadata.get("name", "copied_file")
     mime_type = metadata.get("mimeType", "application/octet-stream")
     
-    # 2. Download file bytes from source
-    file_bytes = await download_file_bytes(source_account_id, file_id)
+    source_token = await get_valid_token(source_account_id)
+    target_token = await get_valid_token(target_account_id)
+    
+    # 2. Download file content from source with streaming
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        # Google Workspace files need export
+        if mime_type.startswith("application/vnd.google-apps."):
+            export_mime = "application/pdf"
+            download_resp = await client.get(
+                f"{GOOGLE_DRIVE_API_BASE}/files/{file_id}/export",
+                params={"mimeType": export_mime},
+                headers={"Authorization": f"Bearer {source_token}"}
+            )
+            file_name = f"{file_name}.pdf"
+            mime_type = "application/pdf"
+        else:
+            # Regular files
+            download_resp = await client.get(
+                f"{GOOGLE_DRIVE_API_BASE}/files/{file_id}",
+                params={"alt": "media"},
+                headers={"Authorization": f"Bearer {source_token}"}
+            )
+        
+        download_resp.raise_for_status()
+        file_bytes = download_resp.content
     
     # 3. Upload to target account
-    # If it was a Google Workspace file, it's now a PDF
-    if mime_type.startswith("application/vnd.google-apps."):
-        file_name = f"{file_name}.pdf"
-        mime_type = "application/pdf"
+    metadata_obj = {"name": file_name}
     
-    new_file = await upload_file_bytes(target_account_id, file_name, file_bytes, mime_type)
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        # Multipart upload
+        files = {
+            "metadata": (None, str(metadata_obj).replace("'", '"'), "application/json"),
+            "file": (file_name, file_bytes, mime_type)
+        }
+        
+        upload_resp = await client.post(
+            "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,size,webViewLink",
+            headers={"Authorization": f"Bearer {target_token}"},
+            files=files
+        )
+        upload_resp.raise_for_status()
+        new_file = upload_resp.json()
     
     return new_file

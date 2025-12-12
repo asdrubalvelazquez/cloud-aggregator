@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { useCopyContext } from "@/context/CopyContext";
 
 type File = {
   id: string;
@@ -33,36 +34,28 @@ export default function DriveFilesPage() {
   const params = useParams();
   const accountId = params.id as string;
 
+  // Use global copy context
+  const {
+    copying,
+    copyProgress,
+    copyStatus,
+    startCopy,
+    updateProgress,
+    completeCopy,
+    cancelCopy: cancelCopyGlobal,
+    resetCopy,
+  } = useCopyContext();
+
   const [files, setFiles] = useState<File[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copyOptions, setCopyOptions] = useState<CopyOptions | null>(null);
-  const [copying, setCopying] = useState(false);
-  const [copyStatus, setCopyStatus] = useState<string | null>(null);
-  const [copyProgress, setCopyProgress] = useState(0);
-  const [abortController, setAbortController] = useState<AbortController | null>(null);
   
   // Modal state for selecting target account
   const [showCopyModal, setShowCopyModal] = useState(false);
   const [modalFileId, setModalFileId] = useState<string | null>(null);
   const [modalFileName, setModalFileName] = useState<string | null>(null);
   const [selectedTarget, setSelectedTarget] = useState<number | null>(null);
-  
-  const loadingCopy = copying;
-
-  // Advertencia al refrescar si hay copia en progreso
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (copying) {
-        e.preventDefault();
-        e.returnValue = "Hay una copia en progreso. ¿Estás seguro de que quieres salir? Se perderá el progreso.";
-        return "Hay una copia en progreso. ¿Estás seguro de que quieres salir? Se perderá el progreso.";
-      }
-    };
-
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [copying]);
 
   useEffect(() => {
     const fetchFiles = async () => {
@@ -106,17 +99,11 @@ export default function DriveFilesPage() {
 
   const handleCopyFile = async (fileId: string, targetId: number, fileName: string) => {
     if (!targetId) {
-      setCopyStatus("Selecciona una cuenta destino");
       return;
     }
 
-    const controller = new AbortController();
-    setAbortController(controller);
-
     try {
-      setCopying(true);
-      setCopyStatus("Iniciando copia...");
-      setCopyProgress(10);
+      startCopy(fileName);
 
       const res = await fetch(`${API_BASE_URL}/drive/copy-file`, {
         method: "POST",
@@ -128,15 +115,12 @@ export default function DriveFilesPage() {
           target_account_id: targetId,
           file_id: fileId,
         }),
-        signal: controller.signal,
+        signal: AbortSignal.timeout(180000),
       });
 
       // Simular progreso durante la respuesta
       const progressInterval = setInterval(() => {
-        setCopyProgress((prev) => {
-          const next = prev + Math.random() * 30;
-          return next > 90 ? 90 : next;
-        });
+        updateProgress(Math.min(copyProgress + Math.random() * 30, 90));
       }, 500);
 
       if (!res.ok) {
@@ -147,45 +131,35 @@ export default function DriveFilesPage() {
       const result = await res.json();
       clearInterval(progressInterval);
       
-      // Completar al 100%
-      setCopyProgress(100);
-      
       const targetEmail = copyOptions?.target_accounts.find(a => a.id === targetId)?.email || "cuenta destino";
-      setCopyStatus(
-        `✅ Archivo "${fileName}" copiado exitosamente a ${targetEmail}`
-      );
+      completeCopy(`✅ Archivo "${fileName}" copiado exitosamente a ${targetEmail}`);
       
-      // Limpiar modal y estado después de 2 segundos
+      // Limpiar modal y estado después de 3 segundos
       setTimeout(() => {
         setShowCopyModal(false);
         setModalFileId(null);
         setModalFileName(null);
         setSelectedTarget(null);
-        setCopyStatus(null);
-        setCopyProgress(0);
-        setAbortController(null);
-      }, 2000);
+        resetCopy();
+      }, 3000);
     } catch (e: any) {
       if (e.name === "AbortError") {
-        setCopyStatus("❌ Copia cancelada");
+        cancelCopyGlobal("❌ Copia cancelada");
       } else {
-        setCopyStatus(`❌ Error: ${e.message}`);
+        cancelCopyGlobal(`❌ Error: ${e.message}`);
       }
-      setCopyProgress(0);
       setTimeout(() => {
-        setCopyStatus(null);
-        setAbortController(null);
-      }, 2000);
-    } finally {
-      setCopying(false);
+        setShowCopyModal(false);
+        setModalFileId(null);
+        setModalFileName(null);
+        setSelectedTarget(null);
+        resetCopy();
+      }, 3000);
     }
   };
 
   const cancelCopy = () => {
-    if (abortController) {
-      abortController.abort();
-      setAbortController(null);
-    }
+    cancelCopyGlobal("❌ Copia cancelada");
   };
 
   const openCopyModal = (fileId: string, fileName: string) => {
@@ -204,7 +178,6 @@ export default function DriveFilesPage() {
 
   const confirmCopy = () => {
     if (!selectedTarget || !modalFileId || !modalFileName) {
-      setCopyStatus("Selecciona una cuenta destino");
       return;
     }
     handleCopyFile(modalFileId, selectedTarget, modalFileName);
@@ -360,11 +333,11 @@ export default function DriveFilesPage() {
                     {/* Copiar */}
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                       <button
-                        disabled={loadingCopy || !copyOptions || copyOptions.target_accounts.length === 0}
+                        disabled={copying || !copyOptions || copyOptions.target_accounts.length === 0}
                         onClick={() => openCopyModal(file.id, file.name)}
                         className="rounded bg-emerald-500 hover:bg-emerald-600 px-3 py-1 text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        {loadingCopy ? "Copiando..." : "Copiar"}
+                        {copying ? "Copiando..." : "Copiar"}
                       </button>
                     </td>
                   </tr>
