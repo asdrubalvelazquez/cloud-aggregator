@@ -39,6 +39,7 @@ export default function DriveFilesPage() {
   const [copyOptions, setCopyOptions] = useState<CopyOptions | null>(null);
   const [copying, setCopying] = useState(false);
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const [copyProgress, setCopyProgress] = useState(0);
   
   // Modal state for selecting target account
   const [showCopyModal, setShowCopyModal] = useState(false);
@@ -96,7 +97,8 @@ export default function DriveFilesPage() {
 
     try {
       setCopying(true);
-      setCopyStatus("Copiando archivo...");
+      setCopyStatus("Iniciando copia...");
+      setCopyProgress(10);
 
       const res = await fetch(`${API_BASE_URL}/drive/copy-file`, {
         method: "POST",
@@ -110,25 +112,42 @@ export default function DriveFilesPage() {
         }),
       });
 
+      // Simular progreso durante la respuesta
+      const progressInterval = setInterval(() => {
+        setCopyProgress((prev) => {
+          const next = prev + Math.random() * 30;
+          return next > 90 ? 90 : next;
+        });
+      }, 500);
+
       if (!res.ok) {
+        clearInterval(progressInterval);
         throw new Error(`Error: ${res.status}`);
       }
 
       const result = await res.json();
+      clearInterval(progressInterval);
+      
+      // Completar al 100%
+      setCopyProgress(100);
+      
       const targetEmail = copyOptions?.target_accounts.find(a => a.id === targetId)?.email || "cuenta destino";
       setCopyStatus(
         `✅ Archivo "${fileName}" copiado exitosamente a ${targetEmail}`
       );
       
-      // Limpiar modal y estado
-      setShowCopyModal(false);
-      setModalFileId(null);
-      setModalFileName(null);
-      setSelectedTarget(null);
-
-      setTimeout(() => setCopyStatus(null), 5000);
+      // Limpiar modal y estado después de 2 segundos
+      setTimeout(() => {
+        setShowCopyModal(false);
+        setModalFileId(null);
+        setModalFileName(null);
+        setSelectedTarget(null);
+        setCopyStatus(null);
+        setCopyProgress(0);
+      }, 2000);
     } catch (e: any) {
       setCopyStatus(`❌ Error: ${e.message}`);
+      setCopyProgress(0);
     } finally {
       setCopying(false);
     }
@@ -196,8 +215,24 @@ export default function DriveFilesPage() {
           )}
         </header>
 
-        {/* Copy Status Message */}
-        {copyStatus && (
+        {/* Copy Status with Progress Bar */}
+        {copyStatus && copying && (
+          <div className="rounded-lg p-4 bg-slate-800 border border-slate-700">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-slate-300 font-medium">{copyStatus}</p>
+              <span className="text-sm font-semibold text-emerald-400">{Math.round(copyProgress)}%</span>
+            </div>
+            <div className="w-full h-3 bg-slate-700 rounded-full overflow-hidden border border-slate-600">
+              <div
+                className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300"
+                style={{ width: `${copyProgress}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Copy Success/Error Message */}
+        {copyStatus && !copying && (
           <div
             className={`rounded-lg p-4 ${
               copyStatus.includes("✅")
@@ -313,37 +348,59 @@ export default function DriveFilesPage() {
                 Selecciona la cuenta destino donde deseas copiar este archivo:
               </p>
 
-              <div className="space-y-2 mb-6">
-                {copyOptions?.target_accounts && copyOptions.target_accounts.length > 0 ? (
-                  <div className="border border-slate-600 rounded-lg overflow-hidden">
-                    {copyOptions.target_accounts.map((account) => (
-                      <button
-                        key={account.id}
-                        onClick={() => setSelectedTarget(account.id)}
-                        className={`w-full text-left px-4 py-3 border-b border-slate-600 last:border-b-0 transition ${
-                          selectedTarget === account.id
-                            ? "bg-emerald-500/30 text-emerald-100 font-semibold"
-                            : "bg-slate-700 text-slate-100 hover:bg-slate-600"
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          {selectedTarget === account.id && (
-                            <span className="text-emerald-400">✓</span>
-                          )}
-                          {account.email}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-slate-400">No hay cuentas destino disponibles</p>
-                )}
+              {/* Dropdown Select */}
+              <div className="mb-6">
+                <select
+                  value={selectedTarget || ""}
+                  onChange={(e) => setSelectedTarget(e.target.value ? parseInt(e.target.value) : null)}
+                  className="w-full bg-slate-700 text-slate-100 border border-slate-600 rounded-lg px-4 py-3 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 transition"
+                >
+                  <option value="">-- Selecciona una nube --</option>
+                  {copyOptions?.target_accounts && copyOptions.target_accounts.length > 0 ? (
+                    copyOptions.target_accounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.email}
+                      </option>
+                    ))
+                  ) : (
+                    <option disabled>No hay cuentas destino disponibles</option>
+                  )}
+                </select>
               </div>
 
+              {/* Progress Bar (shown during copy) */}
+              {copying && (
+                <div className="mb-6">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-sm text-slate-300">{copyStatus}</p>
+                    <span className="text-sm font-semibold text-emerald-400">{Math.round(copyProgress)}%</span>
+                  </div>
+                  <div className="w-full h-3 bg-slate-700 rounded-full overflow-hidden border border-slate-600">
+                    <div
+                      className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300"
+                      style={{ width: `${copyProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Status Message */}
+              {copyStatus && !copying && (
+                <div className={`mb-6 p-3 rounded-lg text-sm font-medium ${
+                  copyStatus.includes("✅")
+                    ? "bg-emerald-500/20 border border-emerald-500 text-emerald-100"
+                    : "bg-red-500/20 border border-red-500 text-red-100"
+                }`}>
+                  {copyStatus}
+                </div>
+              )}
+
+              {/* Action Buttons */}
               <div className="flex gap-3 justify-end">
                 <button
                   onClick={closeCopyModal}
-                  className="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-sm font-semibold transition"
+                  disabled={copying}
+                  className="px-4 py-2 bg-slate-600 hover:bg-slate-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition"
                 >
                   Cancelar
                 </button>
