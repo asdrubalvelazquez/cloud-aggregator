@@ -150,149 +150,134 @@ export default function DriveFilesPage() {
     handleCopyFile(fileId, target);
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 p-8">
-        <div className="max-w-6xl mx-auto">
-          <p className="text-gray-600">Loading files...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen bg-gray-50 p-8">
-        <div className="max-w-6xl mx-auto">
-          <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
-            <div className="w-full max-w-6xl space-y-6">
-              {/* Header */}
-              <header className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <Link
-                    href="/"
-                    className="text-emerald-400 hover:text-emerald-300 transition"
-                  >
-                    ← Volver
-                  </Link>
-                  <h1 className="text-2xl md:text-3xl font-bold">
-                    Archivos de Google Drive
-                  </h1>
-                </div>
-                {copyOptions && (
-                  <div className="text-sm text-slate-400">
-                    {copyOptions.source_account.email}
-                  </div>
-                )}
-              </header>
-
-              {/* Copy Status Message */}
-              {copyStatus && (
-                <div
-                  className={`rounded-lg p-4 ${
-                    copyStatus.includes("✅")
-                      ? "bg-emerald-500/20 border border-emerald-500 text-emerald-100"
-                      : "bg-red-500/20 border border-red-500 text-red-100"
-                  }`}
-                >
-                  {copyStatus}
-                </div>
-              )}
-
-              {loading && <p className="text-center">Cargando archivos…</p>}
-              {error && <p className="text-center text-red-400">Error: {error}</p>}
-
-              {!loading && !error && files.length === 0 && (
-                <p className="text-center text-slate-400">
-                  No hay archivos en esta cuenta
-                </p>
-              )}
-
-              {!loading && !error && files.length > 0 && (
-                <div className="bg-slate-800 rounded-xl p-4 shadow overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-left border-b border-slate-700">
-                        <th className="py-3 px-4">Nombre</th>
-                        <th className="py-3 px-4">Tamaño</th>
-                        <th className="py-3 px-4">Modificado</th>
-                        <th className="py-3 px-4">Acciones</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {files.map((file) => (
-                        <tr
-                          key={file.id}
-                          className="border-b border-slate-800 hover:bg-slate-700/40"
-                        >
-                          {/* Nombre */}
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-100">
-                            {file.name}
-                          </td>
-
-                          {/* Tipo (extensión simple) */}
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
-                            {file.mimeType ? file.mimeType.split("/").pop() : "-"}
-                          </td>
-
-                          {/* Tamaño */}
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
-                            {file.size
-                              ? `${(Number(file.size) / 1024 / 1024).toFixed(2)} MB`
-                              : "-"}
-                          </td>
-
-                          {/* Ver */}
-                          <td className="px-6 py-4 whitespace-nowrap text-sm">
-                            {file.webViewLink && (
-                              <a
-                                href={file.webViewLink}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-emerald-400 hover:underline"
-                              >
-                                Abrir
-                              </a>
-                            )}
-                          </td>
-
-                          {/* Copiar */}
-                          <td className="px-6 py-4 whitespace-nowrap text-sm">
-                            <button
-                              disabled={loadingCopy}
-                              onClick={() => handleCopyClick(file.id)}
-                              className="rounded bg-emerald-500 hover:bg-emerald-600 px-3 py-1 text-xs font-semibold disabled:opacity-50"
-                            >
-                              {loadingCopy ? "Copiando..." : "Copiar"}
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              {copyOptions && copyOptions.target_accounts.length === 0 && (
-                <div className="bg-amber-500/20 border border-amber-500 rounded-lg p-4 text-amber-100 text-sm">
-                  ⚠️ Necesitas conectar al menos 2 cuentas para copiar archivos.
-                  <Link href="/" className="underline ml-1">
-                    Conectar más cuentas
-                  </Link>
-                </div>
-              )}
-            </div>
-          </main>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
-      <div className="max-w-6xl mx-auto">
-        {/* Content rendered above in non-error path */}
+    <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
+      <div className="w-full max-w-6xl space-y-6">
+        {/* Header */}
+        <header className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Link
+              href="/"
+              className="text-emerald-400 hover:text-emerald-300 transition"
+            >
+              ← Volver
+            </Link>
+            <h1 className="text-2xl md:text-3xl font-bold">
+              Archivos de Google Drive
+            </h1>
+          </div>
+          {copyOptions && (
+            <div className="text-sm text-slate-400">
+              {copyOptions.source_account.email}
+            </div>
+          )}
+        </header>
+
+        {/* Copy Status Message */}
+        {copyStatus && (
+          <div
+            className={`rounded-lg p-4 ${
+              copyStatus.includes("✅")
+                ? "bg-emerald-500/20 border border-emerald-500 text-emerald-100"
+                : "bg-red-500/20 border border-red-500 text-red-100"
+            }`}
+          >
+            {copyStatus}
+          </div>
+        )}
+
+        {/* Loading State */}
+        {loading && <p className="text-center text-slate-300">Cargando archivos…</p>}
+
+        {/* Error State */}
+        {error && !loading && (
+          <p className="text-center text-red-400">Error: {error}</p>
+        )}
+
+        {/* Empty State */}
+        {!loading && !error && files.length === 0 && (
+          <p className="text-center text-slate-400">
+            No hay archivos en esta cuenta
+          </p>
+        )}
+
+        {/* Files Table */}
+        {!loading && !error && files.length > 0 && (
+          <div className="bg-slate-800 rounded-xl p-4 shadow overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left border-b border-slate-700">
+                  <th className="py-3 px-4">Nombre</th>
+                  <th className="py-3 px-4">Tipo</th>
+                  <th className="py-3 px-4">Tamaño</th>
+                  <th className="py-3 px-4">Ver</th>
+                  <th className="py-3 px-4">Copiar</th>
+                </tr>
+              </thead>
+              <tbody>
+                {files.map((file) => (
+                  <tr
+                    key={file.id}
+                    className="border-b border-slate-800 hover:bg-slate-700/40"
+                  >
+                    {/* Nombre */}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-100">
+                      {file.name}
+                    </td>
+
+                    {/* Tipo (extensión simple) */}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
+                      {file.mimeType ? file.mimeType.split("/").pop() : "-"}
+                    </td>
+
+                    {/* Tamaño */}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
+                      {file.size
+                        ? `${(Number(file.size) / 1024 / 1024).toFixed(2)} MB`
+                        : "-"}
+                    </td>
+
+                    {/* Ver */}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      {file.webViewLink && (
+                        <a
+                          href={file.webViewLink}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-emerald-400 hover:underline"
+                        >
+                          Abrir
+                        </a>
+                      )}
+                    </td>
+
+                    {/* Copiar */}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      <button
+                        disabled={loadingCopy}
+                        onClick={() => handleCopyClick(file.id)}
+                        className="rounded bg-emerald-500 hover:bg-emerald-600 px-3 py-1 text-xs font-semibold disabled:opacity-50"
+                      >
+                        {loadingCopy ? "Copiando..." : "Copiar"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Warning: Need 2+ accounts */}
+        {copyOptions && copyOptions.target_accounts.length === 0 && (
+          <div className="bg-amber-500/20 border border-amber-500 rounded-lg p-4 text-amber-100 text-sm">
+            ⚠️ Necesitas conectar al menos 2 cuentas para copiar archivos.
+            <Link href="/" className="underline ml-1">
+              Conectar más cuentas
+            </Link>
+          </div>
+        )}
       </div>
-    </div>
+    </main>
   );
 }
