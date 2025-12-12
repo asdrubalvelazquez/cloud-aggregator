@@ -47,9 +47,15 @@ export default function DriveFilesPage() {
   } = useCopyContext();
 
   const [files, setFiles] = useState<File[]>([]);
+  // Navegación dentro de carpetas
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const [folderStack, setFolderStack] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copyOptions, setCopyOptions] = useState<CopyOptions | null>(null);
+  // Sorting state (non-destructive)
+  const [sortBy, setSortBy] = useState<"name" | "size" | "modifiedTime" | "mimeType" | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   
   // Modal state for selecting target account
   const [showCopyModal, setShowCopyModal] = useState(false);
@@ -61,9 +67,11 @@ export default function DriveFilesPage() {
     const fetchFiles = async () => {
       try {
         setLoading(true);
-        const res = await fetch(
-          `${API_BASE_URL}/drive/${accountId}/files`
-        );
+        const url = new URL(`${API_BASE_URL}/drive/${accountId}/files`);
+        if (currentFolderId) {
+          url.searchParams.set("folder_id", currentFolderId);
+        }
+        const res = await fetch(url.toString());
         if (!res.ok) {
           throw new Error(`Error: ${res.status}`);
         }
@@ -95,7 +103,7 @@ export default function DriveFilesPage() {
       fetchFiles();
       fetchCopyOptions();
     }
-  }, [accountId]);
+  }, [accountId, currentFolderId]);
 
   const handleCopyFile = async (fileId: string, targetId: number, fileName: string) => {
     if (!targetId) {
@@ -200,6 +208,64 @@ export default function DriveFilesPage() {
     });
   };
 
+  // Abrir carpeta dentro de la app
+  const openFolder = (folderId: string) => {
+    if (!folderId) return;
+    setFolderStack((prev) => (currentFolderId ? [...prev, currentFolderId] : prev));
+    setCurrentFolderId(folderId);
+  };
+
+  const goUp = () => {
+    if (folderStack.length === 0) {
+      setCurrentFolderId(null);
+      return;
+    }
+    const prev = [...folderStack];
+    const parent = prev.pop()!;
+    setFolderStack(prev);
+    setCurrentFolderId(parent);
+  };
+
+  // Derived sorted files
+  const sortedFiles = (() => {
+    if (!files || !sortBy) return files;
+    const collator = new Intl.Collator("es", { sensitivity: "base", numeric: true });
+    const arr = [...files];
+    arr.sort((a, b) => {
+      let av: any;
+      let bv: any;
+      switch (sortBy) {
+        case "name":
+          av = a.name || ""; bv = b.name || "";
+          return collator.compare(av, bv);
+        case "mimeType":
+          av = a.mimeType || ""; bv = b.mimeType || "";
+          return collator.compare(av, bv);
+        case "size":
+          av = typeof a.size === "number" ? a.size : (typeof a.size === "string" ? parseInt(a.size as any) || 0 : 0);
+          bv = typeof b.size === "number" ? b.size : (typeof b.size === "string" ? parseInt(b.size as any) || 0 : 0);
+          return av - bv;
+        case "modifiedTime":
+          av = a.modifiedTime ? Date.parse(a.modifiedTime) : 0;
+          bv = b.modifiedTime ? Date.parse(b.modifiedTime) : 0;
+          return av - bv;
+        default:
+          return 0;
+      }
+    });
+    if (sortDir === "desc") arr.reverse();
+    return arr;
+  })();
+
+  const toggleSort = (key: "name" | "size" | "modifiedTime" | "mimeType") => {
+    if (sortBy === key) {
+      setSortDir(sortDir === "asc" ? "desc" : "asc");
+    } else {
+      setSortBy(key);
+      setSortDir("asc");
+    }
+  };
+
   return (
     <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
       {/* Floating Progress Bar (Sticky) */}
@@ -286,15 +352,51 @@ export default function DriveFilesPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left border-b border-slate-700">
-                  <th className="py-3 px-4">Nombre</th>
-                  <th className="py-3 px-4">Tipo</th>
-                  <th className="py-3 px-4">Tamaño</th>
+                  <th className="py-3 px-4">
+                    <button
+                      type="button"
+                      onClick={() => toggleSort("name")}
+                      className="flex items-center gap-2 hover:text-slate-200"
+                      aria-label="Ordenar por nombre"
+                    >
+                      Nombre
+                      {sortBy === "name" && (
+                        <span className="text-[10px] font-semibold">{sortDir === "asc" ? "▲" : "▼"}</span>
+                      )}
+                    </button>
+                  </th>
+                  <th className="py-3 px-4">
+                    <button
+                      type="button"
+                      onClick={() => toggleSort("mimeType")}
+                      className="flex items-center gap-2 hover:text-slate-200"
+                      aria-label="Ordenar por tipo"
+                    >
+                      Tipo
+                      {sortBy === "mimeType" && (
+                        <span className="text-[10px] font-semibold">{sortDir === "asc" ? "▲" : "▼"}</span>
+                      )}
+                    </button>
+                  </th>
+                  <th className="py-3 px-4">
+                    <button
+                      type="button"
+                      onClick={() => toggleSort("size")}
+                      className="flex items-center gap-2 hover:text-slate-200"
+                      aria-label="Ordenar por tamaño"
+                    >
+                      Tamaño
+                      {sortBy === "size" && (
+                        <span className="text-[10px] font-semibold">{sortDir === "asc" ? "▲" : "▼"}</span>
+                      )}
+                    </button>
+                  </th>
                   <th className="py-3 px-4">Ver</th>
                   <th className="py-3 px-4">Copiar</th>
                 </tr>
               </thead>
               <tbody>
-                {files.map((file) => (
+                {sortedFiles.map((file) => (
                   <tr
                     key={file.id}
                     className="border-b border-slate-800 hover:bg-slate-700/40"
@@ -318,15 +420,25 @@ export default function DriveFilesPage() {
 
                     {/* Ver */}
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      {file.webViewLink && (
-                        <a
-                          href={file.webViewLink}
-                          target="_blank"
-                          rel="noreferrer"
+                      {file.mimeType === "application/vnd.google-apps.folder" ? (
+                        <button
+                          type="button"
+                          onClick={() => openFolder(file.id)}
                           className="text-emerald-400 hover:underline"
                         >
-                          Abrir
-                        </a>
+                          Abrir carpeta
+                        </button>
+                      ) : (
+                        file.webViewLink && (
+                          <a
+                            href={file.webViewLink}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-emerald-400 hover:underline"
+                          >
+                            Abrir
+                          </a>
+                        )
                       )}
                     </td>
 
