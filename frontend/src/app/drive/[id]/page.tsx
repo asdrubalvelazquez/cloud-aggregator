@@ -58,7 +58,6 @@ export default function DriveFilesPage() {
   } = useCopyContext();
 
   const [files, setFiles] = useState<File[]>([]);
-  const [folderStack, setFolderStack] = useState<Array<{ id: string; name: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copyOptions, setCopyOptions] = useState<CopyOptions | null>(null);
@@ -79,19 +78,14 @@ export default function DriveFilesPage() {
         const url = new URL(`${API_BASE_URL}/drive/${accountId}/files`);
         if (currentFolderId) {
           url.searchParams.set("folder_id", currentFolderId);
-          console.log("Fetching files for folder:", currentFolderId, "URL:", url.toString());
-        } else {
-          console.log("Fetching root files");
         }
         const res = await fetch(url.toString());
         if (!res.ok) {
           throw new Error(`Error: ${res.status}`);
         }
         const data = await res.json();
-        console.log("Files loaded:", data.files?.length || 0, "files");
         setFiles(data.files || []);
       } catch (e: any) {
-        console.error("Error loading files:", e);
         setError(e.message || "Error cargando archivos");
       } finally {
         setLoading(false);
@@ -225,30 +219,13 @@ export default function DriveFilesPage() {
   // Abrir carpeta dentro de la app
   const openFolder = (folderId: string, folderName: string) => {
     if (!folderId) return;
-    // Push new folder to stack before navigating
-    setFolderStack((prev) => [
-      ...prev,
-      { id: currentFolderId || "root", name: currentFolderId ? "..." : "Drive" },
-    ]);
-    // Navigate with folder_id in URL
-    router.push(`?folder_id=${folderId}`);
+    // Simply navigate to the folder - URL encoding keeps us on the page
+    router.push(`?folder_id=${encodeURIComponent(folderId)}`);
   };
 
   const goUp = () => {
-    if (folderStack.length === 0) {
-      // Go back to root
-      router.push("");
-      return;
-    }
-    const newStack = [...folderStack];
-    const parent = newStack.pop()!;
-    setFolderStack(newStack);
-    
-    if (parent.id === "root") {
-      router.push("");
-    } else {
-      router.push(`?folder_id=${parent.id}`);
-    }
+    // Go back to root by removing the folder_id param
+    router.push("");
   };
 
   // Derived sorted files
@@ -350,25 +327,6 @@ export default function DriveFilesPage() {
               Drive
             </button>
             <span>/</span>
-            {folderStack.map((folder, idx) => (
-              <div key={`${folder.id}-${idx}`} className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    const newStack = folderStack.slice(0, idx + 1);
-                    setFolderStack(newStack);
-                    if (folder.id === "root") {
-                      router.push("");
-                    } else {
-                      router.push(`?folder_id=${folder.id}`);
-                    }
-                  }}
-                  className="hover:text-emerald-400 transition"
-                >
-                  {folder.name}
-                </button>
-                <span>/</span>
-              </div>
-            ))}
             <button
               onClick={goUp}
               className="ml-2 px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs font-semibold transition text-emerald-400"
