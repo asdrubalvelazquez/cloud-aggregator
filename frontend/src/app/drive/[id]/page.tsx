@@ -35,7 +35,15 @@ export default function DriveFilesPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const accountId = params.id as string;
-  const currentFolderId = searchParams.get("folder_id");
+  
+  // Extract currentFolderId from URL on initial load
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+
+  // Sync URL search params with state
+  useEffect(() => {
+    const folderId = searchParams.get("folder_id");
+    setCurrentFolderId(folderId);
+  }, [searchParams]);
 
   // Use global copy context
   const {
@@ -71,14 +79,19 @@ export default function DriveFilesPage() {
         const url = new URL(`${API_BASE_URL}/drive/${accountId}/files`);
         if (currentFolderId) {
           url.searchParams.set("folder_id", currentFolderId);
+          console.log("Fetching files for folder:", currentFolderId, "URL:", url.toString());
+        } else {
+          console.log("Fetching root files");
         }
         const res = await fetch(url.toString());
         if (!res.ok) {
           throw new Error(`Error: ${res.status}`);
         }
         const data = await res.json();
+        console.log("Files loaded:", data.files?.length || 0, "files");
         setFiles(data.files || []);
       } catch (e: any) {
+        console.error("Error loading files:", e);
         setError(e.message || "Error cargando archivos");
       } finally {
         setLoading(false);
