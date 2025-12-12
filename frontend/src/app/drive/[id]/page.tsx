@@ -37,10 +37,15 @@ export default function DriveFilesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copyOptions, setCopyOptions] = useState<CopyOptions | null>(null);
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [selectedTarget, setSelectedTarget] = useState<number | null>(null);
   const [copying, setCopying] = useState(false);
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  
+  // Modal state for selecting target account
+  const [showCopyModal, setShowCopyModal] = useState(false);
+  const [modalFileId, setModalFileId] = useState<string | null>(null);
+  const [modalFileName, setModalFileName] = useState<string | null>(null);
+  const [selectedTarget, setSelectedTarget] = useState<number | null>(null);
+  
   const loadingCopy = copying;
 
   useEffect(() => {
@@ -83,7 +88,7 @@ export default function DriveFilesPage() {
     }
   }, [accountId]);
 
-  const handleCopyFile = async (fileId: string, targetId: number) => {
+  const handleCopyFile = async (fileId: string, targetId: number, fileName: string) => {
     if (!targetId) {
       setCopyStatus("Selecciona una cuenta destino");
       return;
@@ -110,10 +115,15 @@ export default function DriveFilesPage() {
       }
 
       const result = await res.json();
+      const targetEmail = copyOptions?.target_accounts.find(a => a.id === targetId)?.email || "cuenta destino";
       setCopyStatus(
-        `✅ Archivo "${result.file.name}" copiado exitosamente a ${copyOptions?.target_accounts.find(a => a.id === targetId)?.email}`
+        `✅ Archivo "${fileName}" copiado exitosamente a ${targetEmail}`
       );
-      setSelectedFile(null);
+      
+      // Limpiar modal y estado
+      setShowCopyModal(false);
+      setModalFileId(null);
+      setModalFileName(null);
       setSelectedTarget(null);
 
       setTimeout(() => setCopyStatus(null), 5000);
@@ -122,6 +132,29 @@ export default function DriveFilesPage() {
     } finally {
       setCopying(false);
     }
+  };
+
+  const openCopyModal = (fileId: string, fileName: string) => {
+    setModalFileId(fileId);
+    setModalFileName(fileName);
+    setSelectedTarget(null);
+    setShowCopyModal(true);
+  };
+
+  const closeCopyModal = () => {
+    setShowCopyModal(false);
+    setModalFileId(null);
+    setModalFileName(null);
+    setSelectedTarget(null);
+  };
+
+  const confirmCopy = () => {
+    if (!selectedTarget || !modalFileId || !modalFileName) {
+      setCopyStatus("Selecciona una cuenta destino");
+      return;
+    }
+    handleCopyFile(modalFileId, selectedTarget, modalFileName);
+    closeCopyModal();
   };
 
   const formatFileSize = (bytes: number): string => {
@@ -138,16 +171,6 @@ export default function DriveFilesPage() {
       month: "short",
       day: "numeric",
     });
-  };
-  
-  const handleCopyClick = (fileId: string) => {
-    const fallbackTarget = copyOptions?.target_accounts?.[0]?.id ?? null;
-    const target = selectedTarget ?? fallbackTarget;
-    if (!target) {
-      setCopyStatus("Selecciona una cuenta destino");
-      return;
-    }
-    handleCopyFile(fileId, target);
   };
 
   return (
@@ -254,9 +277,9 @@ export default function DriveFilesPage() {
                     {/* Copiar */}
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                       <button
-                        disabled={loadingCopy}
-                        onClick={() => handleCopyClick(file.id)}
-                        className="rounded bg-emerald-500 hover:bg-emerald-600 px-3 py-1 text-xs font-semibold disabled:opacity-50"
+                        disabled={loadingCopy || !copyOptions || copyOptions.target_accounts.length === 0}
+                        onClick={() => openCopyModal(file.id, file.name)}
+                        className="rounded bg-emerald-500 hover:bg-emerald-600 px-3 py-1 text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {loadingCopy ? "Copiando..." : "Copiar"}
                       </button>
@@ -275,6 +298,64 @@ export default function DriveFilesPage() {
             <Link href="/" className="underline ml-1">
               Conectar más cuentas
             </Link>
+          </div>
+        )}
+
+        {/* Copy Modal */}
+        {showCopyModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-slate-800 rounded-lg shadow-xl w-full max-w-md p-6 border border-slate-700">
+              <h2 className="text-xl font-bold text-white mb-4">
+                Copiar: {modalFileName}
+              </h2>
+              
+              <p className="text-slate-300 mb-4">
+                Selecciona la cuenta destino donde deseas copiar este archivo:
+              </p>
+
+              <div className="space-y-2 mb-6">
+                {copyOptions?.target_accounts && copyOptions.target_accounts.length > 0 ? (
+                  <div className="border border-slate-600 rounded-lg overflow-hidden">
+                    {copyOptions.target_accounts.map((account) => (
+                      <button
+                        key={account.id}
+                        onClick={() => setSelectedTarget(account.id)}
+                        className={`w-full text-left px-4 py-3 border-b border-slate-600 last:border-b-0 transition ${
+                          selectedTarget === account.id
+                            ? "bg-emerald-500/30 text-emerald-100 font-semibold"
+                            : "bg-slate-700 text-slate-100 hover:bg-slate-600"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          {selectedTarget === account.id && (
+                            <span className="text-emerald-400">✓</span>
+                          )}
+                          {account.email}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-slate-400">No hay cuentas destino disponibles</p>
+                )}
+              </div>
+
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={closeCopyModal}
+                  className="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-sm font-semibold transition"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={confirmCopy}
+                  disabled={!selectedTarget || copying}
+                  className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition"
+                >
+                  {copying ? "Copiando..." : "Copiar"}
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
