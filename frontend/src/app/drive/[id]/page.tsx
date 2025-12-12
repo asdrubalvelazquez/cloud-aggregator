@@ -40,6 +40,7 @@ export default function DriveFilesPage() {
   const [copying, setCopying] = useState(false);
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const [copyProgress, setCopyProgress] = useState(0);
+  const [abortController, setAbortController] = useState<AbortController | null>(null);
   
   // Modal state for selecting target account
   const [showCopyModal, setShowCopyModal] = useState(false);
@@ -48,6 +49,20 @@ export default function DriveFilesPage() {
   const [selectedTarget, setSelectedTarget] = useState<number | null>(null);
   
   const loadingCopy = copying;
+
+  // Advertencia al refrescar si hay copia en progreso
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (copying) {
+        e.preventDefault();
+        e.returnValue = "Hay una copia en progreso. ¿Estás seguro de que quieres salir? Se perderá el progreso.";
+        return "Hay una copia en progreso. ¿Estás seguro de que quieres salir? Se perderá el progreso.";
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [copying]);
 
   useEffect(() => {
     const fetchFiles = async () => {
@@ -95,6 +110,9 @@ export default function DriveFilesPage() {
       return;
     }
 
+    const controller = new AbortController();
+    setAbortController(controller);
+
     try {
       setCopying(true);
       setCopyStatus("Iniciando copia...");
@@ -110,6 +128,7 @@ export default function DriveFilesPage() {
           target_account_id: targetId,
           file_id: fileId,
         }),
+        signal: controller.signal,
       });
 
       // Simular progreso durante la respuesta
@@ -144,12 +163,28 @@ export default function DriveFilesPage() {
         setSelectedTarget(null);
         setCopyStatus(null);
         setCopyProgress(0);
+        setAbortController(null);
       }, 2000);
     } catch (e: any) {
-      setCopyStatus(`❌ Error: ${e.message}`);
+      if (e.name === "AbortError") {
+        setCopyStatus("❌ Copia cancelada");
+      } else {
+        setCopyStatus(`❌ Error: ${e.message}`);
+      }
       setCopyProgress(0);
+      setTimeout(() => {
+        setCopyStatus(null);
+        setAbortController(null);
+      }, 2000);
     } finally {
       setCopying(false);
+    }
+  };
+
+  const cancelCopy = () => {
+    if (abortController) {
+      abortController.abort();
+      setAbortController(null);
     }
   };
 
@@ -194,6 +229,32 @@ export default function DriveFilesPage() {
 
   return (
     <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
+      {/* Floating Progress Bar (Sticky) */}
+      {copying && (
+        <div className="fixed bottom-0 left-0 right-0 bg-slate-800 border-t border-slate-700 shadow-xl z-40">
+          <div className="max-w-6xl mx-auto px-6 py-4 flex items-center gap-4">
+            <div className="flex-1">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm text-slate-300 font-medium">{copyStatus}</p>
+                <span className="text-sm font-semibold text-emerald-400">{Math.round(copyProgress)}%</span>
+              </div>
+              <div className="w-full h-2 bg-slate-700 rounded-full overflow-hidden border border-slate-600">
+                <div
+                  className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300"
+                  style={{ width: `${copyProgress}%` }}
+                />
+              </div>
+            </div>
+            <button
+              onClick={cancelCopy}
+              className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-xs font-semibold transition whitespace-nowrap"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="w-full max-w-6xl space-y-6">
         {/* Header */}
         <header className="flex items-center justify-between">
@@ -216,20 +277,7 @@ export default function DriveFilesPage() {
         </header>
 
         {/* Copy Status with Progress Bar */}
-        {copyStatus && copying && (
-          <div className="rounded-lg p-4 bg-slate-800 border border-slate-700">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-slate-300 font-medium">{copyStatus}</p>
-              <span className="text-sm font-semibold text-emerald-400">{Math.round(copyProgress)}%</span>
-            </div>
-            <div className="w-full h-3 bg-slate-700 rounded-full overflow-hidden border border-slate-600">
-              <div
-                className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300"
-                style={{ width: `${copyProgress}%` }}
-              />
-            </div>
-          </div>
-        )}
+        {/* (Progreso ahora en floating bar sticky abajo) */}
 
         {/* Copy Success/Error Message */}
         {copyStatus && !copying && (
@@ -398,11 +446,16 @@ export default function DriveFilesPage() {
               {/* Action Buttons */}
               <div className="flex gap-3 justify-end">
                 <button
-                  onClick={closeCopyModal}
-                  disabled={copying}
-                  className="px-4 py-2 bg-slate-600 hover:bg-slate-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition"
+                  onClick={() => {
+                    if (copying) {
+                      cancelCopy();
+                    } else {
+                      closeCopyModal();
+                    }
+                  }}
+                  className="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-sm font-semibold transition"
                 >
-                  Cancelar
+                  {copying ? "Cancelar Copia" : "Cerrar"}
                 </button>
                 <button
                   onClick={confirmCopy}
