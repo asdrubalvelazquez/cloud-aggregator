@@ -224,24 +224,22 @@ async def storage_summary():
 
 
 @app.get("/drive/{account_id}/files")
-async def get_drive_files(account_id: int, page_token: Optional[str] = None, folder_id: Optional[str] = None):
-    """List files for a specific Drive account with pagination, token refresh, and folder navigation"""
+async def get_drive_files(
+    account_id: int,
+    folder_id: str = "root",
+    page_token: Optional[str] = None,
+):
+    """List files for a specific Drive account and folder with pagination"""
     try:
-        # Verify account exists
-        account = supabase.table("cloud_accounts").select("id").eq("id", account_id).single().execute()
-        if not account.data:
-            raise HTTPException(status_code=404, detail=f"Account {account_id} not found")
-        
-        # Ensure token is valid (auto-refresh if needed)
-        from backend.google_drive import get_valid_token
-        await get_valid_token(account_id)
-        
-        result = await list_drive_files(account_id, page_size=20, page_token=page_token, folder_id=folder_id)
+        result = await list_drive_files(
+            account_id=account_id,
+            folder_id=folder_id,
+            page_size=50,
+            page_token=page_token,
+        )
         return result
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 class CopyFileRequest(BaseModel):

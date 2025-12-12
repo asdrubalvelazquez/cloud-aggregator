@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useCopyContext } from "@/context/CopyContext";
 
@@ -32,19 +32,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8
 
 export default function DriveFilesPage() {
   const params = useParams();
-  const router = useRouter();
-  const searchParams = useSearchParams();
   const accountId = params.id as string;
-  
-  // Extract currentFolderId from URL on initial load
-  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
-
-  // Sync URL search params with state
-  useEffect(() => {
-    const folderId = searchParams.get("folder_id");
-    console.log("🔗 URL folder_id changed:", folderId);
-    setCurrentFolderId(folderId);
-  }, [searchParams]);
 
   // Use global copy context
   const {
@@ -58,10 +46,18 @@ export default function DriveFilesPage() {
     resetCopy,
   } = useCopyContext();
 
+  // Folder navigation state
+  const [currentFolderId, setCurrentFolderId] = useState<string>("root");
+  const [breadcrumb, setBreadcrumb] = useState<
+    { id: string; name: string }[]
+  >([{ id: "root", name: "Drive" }]);
+
   const [files, setFiles] = useState<File[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copyOptions, setCopyOptions] = useState<CopyOptions | null>(null);
+  const [nextPageToken, setNextPageToken] = useState<string | null>(null);
+  
   // Sorting state (non-destructive)
   const [sortBy, setSortBy] = useState<"name" | "size" | "modifiedTime" | "mimeType" | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -72,60 +68,71 @@ export default function DriveFilesPage() {
   const [modalFileName, setModalFileName] = useState<string | null>(null);
   const [selectedTarget, setSelectedTarget] = useState<number | null>(null);
 
+  // Fetch files from a specific folder
+  const fetchFiles = async (
+    folderId: string = "root",
+    pageToken?: string | null
+  ) => {
+    try {
+      setLoading(true);
+      const url = new URL(`${API_BASE_URL}/drive/${accountId}/files`);
+      url.searchParams.set("folder_id", folderId);
+      if (pageToken) {
+        url.searchParams.set("page_token", pageToken);
+      }
+
+      const res = await fetch(url.toString());
+      if (!res.ok) throw new Error(`Error API archivos: ${res.status}`);
+
+      const json = await res.json();
+      setFiles(json.files || []);
+      setCurrentFolderId(folderId);
+      setNextPageToken(json.nextPageToken ?? null);
+      setError(null);
+    } catch (e: any) {
+      setError(e.message || "Error al cargar archivos");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Initial load
   useEffect(() => {
-    const fetchFiles = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        
-        const url = new URL(`${API_BASE_URL}/drive/${accountId}/files`);
-        if (currentFolderId) {
-          url.searchParams.set("folder_id", currentFolderId);
-        }
-        
-        const fetchUrl = url.toString();
-        console.log("📁 Fetching from:", fetchUrl);
-        
-        const res = await fetch(fetchUrl);
-        if (!res.ok) {
-          throw new Error(`Error: ${res.status}`);
-        }
-        const data = await res.json();
-        console.log("✅ Received", data.files?.length || 0, "files");
-        if (currentFolderId) {
-          console.log("   Folder ID:", currentFolderId);
-        } else {
-          console.log("   (Root folder)");
-        }
-        setFiles(data.files || []);
-      } catch (e: any) {
-        console.error("❌ Error loading files:", e);
-        setError(e.message || "Error cargando archivos");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    const fetchCopyOptions = async () => {
-      try {
-        const res = await fetch(
-          `${API_BASE_URL}/drive/${accountId}/copy-options`
-        );
-        if (!res.ok) {
-          throw new Error(`Error: ${res.status}`);
-        }
-        const data = await res.json();
-        setCopyOptions(data);
-      } catch (e: any) {
-        console.error("Error loading copy options:", e);
-      }
-    };
-
     if (accountId) {
-      fetchFiles();
+      fetchFiles("root", null);
       fetchCopyOptions();
     }
-  }, [accountId, currentFolderId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountId]);
+
+  const fetchCopyOptions = async () => {
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/drive/${accountId}/copy-options`
+      );
+      if (!res.ok) {
+        throw new Error(`Error: ${res.status}`);
+      }
+      const data = await res.json();
+      setCopyOptions(data);
+    } catch (e: any) {
+      console.error("Error loading copy options:", e);
+    }
+  };
+
+  const handleOpenFolder = (folderId: string, folderName: string) => {
+    // Actualizar breadcrumb
+    setBreadcrumb((prev) => [...prev, { id: folderId, name: folderName }]);
+    // Cargar contenido de esa carpeta
+    fetchFiles(folderId, null);
+  };
+
+  const handleBreadcrumbClick = (index: number) => {
+    const target = breadcrumb[index];
+    const newTrail = breadcrumb.slice(0, index + 1);
+    setBreadcrumb(newTrail);
+    fetchFiles(target.id, null);
+  };
 
   const handleCopyFile = async (fileId: string, targetId: number, fileName: string) => {
     if (!targetId) {
@@ -332,23 +339,20 @@ export default function DriveFilesPage() {
         </header>
 
         {/* Breadcrumb Navigation */}
-        {currentFolderId && (
-          <div className="flex items-center gap-2 text-sm text-slate-400">
-            <button
-              onClick={() => router.push("")}
-              className="hover:text-emerald-400 transition"
-            >
-              Drive
-            </button>
-            <span>/</span>
-            <button
-              onClick={goUp}
-              className="ml-2 px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs font-semibold transition text-emerald-400"
-            >
-              ← Subir
-            </button>
-          </div>
-        )}
+        <nav className="flex items-center gap-1 text-sm text-slate-300">
+          {breadcrumb.map((crumb, idx) => (
+            <span key={crumb.id} className="flex items-center gap-1">
+              {idx > 0 && <span>/</span>}
+              <button
+                type="button"
+                className="hover:text-emerald-400 transition"
+                onClick={() => handleBreadcrumbClick(idx)}
+              >
+                {crumb.name}
+              </button>
+            </span>
+          ))}
+        </nav>
 
         {/* Copy Status with Progress Bar */}
         {/* (Progreso ahora en floating bar sticky abajo) */}
@@ -458,7 +462,7 @@ export default function DriveFilesPage() {
                       {file.mimeType === "application/vnd.google-apps.folder" ? (
                         <button
                           type="button"
-                          onClick={() => openFolder(file.id, file.name)}
+                          onClick={() => handleOpenFolder(file.id, file.name)}
                           className="text-emerald-400 hover:underline"
                         >
                           Abrir carpeta

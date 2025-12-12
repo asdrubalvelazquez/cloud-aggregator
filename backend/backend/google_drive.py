@@ -88,38 +88,60 @@ async def get_storage_quota(account_id: int) -> dict:
         return resp.json()
 
 
-async def list_drive_files(account_id: int, page_size: int = 20, page_token: str = None, folder_id: str = None) -> dict:
+async def list_drive_files(
+    account_id: int,
+    folder_id: str = "root",
+    page_size: int = 50,
+    page_token: str = None,
+) -> dict:
     """
-    List files in Google Drive with pagination.
-    If folder_id is provided, lists files in that folder.
-    Returns dict with 'files' array and optional 'nextPageToken'.
+    List files in a specific folder in Google Drive with pagination.
+    
+    Args:
+        account_id: ID of the cloud account
+        folder_id: Google Drive folder ID to list (default "root" for Drive root)
+        page_size: Number of files per page
+        page_token: Token for pagination
+    
+    Returns:
+        dict with files list, nextPageToken, account info, and current folder_id
     """
+    # Get account from database
+    resp = supabase.table("cloud_accounts").select("*").eq("id", account_id).single().execute()
+    account = resp.data
+    if not account:
+        raise ValueError(f"Account {account_id} not found")
+    
     token = await get_valid_token(account_id)
+    
+    headers = {"Authorization": f"Bearer {token}"}
     
     params = {
         "pageSize": page_size,
-        "fields": "nextPageToken, files(id, name, mimeType, size, createdTime, modifiedTime, webViewLink)",
-        "orderBy": "modifiedTime desc"
+        "fields": "files(id,name,mimeType,webViewLink,iconLink,modifiedTime,size,parents),nextPageToken",
+        "q": f"'{folder_id}' in parents and trashed = false",
+        "orderBy": "folder,name",
     }
-    
-    # Filter by parent folder if provided
-    if folder_id:
-        params["q"] = f"'{folder_id}' in parents and trashed=false"
-    else:
-        # Root: exclude items in trash
-        params["q"] = "trashed=false"
     
     if page_token:
         params["pageToken"] = page_token
     
     async with httpx.AsyncClient() as client:
-        resp = await client.get(
+        res = await client.get(
             f"{GOOGLE_DRIVE_API_BASE}/files",
+            headers=headers,
             params=params,
-            headers={"Authorization": f"Bearer {token}"}
         )
-        resp.raise_for_status()
-        return resp.json()
+        res.raise_for_status()
+        data = res.json()
+    
+    return {
+        "account_id": account_id,
+        "account_email": account["account_email"],
+        "folder_id": folder_id,
+        "files": data.get("files", []),
+        "nextPageToken": data.get("nextPageToken"),
+    }
 
 
 async def get_file_metadata(account_id: int, file_id: str) -> dict:
