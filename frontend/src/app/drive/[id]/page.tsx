@@ -42,6 +42,7 @@ export default function DriveFilesPage() {
   // Sync URL search params with state
   useEffect(() => {
     const folderId = searchParams.get("folder_id");
+    console.log("🔗 URL folder_id changed:", folderId);
     setCurrentFolderId(folderId);
   }, [searchParams]);
 
@@ -75,17 +76,30 @@ export default function DriveFilesPage() {
     const fetchFiles = async () => {
       try {
         setLoading(true);
+        setError(null);
+        
         const url = new URL(`${API_BASE_URL}/drive/${accountId}/files`);
         if (currentFolderId) {
           url.searchParams.set("folder_id", currentFolderId);
         }
-        const res = await fetch(url.toString());
+        
+        const fetchUrl = url.toString();
+        console.log("📁 Fetching from:", fetchUrl);
+        
+        const res = await fetch(fetchUrl);
         if (!res.ok) {
           throw new Error(`Error: ${res.status}`);
         }
         const data = await res.json();
+        console.log("✅ Received", data.files?.length || 0, "files");
+        if (currentFolderId) {
+          console.log("   Folder ID:", currentFolderId);
+        } else {
+          console.log("   (Root folder)");
+        }
         setFiles(data.files || []);
       } catch (e: any) {
+        console.error("❌ Error loading files:", e);
         setError(e.message || "Error cargando archivos");
       } finally {
         setLoading(false);
@@ -219,7 +233,7 @@ export default function DriveFilesPage() {
   // Abrir carpeta dentro de la app
   const openFolder = (folderId: string, folderName: string) => {
     if (!folderId) return;
-    // Simply navigate to the folder - URL encoding keeps us on the page
+    console.log("📂 Opening folder:", folderName, "ID:", folderId);
     router.push(`?folder_id=${encodeURIComponent(folderId)}`);
   };
 
