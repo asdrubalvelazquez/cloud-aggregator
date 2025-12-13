@@ -543,8 +543,8 @@ export default function DriveFilesPage() {
         {/* Copy Status with Progress Bar */}
         {/* (Progreso ahora en floating bar sticky abajo) */}
 
-        {/* Copy Success/Error Message */}
-        {copyStatus && !copying && (
+        {/* Copy Success/Error Message (solo cuando modal cerrado) */}
+        {copyStatus && !copying && !showCopyModal && (
           <div
             className={`rounded-lg p-4 ${
               copyStatus.includes("✅")
@@ -851,6 +851,8 @@ export default function DriveFilesPage() {
                 <div className={`mb-6 p-3 rounded-lg text-sm font-medium ${
                   copyStatus.includes("✅")
                     ? "bg-emerald-500/20 border border-emerald-500 text-emerald-100"
+                    : copyStatus.includes("ℹ️")
+                    ? "bg-blue-500/20 border border-blue-500 text-blue-100"
                     : "bg-red-500/20 border border-red-500 text-red-100"
                 }`}>
                   {copyStatus}
