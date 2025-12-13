@@ -9,22 +9,26 @@ export default function LoginPage() {
   const router = useRouter();
 
   useEffect(() => {
+    // Verificar si ya hay una sesión activa al cargar
+    const checkSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        router.push("/app");
+      }
+    };
+    
+    checkSession();
+
     // Escuchar cambios en la sesión de autenticación
     const { data: authListener } = supabase.auth.onAuthStateChange(
       async (event, session) => {
+        console.log('Auth event:', event);
         if (event === "SIGNED_IN" && session) {
-          // Usuario autenticado exitosamente, redirigir a /app
+          console.log('Redirecting to /app');
           router.push("/app");
         }
       }
     );
-
-    // Verificar si ya hay una sesión activa
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        router.push("/app");
-      }
-    });
 
     return () => {
       authListener?.subscription.unsubscribe();
@@ -36,7 +40,7 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: { 
-        redirectTo: `${window.location.origin}/login`,
+        redirectTo: "https://cloud-aggregator-iota.vercel.app/login",
         queryParams: {
           access_type: 'offline',
           prompt: 'consent',
