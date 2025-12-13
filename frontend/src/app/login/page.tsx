@@ -40,7 +40,7 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: { 
-        redirectTo: "https://cloud-aggregator-iota.vercel.app/login",
+        redirectTo: `${window.location.origin}/login`,
         queryParams: {
           access_type: 'offline',
           prompt: 'consent',
