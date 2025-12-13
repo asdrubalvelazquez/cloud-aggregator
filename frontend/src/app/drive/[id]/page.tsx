@@ -192,7 +192,7 @@ export default function DriveFilesPage() {
       
       // Check if file is a duplicate
       if (result.duplicate) {
-        completeCopy(`ℹ️ El archivo "${fileName}" ya existe en la cuenta destino. No se realizó copia.`);
+        completeCopy(`ℹ️ El archivo "${fileName}" ya existe en la cuenta destino. No se realizó copia ni se consumió cuota.`);
       } else {
         const targetEmail = copyOptions?.target_accounts.find(a => a.id === targetId)?.email || "cuenta destino";
         completeCopy(`✅ Archivo "${fileName}" copiado exitosamente a ${targetEmail}`);
@@ -201,14 +201,15 @@ export default function DriveFilesPage() {
       // Refresh quota (only if not duplicate, but refresh anyway for consistency)
       setQuotaRefreshKey(prev => prev + 1);
       
-      // Limpiar modal y estado después de 3 segundos
+      // Limpiar modal y estado (5s para duplicados, 3s para resto)
+      const displayDuration = result.duplicate ? 5000 : 3000;
       setTimeout(() => {
         setShowCopyModal(false);
         setModalFileId(null);
         setModalFileName(null);
         setSelectedTarget(null);
         resetCopy();
-      }, 3000);
+      }, displayDuration);
     } catch (e: any) {
       if (e.name === "AbortError") {
         cancelCopyGlobal("❌ Copia cancelada");
@@ -548,6 +549,8 @@ export default function DriveFilesPage() {
             className={`rounded-lg p-4 ${
               copyStatus.includes("✅")
                 ? "bg-emerald-500/20 border border-emerald-500 text-emerald-100"
+                : copyStatus.includes("ℹ️")
+                ? "bg-blue-500/20 border border-blue-500 text-blue-100"
                 : "bg-red-500/20 border border-red-500 text-red-100"
             }`}
           >
