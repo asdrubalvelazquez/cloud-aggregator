@@ -39,6 +39,9 @@ function DashboardContent() {
   const [toast, setToast] = useState<ToastMessage>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -52,6 +55,7 @@ function DashboardContent() {
       const json = await res.json();
       setData(json);
       setError(null);
+      setLastUpdated(Date.now());
     } catch (e: any) {
       setError(e.message || "Error al cargar datos");
     } finally {
@@ -111,6 +115,24 @@ function DashboardContent() {
     await supabase.auth.signOut();
     router.push("/");
   };
+
+  const getRelativeTime = (timestamp: number): string => {
+    const seconds = Math.floor((Date.now() - timestamp) / 1000);
+    if (seconds < 60) return "hace un momento";
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `hace ${minutes} min`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `hace ${hours}h`;
+    return `hace ${Math.floor(hours / 24)}d`;
+  };
+
+  // Filtrar y ordenar cuentas
+  const filteredAndSortedAccounts = data?.accounts
+    .filter((acc) => acc.email.toLowerCase().includes(searchQuery.toLowerCase()))
+    .sort((a, b) => {
+      const diff = a.usage_percent - b.usage_percent;
+      return sortOrder === "desc" ? -diff : diff;
+    }) || [];
 
   return (
     <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
@@ -202,7 +224,18 @@ function DashboardContent() {
 
               {/* Barra de progreso global */}
               <div className="bg-slate-800 rounded-xl p-5 shadow-lg border border-slate-700">
-                <h3 className="text-sm font-semibold text-slate-300 mb-3">Uso Global de Almacenamiento</h3>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-slate-300">Uso Global de Almacenamiento</h3>
+                  {lastUpdated && (
+                    <span className="text-xs text-slate-500">
+                      Última actualización: {getRelativeTime(lastUpdated)}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-400 mb-3">
+                  {formatStorageFromGB(data.total_usage / (1024 ** 3))} usados de{" "}
+                  {formatStorageFromGB(data.total_limit / (1024 ** 3))} ({formatStorageFromGB((data.total_limit - data.total_usage) / (1024 ** 3))} libre)
+                </p>
                 <ProgressBar
                   current={data.total_usage}
                   total={data.total_limit}
@@ -222,6 +255,31 @@ function DashboardContent() {
                   className="text-sm border border-slate-600 rounded-lg px-3 py-1.5 hover:bg-slate-700 transition font-medium"
                 >
                   🔄 Refrescar
+                </button>
+              </div>
+
+              {/* Búsqueda y Sorting */}
+              <div className="flex gap-3 mb-4">
+                <div className="flex-1 relative">
+                  <input
+                    type="text"
+                    placeholder="Buscar por email..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full px-4 py-2 pl-10 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition"
+                  />
+                  <svg className="w-5 h-5 text-slate-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                </div>
+                <button
+                  onClick={() => setSortOrder(sortOrder === "desc" ? "asc" : "desc")}
+                  className="flex items-center gap-2 px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg hover:bg-slate-600 transition font-medium text-sm"
+                >
+                  % Usado
+                  <svg className={`w-4 h-4 transition-transform ${sortOrder === "asc" ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
                 </button>
               </div>
 
@@ -249,7 +307,7 @@ function DashboardContent() {
                       </tr>
                     </thead>
                     <tbody>
-                      {data.accounts.map((acc) => (
+                      {filteredAndSortedAccounts.map((acc) => (
                         <tr
                           key={acc.id}
                           className="border-b border-slate-800 hover:bg-slate-700/40 transition"
