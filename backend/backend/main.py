@@ -13,7 +13,8 @@ from backend.google_drive import (
     list_drive_files,
     copy_file_between_accounts,
 )
-from backend.auth import create_state_token, decode_state_token, verify_supabase_jwt
+from backend.auth import create_state_token, decode_state_token, verify_supabase_jwt, get_current_user
+from backend import quota
 
 app = FastAPI()
 
@@ -325,10 +326,16 @@ class CopyFileRequest(BaseModel):
 
 
 @app.post("/drive/copy-file")
-async def copy_file(request: CopyFileRequest, user_id: str = Depends(verify_supabase_jwt)):
-    """Copy a file from one Drive account to another (user-specific)"""
+async def copy_file(request: CopyFileRequest, user_id: str = Depends(get_current_user)):
+    """
+    Copy a file from one Drive account to another.
+    Detects duplicates first, then enforces quota limits.
+    Returns job_id and quota info.
+    """
+    job_id = None
+    
     try:
-        # Validate both accounts exist and belong to the user
+        # 1. Validate both accounts exist and belong to the user
         source_acc = (
             supabase.table("cloud_accounts")
             .select("id")
@@ -352,26 +359,111 @@ async def copy_file(request: CopyFileRequest, user_id: str = Depends(verify_supa
                 detail="One or both accounts not found or don't belong to you"
             )
         
-        # Get tokens with auto-refresh
+        # 2. Get source file metadata for duplicate detection
+        from backend.google_drive import get_file_metadata, find_duplicate_file
+        source_metadata = await get_file_metadata(request.source_account_id, request.file_id)
+        
+        # 3. Check if file already exists in target account BEFORE checking quota/rate limits
+        duplicate = await find_duplicate_file(
+            account_id=request.target_account_id,
+            file_name=source_metadata.get("name", ""),
+            mime_type=source_metadata.get("mimeType", ""),
+            md5_checksum=source_metadata.get("md5Checksum"),
+            folder_id="root"  # Currently copying to root
+        )
+        
+        if duplicate:
+            # File already exists - don't consume quota, don't create job, don't check rate limits
+            # Get current quota for response (read-only, doesn't modify)
+            quota_info = quota.get_user_quota_info(supabase, user_id)
+            return {
+                "success": True,
+                "message": "Archivo ya existe en cuenta destino",
+                "duplicate": True,
+                "file": duplicate,
+                "quota": quota_info
+            }
+        
+        # 4. NOT a duplicate - now check rate limit
+        quota.check_rate_limit(supabase, user_id)
+        
+        # 5. Check quota availability
+        quota_info = quota.check_quota_available(supabase, user_id)
+        
+        # 6. Create copy job with status='pending' (only if not duplicate)
+        job_id = quota.create_copy_job(
+            supabase=supabase,
+            user_id=user_id,
+            source_account_id=request.source_account_id,
+            target_account_id=request.target_account_id,
+            file_id=request.file_id,
+            file_name=source_metadata.get("name")
+        )
+        
+        # 7. Get tokens with auto-refresh
         from backend.google_drive import get_valid_token
         await get_valid_token(request.source_account_id)
         await get_valid_token(request.target_account_id)
         
+        # 8. Execute actual copy
         result = await copy_file_between_accounts(
             source_account_id=request.source_account_id,
             target_account_id=request.target_account_id,
             file_id=request.file_id
         )
         
+        # 9. Mark job as success AND increment quota atomically
+        quota.complete_copy_job_success(supabase, job_id, user_id)
+        
+        # 10. Get updated quota
+        updated_quota = quota.get_user_quota_info(supabase, user_id)
+        
+        # 11. Return success (backward compatible + new fields)
         return {
             "success": True,
             "message": "File copied successfully",
-            "file": result
+            "file": result,
+            "job_id": job_id,
+            "quota": updated_quota
         }
+        
+    except HTTPException as e:
+        # Quota exceeded or auth error - mark job as failed if created
+        if job_id:
+            quota.complete_copy_job_failed(supabase, job_id, str(e.detail))
+        raise
+        
     except ValueError as e:
+        # Validation error - mark job as failed if created
+        if job_id:
+            quota.complete_copy_job_failed(supabase, job_id, str(e))
         raise HTTPException(status_code=400, detail=str(e))
+        
     except Exception as e:
+        # Generic error - mark job as failed if created
+        if job_id:
+            quota.complete_copy_job_failed(supabase, job_id, str(e))
         raise HTTPException(status_code=500, detail=f"Copy failed: {str(e)}")
+
+
+@app.get("/me/plan")
+async def get_my_plan(user_id: str = Depends(get_current_user)):
+    """
+    Get current user's plan and quota status.
+    
+    Returns:
+        {
+            "plan": "free",
+            "used": 5,
+            "limit": 20,
+            "remaining": 15
+        }
+    """
+    try:
+        quota_info = quota.get_user_quota_info(supabase, user_id)
+        return quota_info
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get plan info: {str(e)}")
 
 
 if __name__ == "__main__":

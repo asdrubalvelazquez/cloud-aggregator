@@ -147,17 +147,81 @@ async def list_drive_files(
 async def get_file_metadata(account_id: int, file_id: str) -> dict:
     """
     Get metadata for a specific file.
+    Includes md5Checksum if available for duplicate detection.
     """
     token = await get_valid_token(account_id)
     
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{GOOGLE_DRIVE_API_BASE}/files/{file_id}",
-            params={"fields": "id, name, mimeType, size, createdTime, modifiedTime, webViewLink"},
+            params={"fields": "id, name, mimeType, size, createdTime, modifiedTime, webViewLink, md5Checksum"},
             headers={"Authorization": f"Bearer {token}"}
         )
         resp.raise_for_status()
         return resp.json()
+
+
+async def find_duplicate_file(
+    account_id: int,
+    file_name: str,
+    mime_type: str,
+    md5_checksum: str = None,
+    folder_id: str = "root"
+) -> dict | None:
+    """
+    Search for duplicate file in target account.
+    
+    Strategy:
+    - For binary files with md5Checksum: match by name AND md5
+    - For Google Docs/Sheets/Slides (no md5): match by name AND mimeType
+    
+    Args:
+        account_id: Target account to search in
+        file_name: Name of file to search for
+        mime_type: MIME type of the file
+        md5_checksum: MD5 checksum if available (for binary files)
+        folder_id: Folder to search in (default: root)
+    
+    Returns:
+        File metadata if duplicate found, None otherwise
+    """
+    token = await get_valid_token(account_id)
+    
+    # Escape single quotes in filename for query
+    escaped_name = file_name.replace("'", "\\'")
+    
+    # Build query to find files with same name in target folder
+    query = f"name = '{escaped_name}' and '{folder_id}' in parents and trashed = false"
+    
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{GOOGLE_DRIVE_API_BASE}/files",
+            params={
+                "q": query,
+                "fields": "files(id, name, mimeType, md5Checksum)",
+                "pageSize": 10  # Should be enough to find duplicates
+            },
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    
+    files = data.get("files", [])
+    if not files:
+        return None
+    
+    # Check each candidate for true duplicate
+    for candidate in files:
+        # For binary files with md5: must match both name and checksum
+        if md5_checksum and candidate.get("md5Checksum"):
+            if candidate["md5Checksum"] == md5_checksum:
+                return candidate
+        
+        # For Google Workspace files (no md5): match by name and mimeType
+        elif mime_type.startswith("application/vnd.google-apps.") and candidate["mimeType"] == mime_type:
+            return candidate
+    
+    return None
 
 
 async def download_file_bytes(account_id: int, file_id: str) -> bytes:

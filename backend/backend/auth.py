@@ -5,10 +5,15 @@ import os
 import jwt
 from typing import Optional
 from fastapi import Header, HTTPException
+from supabase import create_client, Client
 
 # Secret para firmar el state JWT (debe ser el mismo que SUPABASE_JWT_SECRET)
 JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "your-super-secret-jwt-key")
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", JWT_SECRET)
+
+# Supabase config para validación de tokens
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 
 
 def create_state_token(user_id: str) -> str:
@@ -62,3 +67,38 @@ def verify_supabase_jwt(authorization: Optional[str] = Header(None)) -> str:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+
+async def get_current_user(authorization: Optional[str] = Header(None)) -> str:
+    """
+    Validate Bearer token with Supabase and return user_id.
+    Uses Supabase's auth.get_user() - SAFE, no manual JWT decoding.
+    
+    Args:
+        authorization: Header "Bearer <token>"
+    
+    Returns:
+        user_id (UUID as string)
+    
+    Raises:
+        HTTPException(401) if invalid/missing token
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing authorization token")
+    
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization format")
+    
+    token = authorization.split(" ")[1]
+    
+    try:
+        # Validate token with Supabase (SAFE - no manual JWT parsing)
+        supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+        response = supabase.auth.get_user(token)
+        
+        if response.user and response.user.id:
+            return response.user.id
+        else:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Token validation failed: {str(e)}")

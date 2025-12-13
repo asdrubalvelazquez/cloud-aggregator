@@ -32,6 +32,13 @@ type ToastMessage = {
   type: "success" | "error" | "warning";
 } | null;
 
+type QuotaInfo = {
+  plan: string;
+  used: number;
+  limit: number;
+  remaining: number;
+} | null;
+
 function DashboardContent() {
   const [data, setData] = useState<StorageSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -42,6 +49,7 @@ function DashboardContent() {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+  const [quota, setQuota] = useState<QuotaInfo>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -60,6 +68,19 @@ function DashboardContent() {
       setError(e.message || "Error al cargar datos");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchQuota = async () => {
+    try {
+      const res = await authenticatedFetch("/me/plan");
+      if (res.ok) {
+        const quotaData = await res.json();
+        setQuota(quotaData);
+      }
+    } catch (e) {
+      // Silently fail - quota display is optional
+      console.error("Failed to fetch quota:", e);
     }
   };
 
@@ -88,6 +109,7 @@ function DashboardContent() {
       // Esperar 1 segundo antes de cargar los datos
       setTimeout(() => {
         fetchSummary();
+        fetchQuota();
       }, 1000);
     } else if (authError) {
       setToast({
@@ -96,8 +118,10 @@ function DashboardContent() {
       });
       window.history.replaceState({}, "", window.location.pathname);
       fetchSummary();
+      fetchQuota();
     } else {
       fetchSummary();
+      fetchQuota();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
@@ -151,6 +175,12 @@ function DashboardContent() {
             <h1 className="text-2xl md:text-3xl font-bold">Cloud Aggregator 🌥️</h1>
             {userEmail && (
               <p className="text-sm text-slate-400 mt-1">{userEmail}</p>
+            )}
+            {quota && (
+              <p className={`text-xs mt-1 ${quota.remaining <= 3 ? "text-amber-400 font-semibold" : "text-slate-500"}`}>
+                Copias este mes: {quota.used} / {quota.limit}
+                {quota.remaining <= 3 && " ⚠️"}
+              </p>
             )}
           </div>
           <div className="flex gap-3">
