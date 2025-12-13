@@ -238,6 +238,42 @@ export default function DriveFilesPage() {
     });
   };
 
+  // Get file icon based on MIME type
+  const getFileIcon = (mimeType: string): string => {
+    if (mimeType.includes("folder")) return "📁";
+    if (mimeType.includes("document")) return "📄";
+    if (mimeType.includes("spreadsheet")) return "📊";
+    if (mimeType.includes("presentation")) return "📽️";
+    if (mimeType.includes("pdf")) return "📕";
+    if (mimeType.includes("image")) return "🖼️";
+    if (mimeType.includes("video")) return "🎥";
+    if (mimeType.includes("audio")) return "🎵";
+    if (mimeType.includes("zip") || mimeType.includes("archive")) return "📦";
+    if (mimeType.includes("text")) return "📝";
+    return "📄";
+  };
+
+  // Get friendly file type name
+  const getFileTypeName = (mimeType: string): string => {
+    if (mimeType === "application/vnd.google-apps.folder") return "Carpeta";
+    if (mimeType === "application/vnd.google-apps.document") return "Google Docs";
+    if (mimeType === "application/vnd.google-apps.spreadsheet") return "Google Sheets";
+    if (mimeType === "application/vnd.google-apps.presentation") return "Google Slides";
+    if (mimeType === "application/vnd.google-apps.form") return "Google Forms";
+    if (mimeType === "application/vnd.google-apps.drawing") return "Google Drawing";
+    if (mimeType === "application/vnd.google-apps.shortcut") return "Acceso directo";
+    if (mimeType.includes("pdf")) return "PDF";
+    if (mimeType.includes("image")) return "Imagen";
+    if (mimeType.includes("video")) return "Video";
+    if (mimeType.includes("audio")) return "Audio";
+    if (mimeType.includes("text")) return "Texto";
+    if (mimeType.includes("zip")) return "Archivo comprimido";
+    
+    // Fallback: extract extension from MIME
+    const parts = mimeType.split("/");
+    return parts[parts.length - 1].toUpperCase();
+  };
+
   // Derived sorted files
   const sortedFiles = (() => {
     if (!files || !sortBy) return files;
@@ -419,66 +455,89 @@ export default function DriveFilesPage() {
                       )}
                     </button>
                   </th>
-                  <th className="py-3 px-4">Ver</th>
-                  <th className="py-3 px-4">Copiar</th>
+                  <th className="py-3 px-4">
+                    <button
+                      type="button"
+                      onClick={() => toggleSort("modifiedTime")}
+                      className="flex items-center gap-2 hover:text-slate-200"
+                      aria-label="Ordenar por fecha"
+                    >
+                      Modificado
+                      {sortBy === "modifiedTime" && (
+                        <span className="text-[10px] font-semibold">{sortDir === "asc" ? "▲" : "▼"}</span>
+                      )}
+                    </button>
+                  </th>
+                  <th className="py-3 px-4 text-center">Acciones</th>
                 </tr>
               </thead>
               <tbody>
                 {sortedFiles.map((file) => (
                   <tr
                     key={file.id}
-                    className="border-b border-slate-800 hover:bg-slate-700/40"
+                    className="border-b border-slate-800 hover:bg-slate-700/40 transition"
                   >
-                    {/* Nombre */}
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-100">
-                      {file.name}
+                    {/* Nombre con icono */}
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <span className="text-2xl">{getFileIcon(file.mimeType)}</span>
+                        <span className="text-sm font-medium text-slate-100">{file.name}</span>
+                      </div>
                     </td>
 
-                    {/* Tipo (extensión simple) */}
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
-                      {file.mimeType ? file.mimeType.split("/").pop() : "-"}
+                    {/* Tipo */}
+                    <td className="px-4 py-3">
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-700 text-slate-200">
+                        {getFileTypeName(file.mimeType)}
+                      </span>
                     </td>
 
                     {/* Tamaño */}
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">
-                      {file.size
-                        ? `${(Number(file.size) / 1024 / 1024).toFixed(2)} MB`
+                    <td className="px-4 py-3 text-sm text-slate-300">
+                      {file.size && Number(file.size) > 0
+                        ? formatFileSize(Number(file.size))
                         : "-"}
                     </td>
 
-                    {/* Ver */}
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      {file.mimeType === "application/vnd.google-apps.folder" ? (
-                        <button
-                          type="button"
-                          onClick={() => handleOpenFolder(file.id, file.name)}
-                          className="text-emerald-400 hover:underline"
-                        >
-                          Abrir carpeta
-                        </button>
-                      ) : (
-                        file.webViewLink && (
-                          <a
-                            href={file.webViewLink}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-emerald-400 hover:underline"
-                          >
-                            Abrir
-                          </a>
-                        )
-                      )}
+                    {/* Fecha de modificación */}
+                    <td className="px-4 py-3 text-sm text-slate-300">
+                      {file.modifiedTime ? formatDate(file.modifiedTime) : "-"}
                     </td>
 
-                    {/* Copiar */}
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      <button
-                        disabled={copying || !copyOptions || copyOptions.target_accounts.length === 0}
-                        onClick={() => openCopyModal(file.id, file.name)}
-                        className="rounded bg-emerald-500 hover:bg-emerald-600 px-3 py-1 text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {copying ? "Copiando..." : "Copiar"}
-                      </button>
+                    {/* Acciones */}
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-center gap-2">
+                        {/* Ver/Abrir */}
+                        {file.mimeType === "application/vnd.google-apps.folder" ? (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenFolder(file.id, file.name)}
+                            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition flex items-center gap-1"
+                          >
+                            📂 Abrir
+                          </button>
+                        ) : (
+                          file.webViewLink && (
+                            <a
+                              href={file.webViewLink}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-xs font-semibold transition flex items-center gap-1"
+                            >
+                              👁️ Ver
+                            </a>
+                          )
+                        )}
+                        
+                        {/* Copiar */}
+                        <button
+                          disabled={copying || !copyOptions || copyOptions.target_accounts.length === 0}
+                          onClick={() => openCopyModal(file.id, file.name)}
+                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                        >
+                          📋 Copiar
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
