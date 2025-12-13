@@ -1,6 +1,42 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { supabase } from "@/lib/supabaseClient";
 
 export default function Home() {
+  const router = useRouter();
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (session) {
+        // Usuario autenticado -> redirigir a dashboard
+        router.replace("/app");
+      } else {
+        // No hay sesión -> mostrar landing
+        setCheckingSession(false);
+      }
+    };
+
+    checkAuth();
+  }, [router]);
+
+  // Mientras verifica sesión, mostrar spinner
+  if (checkingSession) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500 mb-4"></div>
+          <p className="text-slate-300">Cargando...</p>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-slate-950 text-white overflow-hidden">
       {/* Animated gradient background */}
