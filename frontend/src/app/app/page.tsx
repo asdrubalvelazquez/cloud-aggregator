@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { authenticatedFetch } from "@/lib/api";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -32,7 +32,7 @@ type ToastMessage = {
   type: "success" | "error" | "warning";
 } | null;
 
-export default function AppDashboard() {
+function DashboardContent() {
   const [data, setData] = useState<StorageSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -302,5 +302,20 @@ export default function AppDashboard() {
         )}
       </div>
     </main>
+  );
+}
+
+export default function AppDashboard() {
+  return (
+    <Suspense fallback={
+      <main className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500 mb-4"></div>
+          <p className="text-slate-300">Cargando...</p>
+        </div>
+      </main>
+    }>
+      <DashboardContent />
+    </Suspense>
   );
 }
