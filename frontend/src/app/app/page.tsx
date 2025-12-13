@@ -3,7 +3,11 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { authenticatedFetch } from "@/lib/api";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import Toast from "@/components/Toast";
+import ProgressBar from "@/components/ProgressBar";
+import AccountStatusBadge from "@/components/AccountStatusBadge";
+import { formatStorage, formatStorageFromGB } from "@/lib/formatStorage";
 
 type Account = {
   id: number;
@@ -23,14 +27,20 @@ type StorageSummary = {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
 
+type ToastMessage = {
+  message: string;
+  type: "success" | "error" | "warning";
+} | null;
+
 export default function AppDashboard() {
   const [data, setData] = useState<StorageSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastMessage>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const fetchSummary = async () => {
     try {
@@ -60,33 +70,33 @@ export default function AppDashboard() {
     };
     checkSession();
 
-    // Verificar si el usuario acaba de autenticarse
-    const params = new URLSearchParams(window.location.search);
-    const authStatus = params.get("auth");
-    const authError = params.get("error");
+    // Verificar si el usuario acaba de autenticarse (usando searchParams)
+    const authStatus = searchParams?.get("auth");
+    const authError = searchParams?.get("error");
 
     if (authStatus === "success") {
-      setAuthMessage("✅ Cuenta de Google conectada exitosamente");
+      setToast({
+        message: "Cuenta de Google conectada exitosamente",
+        type: "success",
+      });
       // Limpiar URL sin recargar la página
       window.history.replaceState({}, "", window.location.pathname);
-      // Esperar 1 segundo antes de cargar los datos para que se procese en el backend
+      // Esperar 1 segundo antes de cargar los datos
       setTimeout(() => {
         fetchSummary();
       }, 1000);
     } else if (authError) {
-      setError(`Error de autenticación: ${authError}`);
+      setToast({
+        message: `Error de autenticación: ${authError}`,
+        type: "error",
+      });
       window.history.replaceState({}, "", window.location.pathname);
       fetchSummary();
     } else {
       fetchSummary();
     }
-
-    // Limpiar mensaje de éxito después de 5 segundos
-    if (authStatus === "success") {
-      const timer = setTimeout(() => setAuthMessage(null), 5000);
-      return () => clearTimeout(timer);
-    }
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const handleConnectGoogle = async () => {
     if (!userId) {
@@ -104,7 +114,16 @@ export default function AppDashboard() {
 
   return (
     <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
-      <div className="w-full max-w-4xl space-y-6">
+      {/* Toast Notifications */}
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
+        />
+      )}
+
+      <div className="w-full max-w-6xl space-y-6">
         <header className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl md:text-3xl font-bold">Cloud Aggregator 🌥️</h1>
@@ -128,106 +147,148 @@ export default function AppDashboard() {
           </div>
         </header>
 
-        {/* Mensaje de autenticación exitosa */}
-        {authMessage && (
-          <div className="bg-emerald-500/20 border border-emerald-500 rounded-lg p-4 text-emerald-100">
-            {authMessage}
+        {loading && (
+          <div className="text-center py-12">
+            <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500"></div>
+            <p className="mt-4 text-slate-300">Cargando resumen de almacenamiento…</p>
           </div>
         )}
 
-        {loading && <p>Cargando resumen de almacenamiento…</p>}
-        {error && (
-          <p className="text-red-400">Ocurrió un error al cargar datos: {error}</p>
+        {error && !loading && (
+          <div className="bg-red-500/20 border border-red-500 rounded-lg p-4 text-red-100">
+            <p className="font-semibold">Error al cargar datos</p>
+            <p className="text-sm mt-1">{error}</p>
+          </div>
         )}
 
         {data && (
           <>
-            {/* Tarjeta de resumen */}
-            <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div className="bg-slate-800 rounded-xl p-4 shadow">
-                <h2 className="text-sm text-slate-300 uppercase tracking-wide">
-                  Total espacio
-                </h2>
-                <p className="text-2xl font-bold">
-                  {(data.total_limit / (1024 ** 3)).toFixed(2)} GB
-                </p>
+            {/* Tarjetas de resumen con barra de progreso global */}
+            <section className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="bg-slate-800 rounded-xl p-5 shadow-lg border border-slate-700">
+                  <h2 className="text-xs text-slate-400 uppercase tracking-wide font-semibold mb-1">
+                    Total Espacio
+                  </h2>
+                  <p className="text-3xl font-bold text-white">
+                    {formatStorageFromGB(data.total_limit / (1024 ** 3))}
+                  </p>
+                </div>
+                <div className="bg-slate-800 rounded-xl p-5 shadow-lg border border-slate-700">
+                  <h2 className="text-xs text-slate-400 uppercase tracking-wide font-semibold mb-1">
+                    Usado
+                  </h2>
+                  <p className="text-3xl font-bold text-emerald-400">
+                    {formatStorageFromGB(data.total_usage / (1024 ** 3))}
+                  </p>
+                </div>
+                <div className="bg-slate-800 rounded-xl p-5 shadow-lg border border-slate-700">
+                  <h2 className="text-xs text-slate-400 uppercase tracking-wide font-semibold mb-1">
+                    Libre
+                  </h2>
+                  <p className="text-3xl font-bold text-blue-400">
+                    {formatStorageFromGB((data.total_limit - data.total_usage) / (1024 ** 3))}
+                  </p>
+                </div>
+                <div className="bg-slate-800 rounded-xl p-5 shadow-lg border border-slate-700">
+                  <h2 className="text-xs text-slate-400 uppercase tracking-wide font-semibold mb-1">
+                    % Utilizado
+                  </h2>
+                  <p className="text-3xl font-bold text-white">
+                    {data.total_usage_percent.toFixed(2)}%
+                  </p>
+                </div>
               </div>
-              <div className="bg-slate-800 rounded-xl p-4 shadow">
-                <h2 className="text-sm text-slate-300 uppercase tracking-wide">
-                  Usado
-                </h2>
-                <p className="text-2xl font-bold">
-                  {(data.total_usage / (1024 ** 3)).toFixed(2)} GB
-                </p>
-              </div>
-              <div className="bg-slate-800 rounded-xl p-4 shadow">
-                <h2 className="text-sm text-slate-300 uppercase tracking-wide">
-                  Libre
-                </h2>
-                <p className="text-2xl font-bold">
-                  {((data.total_limit - data.total_usage) / (1024 ** 3)).toFixed(2)} GB
-                </p>
-              </div>
-              <div className="bg-slate-800 rounded-xl p-4 shadow">
-                <h2 className="text-sm text-slate-300 uppercase tracking-wide">
-                  % Utilizado
-                </h2>
-                <p className="text-2xl font-bold">
-                  {data.total_usage_percent}%
-                </p>
+
+              {/* Barra de progreso global */}
+              <div className="bg-slate-800 rounded-xl p-5 shadow-lg border border-slate-700">
+                <h3 className="text-sm font-semibold text-slate-300 mb-3">Uso Global de Almacenamiento</h3>
+                <ProgressBar
+                  current={data.total_usage}
+                  total={data.total_limit}
+                  height="lg"
+                />
               </div>
             </section>
 
-            {/* Tabla de cuentas */}
-            <section className="bg-slate-800 rounded-xl p-4 shadow">
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-lg font-semibold">
+            {/* Tabla de cuentas mejorada */}
+            <section className="bg-slate-800 rounded-xl p-6 shadow-lg border border-slate-700">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold text-white">
                   Cuentas conectadas ({data.accounts.length})
                 </h2>
                 <button
                   onClick={fetchSummary}
-                  className="text-xs border border-slate-600 rounded px-2 py-1 hover:bg-slate-700"
+                  className="text-sm border border-slate-600 rounded-lg px-3 py-1.5 hover:bg-slate-700 transition font-medium"
                 >
-                  Refrescar
+                  🔄 Refrescar
                 </button>
               </div>
 
               {data.accounts.length === 0 ? (
-                <p className="text-sm text-slate-300">
-                  Aún no hay cuentas conectadas. Haz clic en
-                  &nbsp;
-                  <strong>"Conectar nueva cuenta de Google Drive"</strong>.
-                </p>
+                <div className="text-center py-12 bg-slate-900/50 rounded-lg border-2 border-dashed border-slate-700">
+                  <div className="text-5xl mb-4">☁️</div>
+                  <p className="text-slate-300 mb-2">
+                    Aún no hay cuentas conectadas
+                  </p>
+                  <p className="text-sm text-slate-400">
+                    Haz clic en <strong>"Conectar nueva cuenta de Google Drive"</strong> para empezar
+                  </p>
+                </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-left border-b border-slate-700">
-                        <th className="py-2 pr-4">Email</th>
-                        <th className="py-2 pr-4">Uso (GB)</th>
-                        <th className="py-2 pr-4">Límite (GB)</th>
-                        <th className="py-2 pr-4">Acciones</th>
+                        <th className="py-3 px-4 text-slate-300 font-semibold">Email</th>
+                        <th className="py-3 px-4 text-slate-300 font-semibold">Estado</th>
+                        <th className="py-3 px-4 text-slate-300 font-semibold">Uso</th>
+                        <th className="py-3 px-4 text-slate-300 font-semibold">Límite</th>
+                        <th className="py-3 px-4 text-slate-300 font-semibold">Progreso</th>
+                        <th className="py-3 px-4 text-slate-300 font-semibold text-center">Acciones</th>
                       </tr>
                     </thead>
                     <tbody>
                       {data.accounts.map((acc) => (
                         <tr
                           key={acc.id}
-                          className="border-b border-slate-800 hover:bg-slate-700/40"
+                          className="border-b border-slate-800 hover:bg-slate-700/40 transition"
                         >
-                          <td className="py-2 pr-4">{acc.email}</td>
-                          <td className="py-2 pr-4">
-                            {(acc.usage / (1024 ** 3)).toFixed(2)}
+                          <td className="py-4 px-4">
+                            <div className="flex items-center gap-2">
+                              <span className="text-2xl">📧</span>
+                              <span className="font-medium text-white">{acc.email}</span>
+                            </div>
                           </td>
-                          <td className="py-2 pr-4">
-                            {(acc.limit / (1024 ** 3)).toFixed(2)}
+                          <td className="py-4 px-4">
+                            <AccountStatusBadge
+                              limit={acc.limit}
+                              usage={acc.usage}
+                              error={acc.error}
+                            />
                           </td>
-                          <td className="py-2 pr-4">
+                          <td className="py-4 px-4 text-slate-300">
+                            {formatStorageFromGB(acc.usage / (1024 ** 3))}
+                          </td>
+                          <td className="py-4 px-4 text-slate-300">
+                            {formatStorageFromGB(acc.limit / (1024 ** 3))}
+                          </td>
+                          <td className="py-4 px-4">
+                            <div className="w-32">
+                              <ProgressBar
+                                current={acc.usage}
+                                total={acc.limit}
+                                height="sm"
+                                showPercentage={false}
+                              />
+                            </div>
+                          </td>
+                          <td className="py-4 px-4 text-center">
                             <a
                               href={`/drive/${acc.id}`}
-                              className="text-emerald-400 hover:underline text-xs"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition"
                             >
-                              Ver archivos
+                              📁 Ver archivos
                             </a>
                           </td>
                         </tr>

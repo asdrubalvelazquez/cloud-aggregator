@@ -363,21 +363,39 @@ export default function DriveFilesPage() {
           )}
         </header>
 
-        {/* Breadcrumb Navigation */}
-        <nav className="flex items-center gap-1 text-sm text-slate-300">
-          {breadcrumb.map((crumb, idx) => (
-            <span key={crumb.id} className="flex items-center gap-1">
-              {idx > 0 && <span>/</span>}
-              <button
-                type="button"
-                className="hover:text-emerald-400 transition"
-                onClick={() => handleBreadcrumbClick(idx)}
-              >
-                {crumb.name}
-              </button>
-            </span>
-          ))}
-        </nav>
+        {/* Breadcrumb Navigation con botón Atrás */}
+        <div className="flex items-center justify-between bg-slate-800 rounded-lg p-4 border border-slate-700">
+          <nav className="flex items-center gap-2 text-sm">
+            {breadcrumb.map((crumb, idx) => (
+              <span key={crumb.id} className="flex items-center gap-2">
+                {idx > 0 && <span className="text-slate-600">›</span>}
+                <button
+                  type="button"
+                  className={`hover:text-emerald-400 transition font-medium ${
+                    idx === breadcrumb.length - 1
+                      ? "text-white"
+                      : "text-slate-400"
+                  }`}
+                  onClick={() => handleBreadcrumbClick(idx)}
+                >
+                  {idx === 0 && "🏠 "}
+                  {crumb.name}
+                </button>
+              </span>
+            ))}
+          </nav>
+          
+          {/* Botón Atrás */}
+          {breadcrumb.length > 1 && (
+            <button
+              type="button"
+              onClick={() => handleBreadcrumbClick(breadcrumb.length - 2)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-xs font-semibold transition"
+            >
+              ← Atrás
+            </button>
+          )}
+        </div>
 
         {/* Copy Status with Progress Bar */}
         {/* (Progreso ahora en floating bar sticky abajo) */}
