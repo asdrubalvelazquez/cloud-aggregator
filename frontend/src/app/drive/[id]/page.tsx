@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useCopyContext } from "@/context/CopyContext";
+import { authenticatedFetch } from "@/lib/api";
 
 type File = {
   id: string;
@@ -81,7 +82,7 @@ export default function DriveFilesPage() {
         url.searchParams.set("page_token", pageToken);
       }
 
-      const res = await fetch(url.toString());
+      const res = await authenticatedFetch(url.pathname + url.search);
       if (!res.ok) throw new Error(`Error API archivos: ${res.status}`);
 
       const json = await res.json();
@@ -107,8 +108,8 @@ export default function DriveFilesPage() {
 
   const fetchCopyOptions = async () => {
     try {
-      const res = await fetch(
-        `${API_BASE_URL}/drive/${accountId}/copy-options`
+      const res = await authenticatedFetch(
+        `/drive/${accountId}/copy-options`
       );
       if (!res.ok) {
         throw new Error(`Error: ${res.status}`);
@@ -142,7 +143,7 @@ export default function DriveFilesPage() {
     try {
       startCopy(fileName);
 
-      const res = await fetch(`${API_BASE_URL}/drive/copy-file`, {
+      const res = await authenticatedFetch("/drive/copy-file", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

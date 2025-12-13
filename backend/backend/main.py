@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -13,6 +13,7 @@ from backend.google_drive import (
     list_drive_files,
     copy_file_between_accounts,
 )
+from backend.auth import create_state_token, decode_state_token, verify_supabase_jwt
 
 app = FastAPI()
 
@@ -59,8 +60,8 @@ def health_check():
 
 
 @app.get("/auth/google/login")
-def google_login():
-    """Initiate Google OAuth flow"""
+def google_login(user_id: Optional[str] = None):
+    """Initiate Google OAuth flow with optional user_id in state"""
     if not GOOGLE_CLIENT_ID or not GOOGLE_REDIRECT_URI:
         return {"error": "Missing GOOGLE_CLIENT_ID or GOOGLE_REDIRECT_URI"}
 
@@ -72,6 +73,11 @@ def google_login():
         "access_type": "offline",
         "prompt": "consent",
     }
+    
+    # Si se proporciona user_id, crear un state JWT
+    if user_id:
+        state_token = create_state_token(user_id)
+        params["state"] = state_token
 
     from urllib.parse import urlencode
     url = f"{GOOGLE_AUTH_ENDPOINT}?{urlencode(params)}"
@@ -88,12 +94,18 @@ async def google_callback(request: Request):
     qs = parse_qs(query)
     code = qs.get("code", [None])[0]
     error = qs.get("error", [None])[0]
+    state = qs.get("state", [None])[0]
 
     if error:
         return RedirectResponse(f"{FRONTEND_URL}?error={error}")
 
     if not code:
         return RedirectResponse(f"{FRONTEND_URL}?error=no_code")
+    
+    # Decodificar el state para obtener el user_id
+    user_id = None
+    if state:
+        user_id = decode_state_token(state)
 
     # Exchange code for tokens
     data = {
@@ -130,40 +142,67 @@ async def google_callback(request: Request):
     expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
     expiry_iso = expiry.isoformat()
 
+    # Preparar datos para guardar
+    upsert_data = {
+        "account_email": account_email,
+        "google_account_id": google_account_id,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_expiry": expiry_iso,
+    }
+    
+    # Si hay user_id del state, agregarlo
+    if user_id:
+        upsert_data["user_id"] = user_id
+
     # Save to database
     resp = supabase.table("cloud_accounts").upsert(
-        {
-            "account_email": account_email,
-            "google_account_id": google_account_id,
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "token_expiry": expiry_iso,
-        },
+        upsert_data,
         on_conflict="google_account_id",
     ).execute()
 
     # Redirect to frontend dashboard
-    return RedirectResponse(f"{FRONTEND_URL}?auth=success")
+    return RedirectResponse(f"{FRONTEND_URL}/app?auth=success")
 
 
 @app.get("/accounts")
-async def list_accounts():
-    """Get all connected cloud accounts"""
-    resp = supabase.table("cloud_accounts").select("id, account_email, created_at").execute()
+async def list_accounts(user_id: str = Depends(verify_supabase_jwt)):
+    """Get all connected cloud accounts for the authenticated user"""
+    resp = (
+        supabase.table("cloud_accounts")
+        .select("id, account_email, created_at")
+        .eq("user_id", user_id)
+        .execute()
+    )
     return {"accounts": resp.data}
 
 
 @app.get("/drive/{account_id}/copy-options")
-async def get_copy_options(account_id: int):
-    """Get list of target accounts for copying files"""
+async def get_copy_options(account_id: int, user_id: str = Depends(verify_supabase_jwt)):
+    """Get list of target accounts for copying files (user-specific)"""
     try:
-        # Verify source account exists
-        source = supabase.table("cloud_accounts").select("id, account_email").eq("id", account_id).single().execute()
+        # Verify source account exists and belongs to user
+        source = (
+            supabase.table("cloud_accounts")
+            .select("id, account_email")
+            .eq("id", account_id)
+            .eq("user_id", user_id)
+            .single()
+            .execute()
+        )
         if not source.data:
-            raise HTTPException(status_code=404, detail=f"Account {account_id} not found")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Account {account_id} not found or doesn't belong to you"
+            )
         
-        # Get all other accounts
-        all_accounts = supabase.table("cloud_accounts").select("id, account_email").execute()
+        # Get all other accounts belonging to the same user
+        all_accounts = (
+            supabase.table("cloud_accounts")
+            .select("id, account_email")
+            .eq("user_id", user_id)
+            .execute()
+        )
         targets = [
             {"id": acc["id"], "email": acc["account_email"]}
             for acc in all_accounts.data
@@ -179,12 +218,33 @@ async def get_copy_options(account_id: int):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "ok", "message": "Backend is running"}
+
+
 @app.get("/storage/summary")
-async def storage_summary():
-    """Get aggregated storage summary across all accounts"""
-    # Get all accounts
-    accounts_resp = supabase.table("cloud_accounts").select("id, account_email").execute()
+async def storage_summary(user_id: str = Depends(verify_supabase_jwt)):
+    """Get aggregated storage summary across all user accounts"""
+    # Get all accounts for this user
+    accounts_resp = (
+        supabase.table("cloud_accounts")
+        .select("id, account_email")
+        .eq("user_id", user_id)
+        .execute()
+    )
     accounts = accounts_resp.data
+    
+    # Si no hay cuentas para este usuario, retornar vacío
+    if len(accounts) == 0:
+        return {
+            "total_limit": 0,
+            "total_usage": 0,
+            "total_free": 0,
+            "total_usage_percent": 0,
+            "accounts": []
+        }
 
     total_limit = 0
     total_usage = 0
@@ -228,9 +288,25 @@ async def get_drive_files(
     account_id: int,
     folder_id: str = "root",
     page_token: Optional[str] = None,
+    user_id: str = Depends(verify_supabase_jwt),
 ):
-    """List files for a specific Drive account and folder with pagination"""
+    """List files for a specific Drive account and folder with pagination (user-specific)"""
     try:
+        # Verify account belongs to user
+        account = (
+            supabase.table("cloud_accounts")
+            .select("id")
+            .eq("id", account_id)
+            .eq("user_id", user_id)
+            .single()
+            .execute()
+        )
+        if not account.data:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Account {account_id} not found or doesn't belong to you"
+            )
+        
         result = await list_drive_files(
             account_id=account_id,
             folder_id=folder_id,
@@ -249,15 +325,32 @@ class CopyFileRequest(BaseModel):
 
 
 @app.post("/drive/copy-file")
-async def copy_file(request: CopyFileRequest):
-    """Copy a file from one Drive account to another with token refresh"""
+async def copy_file(request: CopyFileRequest, user_id: str = Depends(verify_supabase_jwt)):
+    """Copy a file from one Drive account to another (user-specific)"""
     try:
-        # Validate accounts exist and refresh tokens
-        source_acc = supabase.table("cloud_accounts").select("id").eq("id", request.source_account_id).single().execute()
-        target_acc = supabase.table("cloud_accounts").select("id").eq("id", request.target_account_id).single().execute()
+        # Validate both accounts exist and belong to the user
+        source_acc = (
+            supabase.table("cloud_accounts")
+            .select("id")
+            .eq("id", request.source_account_id)
+            .eq("user_id", user_id)
+            .single()
+            .execute()
+        )
+        target_acc = (
+            supabase.table("cloud_accounts")
+            .select("id")
+            .eq("id", request.target_account_id)
+            .eq("user_id", user_id)
+            .single()
+            .execute()
+        )
         
         if not source_acc.data or not target_acc.data:
-            raise HTTPException(status_code=404, detail="One or both accounts not found")
+            raise HTTPException(
+                status_code=404,
+                detail="One or both accounts not found or don't belong to you"
+            )
         
         # Get tokens with auto-refresh
         from backend.google_drive import get_valid_token

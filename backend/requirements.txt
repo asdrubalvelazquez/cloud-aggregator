@@ -4,3 +4,4 @@ supabase
 httpx
 python-dotenv
 python-dateutil
+pyjwt
