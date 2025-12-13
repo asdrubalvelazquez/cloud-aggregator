@@ -9,21 +9,32 @@ export default function LoginPage() {
   const router = useRouter();
 
   useEffect(() => {
-    // Verificar si ya hay una sesión activa al cargar
-    const checkSession = async () => {
+    let mounted = true;
+
+    // Dar tiempo a Supabase para procesar el hash de la URL si existe
+    const initAuth = async () => {
+      // Si hay hash en la URL, esperar a que Supabase lo procese
+      if (window.location.hash) {
+        console.log('Hash detected, waiting for Supabase to process...');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      // Verificar si ya hay una sesión activa
       const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
+      if (session && mounted) {
+        console.log('Session found, redirecting to /app');
         router.push("/app");
+        return;
       }
     };
-    
-    checkSession();
+
+    initAuth();
 
     // Escuchar cambios en la sesión de autenticación
     const { data: authListener } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         console.log('Auth event:', event);
-        if (event === "SIGNED_IN" && session) {
+        if (event === "SIGNED_IN" && session && mounted) {
           console.log('Redirecting to /app');
           router.push("/app");
         }
@@ -31,6 +42,7 @@ export default function LoginPage() {
     );
 
     return () => {
+      mounted = false;
       authListener?.subscription.unsubscribe();
     };
   }, [router]);
