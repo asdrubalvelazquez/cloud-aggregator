@@ -12,6 +12,8 @@ from backend.google_drive import (
     get_storage_quota,
     list_drive_files,
     copy_file_between_accounts,
+    rename_file,
+    download_file_stream,
 )
 from backend.auth import create_state_token, decode_state_token, verify_supabase_jwt, get_current_user
 from backend import quota
@@ -270,7 +272,7 @@ async def storage_summary(user_id: str = Depends(verify_supabase_jwt)):
                 "usage_percent": round((usage / limit * 100) if limit > 0 else 0, 2)
             })
         except Exception as e:
-            print(f"Error getting quota for account {account['id']}: {e}")
+            # Silently skip accounts with quota fetch errors
             continue
 
     total_free = total_limit - total_usage if total_limit > 0 else 0
@@ -326,7 +328,7 @@ class CopyFileRequest(BaseModel):
 
 
 @app.post("/drive/copy-file")
-async def copy_file(request: CopyFileRequest, user_id: str = Depends(get_current_user)):
+async def copy_file(request: CopyFileRequest, user_id: str = Depends(verify_supabase_jwt)):
     """
     Copy a file from one Drive account to another.
     Detects duplicates first, then enforces quota limits.
@@ -447,7 +449,7 @@ async def copy_file(request: CopyFileRequest, user_id: str = Depends(get_current
 
 
 @app.get("/me/plan")
-async def get_my_plan(user_id: str = Depends(get_current_user)):
+async def get_my_plan(user_id: str = Depends(verify_supabase_jwt)):
     """
     Get current user's plan and quota status.
     
@@ -464,6 +466,111 @@ async def get_my_plan(user_id: str = Depends(get_current_user)):
         return quota_info
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get plan info: {str(e)}")
+
+
+class RenameFileRequest(BaseModel):
+    account_id: int
+    file_id: str
+    new_name: str
+
+
+@app.post("/drive/rename-file")
+async def rename_drive_file(
+    request: RenameFileRequest,
+    user_id: str = Depends(verify_supabase_jwt)
+):
+    """
+    Rename a file in Google Drive.
+    
+    Body:
+        {
+            "account_id": 1,
+            "file_id": "abc123",
+            "new_name": "New Filename.pdf"
+        }
+    
+    Returns:
+        Updated file metadata
+    """
+    try:
+        # Validate new_name
+        if not request.new_name.strip():
+            raise HTTPException(status_code=400, detail="new_name cannot be empty")
+        
+        # Verify account belongs to user
+        account_resp = supabase.table("cloud_accounts").select("user_id").eq("id", request.account_id).single().execute()
+        if not account_resp.data or account_resp.data["user_id"] != user_id:
+            raise HTTPException(status_code=403, detail="Account does not belong to user")
+        
+        # Rename file
+        result = await rename_file(request.account_id, request.file_id, request.new_name)
+        
+        return {
+            "success": True,
+            "message": "File renamed successfully",
+            "file": result
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Rename failed: {str(e)}")
+
+
+@app.get("/drive/download")
+async def download_drive_file(
+    account_id: int,
+    file_id: str,
+    user_id: str = Depends(verify_supabase_jwt)
+):
+    """
+    Download a file from Google Drive.
+    For Google Workspace files, exports to appropriate format (DOCX, XLSX, PPTX, PDF).
+    
+    Query params:
+        account_id: Account ID owning the file
+        file_id: File ID to download
+    
+    Returns:
+        File content with proper headers for download
+    """
+    try:
+        # Verify account belongs to user
+        account_resp = supabase.table("cloud_accounts").select("user_id").eq("id", account_id).single().execute()
+        if not account_resp.data or account_resp.data["user_id"] != user_id:
+            raise HTTPException(status_code=403, detail="Account does not belong to user")
+        
+        # Get download info
+        url, params, token, file_name, mime_type = await download_file_stream(account_id, file_id)
+        
+        # Stream the file
+        import httpx
+        from fastapi.responses import StreamingResponse
+        
+        async def file_iterator():
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                async with client.stream("GET", url, params=params, headers={"Authorization": f"Bearer {token}"}) as resp:
+                    resp.raise_for_status()
+                    async for chunk in resp.aiter_bytes(chunk_size=8192):
+                        yield chunk
+        
+        # Sanitize filename for Content-Disposition header
+        safe_filename = file_name.replace('"', '').replace('\n', '').replace('\r', '')
+        
+        return StreamingResponse(
+            file_iterator(),
+            media_type=mime_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{safe_filename}"'
+            }
+        )
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
 
 
 if __name__ == "__main__":

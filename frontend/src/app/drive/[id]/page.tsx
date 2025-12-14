@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useCopyContext } from "@/context/CopyContext";
 import { authenticatedFetch } from "@/lib/api";
 import QuotaBadge from "@/components/QuotaBadge";
+import RowActionsMenu from "@/components/RowActionsMenu";
+import RenameModal from "@/components/RenameModal";
+import ContextMenu from "@/components/ContextMenu";
 
 type File = {
   id: string;
@@ -79,6 +82,32 @@ export default function DriveFilesPage() {
   // Quota refresh key for re-fetching quota after operations
   const [quotaRefreshKey, setQuotaRefreshKey] = useState(0);
 
+  // Rename modal state
+  const [showRenameModal, setShowRenameModal] = useState(false);
+  const [renameFileId, setRenameFileId] = useState<string | null>(null);
+  const [renameFileName, setRenameFileName] = useState<string>("");
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameStatus, setRenameStatus] = useState<string | null>(null);
+
+  // Row selection state (visual highlight)
+  const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
+  const clickTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Copy lock ref (synchronous guard against double submit)
+  const copyLockRef = useRef(false);
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    fileId: string;
+    fileName: string;
+    mimeType: string;
+    webViewLink?: string;
+    isFolder: boolean;
+  } | null>(null);
+
   // Fetch files from a specific folder
   const fetchFiles = async (
     folderId: string = "root",
@@ -146,7 +175,7 @@ export default function DriveFilesPage() {
   };
 
   const handleCopyFile = async (fileId: string, targetId: number, fileName: string) => {
-    if (!targetId) {
+    if (!targetId || copying) {
       return;
     }
 
@@ -223,6 +252,9 @@ export default function DriveFilesPage() {
         setSelectedTarget(null);
         resetCopy();
       }, 3000);
+    } finally {
+      // Always release lock
+      copyLockRef.current = false;
     }
   };
 
@@ -245,11 +277,16 @@ export default function DriveFilesPage() {
   };
 
   const confirmCopy = () => {
-    if (!selectedTarget || !modalFileId || !modalFileName) {
+    // Synchronous lock check (prevents race conditions with React state)
+    if (copyLockRef.current || !selectedTarget || !modalFileId || !modalFileName || copying) {
       return;
     }
+    
+    // Set lock immediately (synchronous)
+    copyLockRef.current = true;
+    
+    // Execute copy (lock will be released in handleCopyFile's finally block)
     handleCopyFile(modalFileId, selectedTarget, modalFileName);
-    closeCopyModal();
   };
 
   // Multi-select handlers
@@ -360,6 +397,148 @@ export default function DriveFilesPage() {
 
     // Refresh quota badge
     setQuotaRefreshKey(prev => prev + 1);
+  };
+
+  const openRenameModal = (fileId: string, fileName: string) => {
+    setRenameFileId(fileId);
+    setRenameFileName(fileName);
+    setShowRenameModal(true);
+    setRenameStatus(null);
+  };
+
+  const closeRenameModal = () => {
+    setShowRenameModal(false);
+    setRenameFileId(null);
+    setRenameFileName("");
+    setRenameStatus(null);
+  };
+
+  const handleRenameFile = async (newName: string) => {
+    if (!renameFileId || !newName.trim()) return;
+
+    try {
+      setIsRenaming(true);
+      setRenameStatus("Renombrando...");
+
+      const res = await authenticatedFetch("/drive/rename-file", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          account_id: parseInt(accountId),
+          file_id: renameFileId,
+          new_name: newName.trim(),
+        }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || `Error: ${res.status}`);
+      }
+
+      setRenameStatus("✅ Archivo renombrado exitosamente");
+      
+      // Refresh file list
+      await fetchFiles(currentFolderId);
+
+      // Close modal after short delay
+      setTimeout(() => {
+        closeRenameModal();
+      }, 1500);
+    } catch (e: any) {
+      setRenameStatus(`❌ Error: ${e.message}`);
+    } finally {
+      setIsRenaming(false);
+    }
+  };
+
+  const handleDownloadFile = async (fileId: string, fileName: string) => {
+    try {
+      const url = new URL(`${API_BASE_URL}/drive/download`);
+      url.searchParams.set("account_id", accountId);
+      url.searchParams.set("file_id", fileId);
+
+      const res = await authenticatedFetch(url.pathname + url.search);
+      
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail || `Error: ${res.status}`);
+      }
+
+      // Get blob from response
+      const blob = await res.blob();
+      
+      // Get filename from Content-Disposition header or use default
+      const contentDisposition = res.headers.get("Content-Disposition");
+      let downloadFileName = fileName;
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename="?(.+)"?/);
+        if (match) {
+          downloadFileName = match[1];
+        }
+      }
+
+      // Create download link
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = downloadFileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (e: any) {
+      alert(`Error al descargar: ${e.message}`);
+    }
+  };
+
+  // Row click handlers
+  const handleRowClick = (fileId: string) => {
+    // Debounce to distinguish from double click
+    if (clickTimerRef.current) {
+      clearTimeout(clickTimerRef.current);
+    }
+    
+    clickTimerRef.current = setTimeout(() => {
+      setSelectedRowId(fileId);
+    }, 250);
+  };
+
+  const handleRowDoubleClick = (file: File) => {
+    // Cancel single click timer
+    if (clickTimerRef.current) {
+      clearTimeout(clickTimerRef.current);
+    }
+
+    // Open folder or file
+    if (file.mimeType === "application/vnd.google-apps.folder") {
+      handleOpenFolder(file.id, file.name);
+    } else if (file.webViewLink) {
+      window.open(file.webViewLink, "_blank", "noopener,noreferrer");
+    }
+  };
+
+  const handleRowContextMenu = (e: React.MouseEvent, file: File) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Select the row
+    setSelectedRowId(file.id);
+
+    // Show context menu
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      fileId: file.id,
+      fileName: file.name,
+      mimeType: file.mimeType,
+      webViewLink: file.webViewLink,
+      isFolder: file.mimeType === "application/vnd.google-apps.folder",
+    });
+  };
+
+  const closeContextMenu = () => {
+    setContextMenu(null);
   };
 
   const formatFileSize = (bytes: number): string => {
@@ -642,9 +821,10 @@ export default function DriveFilesPage() {
         {/* Files Table */}
         {!loading && !error && files.length > 0 && (
           <div className="bg-slate-800 rounded-xl p-4 shadow overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left border-b border-slate-700">
+            <div onClick={() => setSelectedRowId(null)}>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left border-b border-slate-700">
                   <th className="py-3 px-2 w-10"></th>
                   <th className="py-3 px-4">
                     <button
@@ -705,7 +885,24 @@ export default function DriveFilesPage() {
                 {sortedFiles.map((file) => (
                   <tr
                     key={file.id}
-                    className="border-b border-slate-800 hover:bg-slate-700/40 transition"
+                    className={`
+                      border-b border-slate-800 
+                      transition-colors
+                      cursor-pointer
+                      ${selectedRowId === file.id 
+                        ? 'bg-blue-500/10 hover:bg-blue-500/15 outline outline-1 outline-blue-400/40' 
+                        : 'hover:bg-white/5'
+                      }
+                    `}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRowClick(file.id);
+                    }}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      handleRowDoubleClick(file);
+                    }}
+                    onContextMenu={(e) => handleRowContextMenu(e, file)}
                   >
                     {/* Checkbox */}
                     <td className="px-2 py-3">
@@ -713,6 +910,8 @@ export default function DriveFilesPage() {
                         type="checkbox"
                         checked={selectedFiles.has(file.id)}
                         onChange={() => toggleFileSelection(file.id, file.mimeType)}
+                        onClick={(e) => e.stopPropagation()}
+                        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
                         disabled={file.mimeType === "application/vnd.google-apps.folder"}
                         title={file.mimeType === "application/vnd.google-apps.folder" ? "No se pueden copiar carpetas" : ""}
                         className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-emerald-500 focus:ring-2 focus:ring-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed"
@@ -746,45 +945,28 @@ export default function DriveFilesPage() {
                       {file.modifiedTime ? formatDate(file.modifiedTime) : "-"}
                     </td>
 
-                    {/* Acciones */}
+                    {/* Acciones - Kebab Menu */}
                     <td className="px-4 py-3">
-                      <div className="flex items-center justify-center gap-2">
-                        {/* Ver/Abrir */}
-                        {file.mimeType === "application/vnd.google-apps.folder" ? (
-                          <button
-                            type="button"
-                            onClick={() => handleOpenFolder(file.id, file.name)}
-                            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition flex items-center gap-1"
-                          >
-                            📂 Abrir
-                          </button>
-                        ) : (
-                          file.webViewLink && (
-                            <a
-                              href={file.webViewLink}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="px-3 py-1.5 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-xs font-semibold transition flex items-center gap-1"
-                            >
-                              👁️ Ver
-                            </a>
-                          )
-                        )}
-                        
-                        {/* Copiar */}
-                        <button
-                          disabled={copying || !copyOptions || copyOptions.target_accounts.length === 0}
-                          onClick={() => openCopyModal(file.id, file.name)}
-                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-                        >
-                          📋 Copiar
-                        </button>
+                      <div className="flex items-center justify-center">
+                        <RowActionsMenu
+                          fileId={file.id}
+                          fileName={file.name}
+                          mimeType={file.mimeType}
+                          webViewLink={file.webViewLink}
+                          isFolder={file.mimeType === "application/vnd.google-apps.folder"}
+                          onOpenFolder={handleOpenFolder}
+                          onCopy={openCopyModal}
+                          onRename={openRenameModal}
+                          onDownload={handleDownloadFile}
+                          copyDisabled={copying || !copyOptions || copyOptions.target_accounts.length === 0}
+                        />
                       </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         )}
 
@@ -862,6 +1044,7 @@ export default function DriveFilesPage() {
               {/* Action Buttons */}
               <div className="flex gap-3 justify-end">
                 <button
+                  type="button"
                   onClick={() => {
                     if (copying) {
                       cancelCopy();
@@ -874,6 +1057,7 @@ export default function DriveFilesPage() {
                   {copying ? "Cancelar Copia" : "Cerrar"}
                 </button>
                 <button
+                  type="button"
                   onClick={confirmCopy}
                   disabled={!selectedTarget || copying}
                   className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition"
@@ -883,6 +1067,46 @@ export default function DriveFilesPage() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Rename Modal */}
+        <RenameModal
+          isOpen={showRenameModal}
+          fileName={renameFileName}
+          onClose={closeRenameModal}
+          onConfirm={handleRenameFile}
+          isRenaming={isRenaming}
+        />
+
+        {/* Rename Status Toast */}
+        {renameStatus && !showRenameModal && (
+          <div className={`fixed bottom-6 right-6 p-4 rounded-lg shadow-xl z-50 ${
+            renameStatus.includes("✅")
+              ? "bg-emerald-500/90 text-white"
+              : "bg-red-500/90 text-white"
+          }`}>
+            {renameStatus}
+          </div>
+        )}
+
+        {/* Context Menu */}
+        {contextMenu?.visible && (
+          <ContextMenu
+            visible={contextMenu.visible}
+            x={contextMenu.x}
+            y={contextMenu.y}
+            fileId={contextMenu.fileId}
+            fileName={contextMenu.fileName}
+            mimeType={contextMenu.mimeType}
+            webViewLink={contextMenu.webViewLink}
+            isFolder={contextMenu.isFolder}
+            onClose={closeContextMenu}
+            onOpenFolder={(id, name) => handleOpenFolder(id, name)}
+            onCopy={(id, name) => openCopyModal(id, name)}
+            onRename={(id, name) => openRenameModal(id, name)}
+            onDownload={(id, name) => handleDownloadFile(id, name)}
+            copyDisabled={copying || !copyOptions || copyOptions.target_accounts.length === 0}
+          />
         )}
       </div>
     </main>

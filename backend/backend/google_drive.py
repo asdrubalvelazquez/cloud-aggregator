@@ -344,3 +344,73 @@ async def copy_file_between_accounts(
         new_file = upload_resp.json()
     
     return new_file
+
+
+async def rename_file(account_id: int, file_id: str, new_name: str) -> dict:
+    """
+    Rename a file in Google Drive.
+    
+    Args:
+        account_id: Account owning the file
+        file_id: File to rename
+        new_name: New name for the file
+    
+    Returns:
+        Updated file metadata
+    """
+    token = await get_valid_token(account_id)
+    
+    async with httpx.AsyncClient() as client:
+        resp = await client.patch(
+            f"{GOOGLE_DRIVE_API_BASE}/files/{file_id}",
+            json={"name": new_name},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def download_file_stream(account_id: int, file_id: str):
+    """
+    Download file with streaming support.
+    Returns tuple of (content_iterator, filename, mime_type).
+    For Google Workspace files, exports as appropriate format.
+    """
+    token = await get_valid_token(account_id)
+    
+    # Get file metadata
+    metadata = await get_file_metadata(account_id, file_id)
+    file_name = metadata.get("name", "download")
+    mime_type = metadata.get("mimeType", "application/octet-stream")
+    
+    # Determine if it's a Google Workspace file
+    is_google_doc = mime_type.startswith("application/vnd.google-apps.")
+    
+    if is_google_doc:
+        # Export mapping for Google Workspace files
+        export_formats = {
+            "application/vnd.google-apps.document": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx"),
+            "application/vnd.google-apps.spreadsheet": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx"),
+            "application/vnd.google-apps.presentation": ("application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx"),
+            "application/vnd.google-apps.drawing": ("application/pdf", ".pdf"),
+            "application/vnd.google-apps.form": ("application/zip", ".zip"),
+        }
+        
+        export_mime, extension = export_formats.get(mime_type, ("application/pdf", ".pdf"))
+        
+        # Add extension if not present
+        if not file_name.endswith(extension):
+            file_name = f"{file_name}{extension}"
+        
+        url = f"{GOOGLE_DRIVE_API_BASE}/files/{file_id}/export"
+        params = {"mimeType": export_mime, "supportsAllDrives": "true"}
+        mime_type = export_mime
+    else:
+        # Regular file download
+        url = f"{GOOGLE_DRIVE_API_BASE}/files/{file_id}"
+        params = {"alt": "media", "supportsAllDrives": "true"}
+    
+    return (url, params, token, file_name, mime_type)

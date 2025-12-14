@@ -187,16 +187,35 @@ def check_rate_limit(supabase: Client, user_id: str) -> None:
     - Maximum 1 copy per 10 seconds
     - Maximum 5 copies per minute
     
+    Counts ALL copy attempts (success/pending/failed) to prevent spam.
+    Can be disabled with RATE_LIMIT_DISABLED=true env var (dev only).
+    
     Raises:
         HTTPException(429) if rate limit exceeded
     """
-    from datetime import timedelta
+    import os
+    from datetime import timedelta, timezone
     
-    now = datetime.now()
+    # Allow disabling rate limit in development only
+    if os.getenv("RATE_LIMIT_DISABLED", "false").lower() == "true":
+        return
     
-    # Check last 10 seconds (max 1 copy)
+    # Use UTC timezone-aware datetime (Supabase stores timestamps in UTC)
+    now = datetime.now(timezone.utc)
+    
+    # Check last 10 seconds (max 1 copy attempt)
+    # Count ALL attempts (including failed) to prevent spam
     ten_seconds_ago = (now - timedelta(seconds=10)).isoformat()
-    recent_jobs = supabase.table("copy_jobs").select("id").eq("user_id", user_id).gte("created_at", ten_seconds_ago).execute()
+    recent_jobs = supabase.table("copy_jobs").select("id,created_at,status").eq("user_id", user_id).gte("created_at", ten_seconds_ago).execute()
+    
+    # DEBUG logging (only in dev)
+    if os.getenv("DEBUG_RATE_LIMIT", "false").lower() == "true":
+        print(f"[RATE_LIMIT DEBUG] UTC now: {now.isoformat()}")
+        print(f"[RATE_LIMIT DEBUG] 10s window start: {ten_seconds_ago}")
+        print(f"[RATE_LIMIT DEBUG] Found {len(recent_jobs.data) if recent_jobs.data else 0} jobs in last 10s for user {user_id}")
+        if recent_jobs.data:
+            for job in recent_jobs.data:
+                print(f"  - Job {job['id']}: status={job.get('status')}, created_at={job.get('created_at')}")
     
     if recent_jobs.data and len(recent_jobs.data) >= 1:
         raise HTTPException(
@@ -208,7 +227,8 @@ def check_rate_limit(supabase: Client, user_id: str) -> None:
             }
         )
     
-    # Check last 60 seconds (max 5 copies)
+    # Check last 60 seconds (max 5 copy attempts)
+    # Count ALL attempts (including failed) to prevent spam
     one_minute_ago = (now - timedelta(seconds=60)).isoformat()
     minute_jobs = supabase.table("copy_jobs").select("id").eq("user_id", user_id).gte("created_at", one_minute_ago).execute()
     
