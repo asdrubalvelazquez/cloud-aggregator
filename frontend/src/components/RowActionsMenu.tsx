@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, type MouseEvent } from "react";
+import { useState, useRef, useEffect, type MouseEvent as ReactMouseEvent } from "react";
 import { getRowActions } from "@/lib/driveRowActions";
 
 type RowActionsMenuProps = {
@@ -33,7 +33,7 @@ export default function RowActionsMenu({
 
   // Close menu when clicking outside
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
+    const handleClickOutside = (event: globalThis.MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setIsOpen(false);
       }
@@ -68,12 +68,12 @@ export default function RowActionsMenu({
     setIsOpen(false);
   };
 
-  const handleToggleMenu = (e: MouseEvent<HTMLButtonElement>) => {
+  const handleToggleMenu = (e: ReactMouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
     setIsOpen(!isOpen);
   };
 
-  const handleMenuClick = (e: MouseEvent<HTMLDivElement>) => {
+  const handleMenuClick = (e: ReactMouseEvent<HTMLDivElement>) => {
     e.stopPropagation();
   };
 
