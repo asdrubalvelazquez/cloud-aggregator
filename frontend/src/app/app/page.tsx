@@ -37,6 +37,9 @@ type QuotaInfo = {
   used: number;
   limit: number;
   remaining: number;
+  clouds_allowed: number;
+  clouds_connected: number;
+  clouds_remaining: number;
 } | null;
 
 function DashboardContent() {
@@ -98,6 +101,7 @@ function DashboardContent() {
     // Verificar si el usuario acaba de autenticarse (usando searchParams)
     const authStatus = searchParams?.get("auth");
     const authError = searchParams?.get("error");
+    const allowedParam = searchParams?.get("allowed");
 
     if (authStatus === "success") {
       setToast({
@@ -111,6 +115,15 @@ function DashboardContent() {
         fetchSummary();
         fetchQuota();
       }, 1000);
+    } else if (authError === "cloud_limit_reached") {
+      const allowed = allowedParam || "1";
+      setToast({
+        message: `Has alcanzado el límite de ${allowed} cuenta(s) en tu plan. Actualiza tu plan para conectar más.`,
+        type: "warning",
+      });
+      window.history.replaceState({}, "", window.location.pathname);
+      fetchSummary();
+      fetchQuota();
     } else if (authError) {
       setToast({
         message: `Error de autenticación: ${authError}`,
@@ -177,19 +190,40 @@ function DashboardContent() {
               <p className="text-sm text-slate-400 mt-1">{userEmail}</p>
             )}
             {quota && (
-              <p className={`text-xs mt-1 ${quota.remaining <= 3 ? "text-amber-400 font-semibold" : "text-slate-500"}`}>
-                Copias este mes: {quota.used} / {quota.limit}
-                {quota.remaining <= 3 && " ⚠️"}
-              </p>
+              <>
+                <p className="text-xs text-slate-500 mt-1">
+                  Plan: {quota.plan.toUpperCase()} • Nubes: {quota.clouds_connected} / {quota.clouds_allowed}
+                </p>
+                <p className={`text-xs mt-1 ${quota.remaining <= 3 ? "text-amber-400 font-semibold" : "text-slate-500"}`}>
+                  Copias este mes: {quota.used} / {quota.limit}
+                  {quota.remaining <= 3 && " ⚠️"}
+                </p>
+              </>
             )}
           </div>
           <div className="flex gap-3">
-            <button
-              onClick={handleConnectGoogle}
-              className="rounded-lg bg-emerald-500 hover:bg-emerald-600 transition px-4 py-2 text-sm font-semibold"
-            >
-              Conectar nueva cuenta de Google Drive
-            </button>
+            <div className="flex flex-col gap-1">
+              <button
+                onClick={handleConnectGoogle}
+                disabled={quota ? quota.clouds_connected >= quota.clouds_allowed : false}
+                title={quota && quota.clouds_connected >= quota.clouds_allowed ? "Has alcanzado el límite de nubes para tu plan." : undefined}
+                className={`rounded-lg transition px-4 py-2 text-sm font-semibold ${
+                  quota && quota.clouds_connected >= quota.clouds_allowed
+                    ? "bg-slate-600 cursor-not-allowed opacity-50"
+                    : "bg-emerald-500 hover:bg-emerald-600"
+                }`}
+              >
+                Conectar nueva cuenta de Google Drive
+              </button>
+              {quota && quota.clouds_connected >= quota.clouds_allowed && (
+                <a
+                  href="/pricing"
+                  className="text-xs text-emerald-400 hover:text-emerald-300 transition text-center"
+                >
+                  Ver planes →
+                </a>
+              )}
+            </div>
             <button
               onClick={handleLogout}
               className="rounded-lg bg-slate-700 hover:bg-slate-600 transition px-4 py-2 text-sm font-semibold"

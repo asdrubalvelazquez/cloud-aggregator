@@ -63,10 +63,27 @@ def health_check():
 
 
 @app.get("/auth/google/login")
-def google_login(user_id: Optional[str] = None):
+def google_login(user_id: Optional[str] = None, mode: Optional[str] = None):
     """Initiate Google OAuth flow with optional user_id in state"""
     if not GOOGLE_CLIENT_ID or not GOOGLE_REDIRECT_URI:
         return {"error": "Missing GOOGLE_CLIENT_ID or GOOGLE_REDIRECT_URI"}
+
+    # Pre-check cloud limit (unless reauth mode or no user_id)
+    if user_id and mode != "reauth":
+        # Get user plan
+        plan = quota.get_or_create_user_plan(supabase, user_id)
+        plan_name = plan.get("plan", "free")
+        max_clouds = quota.PLAN_CLOUD_LIMITS.get(plan_name, 1)
+        extra_clouds = plan.get("extra_clouds", 0)
+        allowed_clouds = max_clouds + extra_clouds
+        
+        # Count current connected accounts
+        count_result = supabase.table("cloud_accounts").select("id").eq("user_id", user_id).execute()
+        current_count = len(count_result.data) if count_result.data else 0
+        
+        # Check limit
+        if current_count >= allowed_clouds:
+            return RedirectResponse(f"{FRONTEND_URL}/app?error=cloud_limit_reached&allowed={allowed_clouds}")
 
     params = {
         "client_id": GOOGLE_CLIENT_ID,
@@ -145,6 +162,22 @@ async def google_callback(request: Request):
     expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
     expiry_iso = expiry.isoformat()
 
+    # Prevent orphan cloud_accounts without user_id
+    if not user_id:
+        return RedirectResponse(f"{FRONTEND_URL}/app?error=missing_user_id")
+    
+    # Check cloud account limit before connecting
+    try:
+        quota.check_cloud_limit(supabase, user_id, google_account_id)
+    except HTTPException as e:
+        # Extract error details
+        error_detail = e.detail
+        if isinstance(error_detail, dict):
+            error_code = error_detail.get("error", "unknown")
+            allowed = error_detail.get("allowed", 0)
+            return RedirectResponse(f"{FRONTEND_URL}/app?error={error_code}&allowed={allowed}")
+        return RedirectResponse(f"{FRONTEND_URL}/app?error=cloud_limit_reached")
+    
     # Preparar datos para guardar
     upsert_data = {
         "account_email": account_email,
@@ -152,11 +185,8 @@ async def google_callback(request: Request):
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_expiry": expiry_iso,
+        "user_id": user_id,
     }
-    
-    # Si hay user_id del state, agregarlo
-    if user_id:
-        upsert_data["user_id"] = user_id
 
     # Save to database
     resp = supabase.table("cloud_accounts").upsert(
@@ -458,7 +488,12 @@ async def get_my_plan(user_id: str = Depends(verify_supabase_jwt)):
             "plan": "free",
             "used": 5,
             "limit": 20,
-            "remaining": 15
+            "remaining": 15,
+            "clouds_allowed": 2,
+            "clouds_connected": 1,
+            "clouds_remaining": 1,
+            "copies_used_month": 5,
+            "copies_limit_month": 20
         }
     """
     try:

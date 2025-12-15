@@ -9,6 +9,14 @@ from supabase import Client
 import uuid
 
 
+# Plan cloud account limits
+PLAN_CLOUD_LIMITS = {
+    "free": 2,
+    "plus": 3,
+    "pro": 7
+}
+
+
 def get_or_create_user_plan(supabase: Client, user_id: str) -> Dict:
     """
     Get user's plan, create if doesn't exist.
@@ -166,16 +174,42 @@ def get_user_quota_info(supabase: Client, user_id: str) -> Dict:
             "plan": "free",
             "used": 5,
             "limit": 20,
-            "remaining": 15
+            "remaining": 15,
+            "clouds_allowed": 2,
+            "clouds_connected": 1,
+            "clouds_remaining": 1,
+            "copies_used_month": 5,
+            "copies_limit_month": 20
         }
     """
     plan = get_or_create_user_plan(supabase, user_id)
     
+    # Calculate cloud limits
+    plan_name = plan.get("plan", "free")
+    max_clouds = PLAN_CLOUD_LIMITS.get(plan_name, 1)
+    extra_clouds = plan.get("extra_clouds", 0)
+    clouds_allowed = max_clouds + extra_clouds
+    
+    # Count connected clouds
+    count_result = supabase.table("cloud_accounts").select("id").eq("user_id", user_id).execute()
+    clouds_connected = len(count_result.data) if count_result.data else 0
+    
+    copies_used = plan["copies_used_month"]
+    copies_limit = plan["copies_limit_month"]
+    
     return {
-        "plan": plan["plan"],
-        "used": plan["copies_used_month"],
-        "limit": plan["copies_limit_month"],
-        "remaining": plan["copies_limit_month"] - plan["copies_used_month"]
+        "plan": plan_name,
+        # Backward-compatible keys (copy quota)
+        "used": copies_used,
+        "limit": copies_limit,
+        "remaining": copies_limit - copies_used,
+        # New cloud limit fields
+        "clouds_allowed": clouds_allowed,
+        "clouds_connected": clouds_connected,
+        "clouds_remaining": max(0, clouds_allowed - clouds_connected),
+        # Explicit copy quota fields
+        "copies_used_month": copies_used,
+        "copies_limit_month": copies_limit
     }
 
 
@@ -239,5 +273,49 @@ def check_rate_limit(supabase: Client, user_id: str) -> None:
                 "error": "rate_limit_exceeded",
                 "message": "Has excedido el límite de 5 copias por minuto. Espera un momento.",
                 "retry_after": 60
+            }
+        )
+
+
+def check_cloud_limit(supabase: Client, user_id: str, google_account_id: str) -> None:
+    """
+    Check if user can connect a new cloud account based on plan limits.
+    
+    Args:
+        supabase: Supabase client with SERVICE_ROLE_KEY
+        user_id: User UUID from auth
+        google_account_id: Google account ID being connected
+    
+    Raises:
+        HTTPException(402) if cloud account limit exceeded
+    """
+    # Get user plan
+    plan = get_or_create_user_plan(supabase, user_id)
+    
+    # Calculate allowed clouds
+    plan_name = plan.get("plan", "free")
+    max_clouds = PLAN_CLOUD_LIMITS.get(plan_name, 1)
+    extra_clouds = plan.get("extra_clouds", 0)
+    allowed_clouds = max_clouds + extra_clouds
+    
+    # Check if this google_account_id is already connected for this user
+    existing = supabase.table("cloud_accounts").select("id").eq("user_id", user_id).eq("google_account_id", google_account_id).execute()
+    if existing.data and len(existing.data) > 0:
+        # Re-authenticating existing account - allow
+        return
+    
+    # Count current connected accounts
+    count_result = supabase.table("cloud_accounts").select("id").eq("user_id", user_id).execute()
+    current_count = len(count_result.data) if count_result.data else 0
+    
+    # Check limit
+    if current_count >= allowed_clouds:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "cloud_limit_reached",
+                "message": f"Has alcanzado el límite de {allowed_clouds} cuenta(s) para tu plan {plan_name}.",
+                "allowed": allowed_clouds,
+                "current": current_count
             }
         )
