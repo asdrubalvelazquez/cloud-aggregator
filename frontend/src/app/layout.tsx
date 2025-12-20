@@ -19,7 +19,10 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 5,
-  themeColor: "#4B9FFF",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#7B8FD4" },
+    { media: "(prefers-color-scheme: dark)", color: "#2a2a3e" },
+  ],
 };
 
 // Metadata configuration
@@ -71,12 +74,12 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: [
-      { url: "/favicon.ico", sizes: "any" },
-      { url: "/favicon-16x16.png", sizes: "16x16", type: "image/png" },
-      { url: "/favicon-32x32.png", sizes: "32x32", type: "image/png" },
+      { url: "/icon", sizes: "192x192", type: "image/png", media: "(prefers-color-scheme: light)" },
+      { url: "/icon-dark", sizes: "192x192", type: "image/png", media: "(prefers-color-scheme: dark)" },
+      { url: "/favicon.ico", sizes: "32x32" },
     ],
     apple: [
-      { url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" },
+      { url: "/apple-icon", sizes: "180x180", type: "image/png" },
     ],
   },
 };
