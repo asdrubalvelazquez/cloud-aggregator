@@ -268,8 +268,28 @@ export default function Home() {
 
         {/* Footer */}
         <footer className="py-12 px-6 border-t border-white/10">
-          <div className="max-w-6xl mx-auto text-center text-slate-400 text-sm">
-            <p>Cloud Aggregator © 2025 - Unifica tu almacenamiento en la nube</p>
+          <div className="max-w-6xl mx-auto text-center space-y-4">
+            {/* Legal Links */}
+            <div className="flex items-center justify-center gap-6 text-sm">
+              <Link 
+                href="/privacy" 
+                className="text-slate-400 hover:text-emerald-400 transition-colors duration-200"
+              >
+                Privacy Policy
+              </Link>
+              <span className="text-slate-600">•</span>
+              <Link 
+                href="/terms" 
+                className="text-slate-400 hover:text-emerald-400 transition-colors duration-200"
+              >
+                Terms of Service
+              </Link>
+            </div>
+            
+            {/* Copyright */}
+            <p className="text-slate-400 text-sm">
+              Cloud Aggregator © 2025 - Unifica tu almacenamiento en la nube
+            </p>
           </div>
         </footer>
       </div>
