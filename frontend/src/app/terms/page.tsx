@@ -241,7 +241,7 @@ export default function TermsOfService() {
             If you have any questions about these Terms of Service, please contact us at:
           </p>
           <p className="text-gray-700">
-            <strong>Email:</strong> legal@cloudaggregator.com
+            <strong>Email:</strong> support@cloudaggregatorapp.com
           </p>
         </section>
 

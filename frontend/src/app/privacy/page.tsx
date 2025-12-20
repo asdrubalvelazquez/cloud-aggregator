@@ -154,7 +154,7 @@ export default function PrivacyPolicy() {
             If you have any questions about this Privacy Policy or our data practices, please contact us at:
           </p>
           <p className="text-gray-700">
-            <strong>Email:</strong> privacy@cloudaggregatorapp.com
+            <strong>Email:</strong> support@cloudaggregatorapp.com
           </p>
         </section>
 
