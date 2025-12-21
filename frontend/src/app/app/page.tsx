@@ -227,8 +227,13 @@ function DashboardContent() {
             {quota && (
               <>
                 <p className="text-xs text-slate-500 mt-1">
-                  Plan: {quota.plan.toUpperCase()} • Nubes: {quota.clouds_connected} / {quota.clouds_allowed}
+                  Plan: {quota.plan.toUpperCase()} • Slots históricos: {quota.clouds_connected} / {quota.clouds_allowed}
                 </p>
+                {quota.clouds_connected >= quota.clouds_allowed && (
+                  <p className="text-xs text-slate-400 italic mt-0.5">
+                    Puedes reconectar tus cuentas anteriores en cualquier momento
+                  </p>
+                )}
                 <p className={`text-xs mt-1 ${quota.remaining <= 3 ? "text-amber-400 font-semibold" : "text-slate-500"}`}>
                   Copias este mes: {quota.used} / {quota.limit}
                   {quota.remaining <= 3 && " ⚠️"}
@@ -237,28 +242,12 @@ function DashboardContent() {
             )}
           </div>
           <div className="flex gap-3">
-            <div className="flex flex-col gap-1">
-              <button
-                onClick={handleConnectGoogle}
-                disabled={quota ? quota.clouds_connected >= quota.clouds_allowed : false}
-                title={quota && quota.clouds_connected >= quota.clouds_allowed ? "Has alcanzado el límite de nubes para tu plan." : undefined}
-                className={`rounded-lg transition px-4 py-2 text-sm font-semibold ${
-                  quota && quota.clouds_connected >= quota.clouds_allowed
-                    ? "bg-slate-600 cursor-not-allowed opacity-50"
-                    : "bg-emerald-500 hover:bg-emerald-600"
-                }`}
-              >
-                Conectar nueva cuenta de Google Drive
-              </button>
-              {quota && quota.clouds_connected >= quota.clouds_allowed && (
-                <a
-                  href="/pricing"
-                  className="text-xs text-emerald-400 hover:text-emerald-300 transition text-center"
-                >
-                  Ver planes →
-                </a>
-              )}
-            </div>
+            <button
+              onClick={handleConnectGoogle}
+              className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-600"
+            >
+              Conectar nueva cuenta de Google Drive
+            </button>
             <button
               onClick={handleLogout}
               className="rounded-lg bg-slate-700 hover:bg-slate-600 transition px-4 py-2 text-sm font-semibold"
