@@ -174,7 +174,7 @@ async def google_callback(request: Request):
         allowed = error_detail.get("allowed", 0) if isinstance(error_detail, dict) else 0
         return RedirectResponse(f"{FRONTEND_URL}/app?error=cloud_limit_reached&allowed={allowed}")
     
-    # Preparar datos para guardar
+    # Preparar datos para guardar (incluye reactivación si es reconexión)
     upsert_data = {
         "account_email": account_email,
         "google_account_id": google_account_id,
@@ -182,6 +182,8 @@ async def google_callback(request: Request):
         "refresh_token": refresh_token,
         "token_expiry": expiry_iso,
         "user_id": user_id,
+        "is_active": True,              # Reactivar cuenta si estaba soft-deleted
+        "disconnected_at": None,        # Limpiar timestamp de desconexión
     }
 
     # Save to database

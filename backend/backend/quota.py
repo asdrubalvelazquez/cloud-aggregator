@@ -326,10 +326,12 @@ def check_cloud_limit_with_slots(supabase: Client, user_id: str, provider: str, 
     """
     Check if user can connect a new cloud account using slot-based historical tracking.
     
+    PRIORITY: Reconnection takes precedence over slot limits (salvoconducto).
+    
     Rules:
-    - Slots are permanent (never expire for FREE plan)
-    - Once a slot is consumed, it cannot be reused for a different account
-    - Reconnecting the SAME account reuses its existing slot
+    1. If account exists in cloud_slots_log → ALLOW immediately (reuses slot)
+    2. Only if NEW account → validate clouds_slots_used < clouds_slots_total
+    3. Slots are permanent (never expire for FREE plan)
     
     Args:
         supabase: Supabase client with SERVICE_ROLE_KEY
@@ -338,24 +340,29 @@ def check_cloud_limit_with_slots(supabase: Client, user_id: str, provider: str, 
         provider_account_id: Unique account ID from provider
     
     Raises:
-        HTTPException(402) if slot limit exceeded
+        HTTPException(402) if slot limit exceeded for NEW accounts only
     """
-    # Get user plan
-    plan = get_or_create_user_plan(supabase, user_id)
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PRIORIDAD 1: SALVOCONDUCTO DE RECONEXIÓN (Sin validar límites)
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Check if this exact provider_account_id is already in cloud_slots_log
+    existing_slot = supabase.table("cloud_slots_log").select("id, is_active, slot_number").eq("user_id", user_id).eq("provider", provider).eq("provider_account_id", provider_account_id).execute()
     
-    # Get slots configuration from DB (not hardcoded)
+    if existing_slot.data and len(existing_slot.data) > 0:
+        # SALVOCONDUCTO: Cuenta histórica reconectándose - permitir SIEMPRE
+        # No importa si clouds_slots_used >= clouds_slots_total
+        return  # ALLOW (reuses existing slot)
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PRIORIDAD 2: VALIDACIÓN DE CUENTA NUEVA (Solo si no existe en historial)
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Get user plan and slots configuration from DB (not hardcoded)
+    plan = get_or_create_user_plan(supabase, user_id)
     clouds_slots_total = plan.get("clouds_slots_total", 2)  # Default: 2 for FREE
     clouds_slots_used = plan.get("clouds_slots_used", 0)
     plan_name = plan.get("plan", "free")
     
-    # Check if this exact provider_account_id is already in cloud_slots_log
-    existing_slot = supabase.table("cloud_slots_log").select("id, is_active").eq("user_id", user_id).eq("provider", provider).eq("provider_account_id", provider_account_id).execute()
-    
-    if existing_slot.data and len(existing_slot.data) > 0:
-        # Reconnecting existing account - allow (reuses slot)
-        return
-    
-    # New account - check if slots available
+    # Nueva cuenta - verificar disponibilidad de slots
     if clouds_slots_used >= clouds_slots_total:
         raise HTTPException(
             status_code=402,
