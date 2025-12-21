@@ -148,6 +148,41 @@ function DashboardContent() {
     window.location.href = `${API_BASE_URL}/auth/google/login?user_id=${userId}`;
   };
 
+  const handleDisconnectAccount = async (accountId: number, accountEmail: string) => {
+    if (!confirm(`¿Desconectar la cuenta ${accountEmail}? Esta acción no se puede deshacer.`)) {
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await authenticatedFetch("/auth/revoke-account", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account_id: accountId }),
+      });
+
+      if (res.ok) {
+        setToast({
+          message: `Cuenta ${accountEmail} desconectada exitosamente`,
+          type: "success",
+        });
+        // Recargar datos
+        fetchSummary();
+        fetchQuota();
+      } else {
+        const errorData = await res.json();
+        throw new Error(errorData.detail || "Error al desconectar cuenta");
+      }
+    } catch (err: any) {
+      setToast({
+        message: err.message || "Error al desconectar cuenta",
+        type: "error",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push("/");
@@ -406,12 +441,21 @@ function DashboardContent() {
                             </div>
                           </td>
                           <td className="py-4 px-4 text-center">
-                            <a
-                              href={`/drive/${acc.id}`}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition"
-                            >
-                              📁 Ver archivos
-                            </a>
+                            <div className="flex items-center justify-center gap-2">
+                              <a
+                                href={`/drive/${acc.id}`}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition"
+                              >
+                                📁 Ver archivos
+                              </a>
+                              <button
+                                onClick={() => handleDisconnectAccount(acc.id, acc.email)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-red-400 hover:text-red-300 text-xs font-medium transition"
+                                title="Desconectar cuenta"
+                              >
+                                Desconectar
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}

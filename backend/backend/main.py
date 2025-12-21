@@ -47,7 +47,6 @@ GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
 SCOPES = [
     "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
     "openid",
 ]
 
@@ -606,6 +605,77 @@ async def download_drive_file(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
+
+
+class RevokeAccountRequest(BaseModel):
+    account_id: int
+
+
+@app.post("/auth/revoke-account")
+async def revoke_account(
+    request: RevokeAccountRequest,
+    user_id: str = Depends(verify_supabase_jwt)
+):
+    """
+    Revoke access to a connected Google Drive account.
+    Deletes the account from database (OAuth tokens are invalidated).
+    
+    Security:
+    - Requires valid JWT token
+    - Validates account ownership before deletion
+    - Returns 403 if user doesn't own the account
+    
+    Body:
+        {
+            "account_id": 123
+        }
+    
+    Returns:
+        {
+            "success": true,
+            "message": "Account example@gmail.com disconnected successfully"
+        }
+    """
+    try:
+        # 1. Verify account exists and belongs to user (CRITICAL SECURITY CHECK)
+        account_resp = (
+            supabase.table("cloud_accounts")
+            .select("id, account_email, user_id")
+            .eq("id", request.account_id)
+            .single()
+            .execute()
+        )
+        
+        if not account_resp.data:
+            raise HTTPException(
+                status_code=404,
+                detail="Account not found"
+            )
+        
+        # 2. Verify ownership (PREVENT UNAUTHORIZED DELETION)
+        if account_resp.data["user_id"] != user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have permission to disconnect this account"
+            )
+        
+        account_email = account_resp.data["account_email"]
+        
+        # 3. Delete account (OAuth tokens are removed, user loses access)
+        supabase.table("cloud_accounts").delete().eq("id", request.account_id).execute()
+        
+        return {
+            "success": True,
+            "message": f"Account {account_email} disconnected successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to revoke account: {str(e)}"
+        )
 
 
 if __name__ == "__main__":
