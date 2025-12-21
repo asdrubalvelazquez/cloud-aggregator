@@ -165,17 +165,14 @@ async def google_callback(request: Request):
     if not user_id:
         return RedirectResponse(f"{FRONTEND_URL}/app?error=missing_user_id")
     
-    # Check cloud account limit before connecting
+    # Check cloud account limit with slot-based validation
     try:
-        quota.check_cloud_limit(supabase, user_id, google_account_id)
+        quota.check_cloud_limit_with_slots(supabase, user_id, "google_drive", google_account_id)
     except HTTPException as e:
         # Extract error details
         error_detail = e.detail
-        if isinstance(error_detail, dict):
-            error_code = error_detail.get("error", "unknown")
-            allowed = error_detail.get("allowed", 0)
-            return RedirectResponse(f"{FRONTEND_URL}/app?error={error_code}&allowed={allowed}")
-        return RedirectResponse(f"{FRONTEND_URL}/app?error=cloud_limit_reached")
+        allowed = error_detail.get("allowed", 0) if isinstance(error_detail, dict) else 0
+        return RedirectResponse(f"{FRONTEND_URL}/app?error=cloud_limit_reached&allowed={allowed}")
     
     # Preparar datos para guardar
     upsert_data = {
@@ -192,6 +189,20 @@ async def google_callback(request: Request):
         upsert_data,
         on_conflict="google_account_id",
     ).execute()
+
+    # Vincular slot histórico tras guardar la cuenta
+    try:
+        quota.connect_cloud_account_with_slot(
+            supabase,
+            user_id,
+            "google_drive",
+            google_account_id,
+            account_email
+        )
+    except Exception as slot_err:
+        import logging
+        logging.error(f"[SLOT ERROR] Failed to link slot for user {user_id}, account {account_email}: {slot_err}")
+        # Continuar sin fallar la conexión (slot se puede vincular manualmente después)
 
     # Redirect to frontend dashboard
     return RedirectResponse(f"{FRONTEND_URL}/app?auth=success")
@@ -617,13 +628,16 @@ async def revoke_account(
     user_id: str = Depends(verify_supabase_jwt)
 ):
     """
-    Revoke access to a connected Google Drive account.
-    Deletes the account from database (OAuth tokens are invalidated).
+    Revoke access to a connected Google Drive account using soft-delete.
+    - Sets is_active=false in cloud_accounts and cloud_slots_log
+    - Physically deletes OAuth tokens (access_token, refresh_token) for security compliance
+    - Preserves historical slot data for quota enforcement
     
     Security:
     - Requires valid JWT token
-    - Validates account ownership before deletion
+    - Validates account ownership before revocation
     - Returns 403 if user doesn't own the account
+    - Immediately removes OAuth tokens from database
     
     Body:
         {
@@ -640,7 +654,7 @@ async def revoke_account(
         # 1. Verify account exists and belongs to user (CRITICAL SECURITY CHECK)
         account_resp = (
             supabase.table("cloud_accounts")
-            .select("id, account_email, user_id")
+            .select("id, account_email, user_id, google_account_id, slot_log_id")
             .eq("id", request.account_id)
             .single()
             .execute()
@@ -652,7 +666,7 @@ async def revoke_account(
                 detail="Account not found"
             )
         
-        # 2. Verify ownership (PREVENT UNAUTHORIZED DELETION)
+        # 2. Verify ownership (PREVENT UNAUTHORIZED REVOCATION)
         if account_resp.data["user_id"] != user_id:
             raise HTTPException(
                 status_code=403,
@@ -660,9 +674,30 @@ async def revoke_account(
             )
         
         account_email = account_resp.data["account_email"]
+        google_account_id = account_resp.data["google_account_id"]
+        slot_log_id = account_resp.data.get("slot_log_id")
         
-        # 3. Delete account (OAuth tokens are removed, user loses access)
-        supabase.table("cloud_accounts").delete().eq("id", request.account_id).execute()
+        # 3. SOFT-DELETE: Update cloud_accounts (borrado físico de tokens OAuth)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        supabase.table("cloud_accounts").update({
+            "is_active": False,
+            "disconnected_at": now_iso,
+            "access_token": None,      # SEGURIDAD CRÍTICA: Borrado físico de tokens
+            "refresh_token": None      # SEGURIDAD CRÍTICA: Borrado físico de tokens
+        }).eq("id", request.account_id).execute()
+        
+        # 4. SOFT-DELETE: Update cloud_slots_log (marcar slot como inactivo)
+        if slot_log_id:
+            supabase.table("cloud_slots_log").update({
+                "is_active": False,
+                "disconnected_at": now_iso
+            }).eq("id", slot_log_id).execute()
+        else:
+            # Si no hay slot_log_id vinculado, buscar por provider_account_id
+            supabase.table("cloud_slots_log").update({
+                "is_active": False,
+                "disconnected_at": now_iso
+            }).eq("user_id", user_id).eq("provider", "google_drive").eq("provider_account_id", google_account_id).execute()
         
         return {
             "success": True,
@@ -672,6 +707,8 @@ async def revoke_account(
     except HTTPException:
         raise
     except Exception as e:
+        import logging
+        logging.error(f"[REVOKE ERROR] Failed to revoke account {request.account_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to revoke account: {str(e)}"

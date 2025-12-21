@@ -1,8 +1,8 @@
 """
 Quota management system for copy operations
-Phase 1: Safe implementation with atomic operations
+Phase 2: Slot-based historical tracking with FREE/PAID differentiation
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional
 from fastapi import HTTPException
 from supabase import Client
@@ -279,7 +279,8 @@ def check_rate_limit(supabase: Client, user_id: str) -> None:
 
 def check_cloud_limit(supabase: Client, user_id: str, google_account_id: str) -> None:
     """
-    Check if user can connect a new cloud account based on plan limits.
+    LEGACY: Check if user can connect a new cloud account based on plan limits.
+    Use check_cloud_limit_with_slots for slot-based enforcement.
     
     Args:
         supabase: Supabase client with SERVICE_ROLE_KEY
@@ -319,3 +320,215 @@ def check_cloud_limit(supabase: Client, user_id: str, google_account_id: str) ->
                 "current": current_count
             }
         )
+
+
+def check_cloud_limit_with_slots(supabase: Client, user_id: str, provider: str, provider_account_id: str) -> None:
+    """
+    Check if user can connect a new cloud account using slot-based historical tracking.
+    
+    Rules:
+    - Slots are permanent (never expire for FREE plan)
+    - Once a slot is consumed, it cannot be reused for a different account
+    - Reconnecting the SAME account reuses its existing slot
+    
+    Args:
+        supabase: Supabase client with SERVICE_ROLE_KEY
+        user_id: User UUID from auth
+        provider: Cloud provider type (google_drive, onedrive, dropbox)
+        provider_account_id: Unique account ID from provider
+    
+    Raises:
+        HTTPException(402) if slot limit exceeded
+    """
+    # Get user plan
+    plan = get_or_create_user_plan(supabase, user_id)
+    
+    # Get slots configuration from DB (not hardcoded)
+    clouds_slots_total = plan.get("clouds_slots_total", 2)  # Default: 2 for FREE
+    clouds_slots_used = plan.get("clouds_slots_used", 0)
+    plan_name = plan.get("plan", "free")
+    
+    # Check if this exact provider_account_id is already in cloud_slots_log
+    existing_slot = supabase.table("cloud_slots_log").select("id, is_active").eq("user_id", user_id).eq("provider", provider).eq("provider_account_id", provider_account_id).execute()
+    
+    if existing_slot.data and len(existing_slot.data) > 0:
+        # Reconnecting existing account - allow (reuses slot)
+        return
+    
+    # New account - check if slots available
+    if clouds_slots_used >= clouds_slots_total:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "cloud_limit_reached",
+                "message": f"Has alcanzado el límite de {clouds_slots_total} cuenta(s) únicas para tu plan {plan_name}. Las cuentas desconectadas no liberan slots.",
+                "allowed": clouds_slots_total,
+                "used": clouds_slots_used
+            }
+        )
+
+
+def connect_cloud_account_with_slot(
+    supabase: Client,
+    user_id: str,
+    provider: str,
+    provider_account_id: str,
+    provider_email: str
+) -> Dict:
+    """
+    Register a new cloud account slot or reactivate an existing one.
+    
+    If the account was previously connected:
+    - Reactivates the existing slot (is_active=true, disconnected_at=NULL)
+    - Does NOT increment clouds_slots_used
+    
+    If the account is new:
+    - Creates a new slot in cloud_slots_log
+    - Increments clouds_slots_used in user_plans
+    
+    Args:
+        supabase: Supabase client
+        user_id: User UUID
+        provider: Cloud provider (google_drive, onedrive, dropbox)
+        provider_account_id: Unique account ID from provider
+        provider_email: Email of the provider account
+    
+    Returns:
+        Dict with slot info (id, slot_number, is_new)
+    """
+    # Check if slot already exists (reconnection scenario)
+    existing = supabase.table("cloud_slots_log").select("*").eq("user_id", user_id).eq("provider", provider).eq("provider_account_id", provider_account_id).execute()
+    
+    now_iso = datetime.now(timezone.utc).isoformat()
+    
+    if existing.data and len(existing.data) > 0:
+        # RECONNECTION: Reactivate existing slot
+        slot = existing.data[0]
+        slot_id = slot["id"]
+        
+        updated = supabase.table("cloud_slots_log").update({
+            "is_active": True,
+            "disconnected_at": None,
+            "updated_at": now_iso
+        }).eq("id", slot_id).execute()
+        
+        return {
+            "id": slot_id,
+            "slot_number": slot["slot_number"],
+            "is_new": False,
+            "reconnected": True
+        }
+    else:
+        # NEW ACCOUNT: Create new slot and increment counter
+        plan = get_or_create_user_plan(supabase, user_id)
+        plan_name = plan.get("plan", "free")
+        
+        # Get next slot number for this user
+        max_slot = supabase.table("cloud_slots_log").select("slot_number").eq("user_id", user_id).order("slot_number", desc=True).limit(1).execute()
+        next_slot_number = 1
+        if max_slot.data and len(max_slot.data) > 0:
+            next_slot_number = max_slot.data[0]["slot_number"] + 1
+        
+        # Create new slot
+        new_slot = {
+            "user_id": user_id,
+            "provider": provider,
+            "provider_account_id": provider_account_id,
+            "provider_email": provider_email,
+            "slot_number": next_slot_number,
+            "plan_at_connection": plan_name,
+            "connected_at": now_iso,
+            "is_active": True,
+            "slot_expires_at": None  # NULL for FREE (permanent)
+        }
+        
+        created = supabase.table("cloud_slots_log").insert(new_slot).execute()
+        slot_id = created.data[0]["id"]
+        
+        # Increment clouds_slots_used in user_plans
+        supabase.table("user_plans").update({
+            "clouds_slots_used": plan.get("clouds_slots_used", 0) + 1,
+            "updated_at": now_iso
+        }).eq("user_id", user_id).execute()
+        
+        return {
+            "id": slot_id,
+            "slot_number": next_slot_number,
+            "is_new": True,
+            "reconnected": False
+        }
+
+
+def check_quota_available_hybrid(supabase: Client, user_id: str) -> Dict:
+    """
+    Check quota availability with FREE/PAID differentiation.
+    
+    FREE users:
+    - Check total_lifetime_copies against 20 (no reset)
+    - Raises 402 if >= 20 lifetime copies
+    
+    PAID users:
+    - Check copies_used_month against copies_limit_month (monthly reset)
+    - Raises 402 if monthly limit exceeded
+    
+    Raises:
+        HTTPException(402) if quota exceeded
+    
+    Returns:
+        Dict with used, limit, remaining, plan_type
+    """
+    plan = get_or_create_user_plan(supabase, user_id)
+    
+    plan_type = plan.get("plan_type", "FREE")
+    plan_name = plan.get("plan", "free")
+    
+    if plan_type == "FREE":
+        # FREE: Check lifetime copies (no reset)
+        used = plan.get("total_lifetime_copies", 0)
+        limit = 20  # Hardcoded limit for FREE
+        remaining = limit - used
+        
+        if used >= limit:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "quota_exceeded",
+                    "message": "Has alcanzado el límite de 20 copias de por vida para el plan FREE. Actualiza a un plan PAID para copias ilimitadas.",
+                    "used": used,
+                    "limit": limit,
+                    "plan_type": "FREE"
+                }
+            )
+        
+        return {
+            "used": used,
+            "limit": limit,
+            "remaining": remaining,
+            "plan_type": "FREE",
+            "plan": plan_name
+        }
+    else:
+        # PAID: Check monthly copies (with reset)
+        used = plan.get("copies_used_month", 0)
+        limit = plan.get("copies_limit_month", 999999)  # Unlimited for PAID
+        remaining = limit - used
+        
+        if used >= limit:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "quota_exceeded",
+                    "message": f"Has alcanzado el límite de {limit} copias este mes.",
+                    "used": used,
+                    "limit": limit,
+                    "plan_type": "PAID"
+                }
+            )
+        
+        return {
+            "used": used,
+            "limit": limit,
+            "remaining": remaining,
+            "plan_type": "PAID",
+            "plan": plan_name
+        }
