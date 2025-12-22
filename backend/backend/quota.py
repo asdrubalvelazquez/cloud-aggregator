@@ -348,12 +348,17 @@ def check_cloud_limit_with_slots(supabase: Client, user_id: str, provider: str, 
     normalized_id = str(provider_account_id).strip()
     
     logging.info(f"[SLOT CHECK] Iniciando validación - user_id={user_id}, provider={provider}, account_id_recibido={normalized_id}")
+    logging.info(f"[SLOT CHECK DEBUG] normalized_id='{normalized_id}' (type={type(normalized_id).__name__}, len={len(normalized_id)})")
     
     # ═══════════════════════════════════════════════════════════════════════════
     # PRIORIDAD 1: SALVOCONDUCTO DE RECONEXIÓN (Sin validar límites)
     # ═══════════════════════════════════════════════════════════════════════════
     # Check if this exact provider_account_id is already in cloud_slots_log
     existing_slot = supabase.table("cloud_slots_log").select("id, is_active, slot_number, provider_account_id").eq("user_id", user_id).eq("provider", provider).eq("provider_account_id", normalized_id).execute()
+    
+    logging.info(f"[SLOT CHECK DEBUG] Query result: found={len(existing_slot.data) if existing_slot.data else 0} slots")
+    if existing_slot.data and len(existing_slot.data) > 0:
+        logging.info(f"[SLOT CHECK DEBUG] Slot data: {existing_slot.data[0]}")
     
     if existing_slot.data and len(existing_slot.data) > 0:
         slot_info = existing_slot.data[0]
