@@ -342,16 +342,25 @@ def check_cloud_limit_with_slots(supabase: Client, user_id: str, provider: str, 
     Raises:
         HTTPException(402) if slot limit exceeded for NEW accounts only
     """
+    import logging
+    
+    # Normalizar ID para comparación consistente (evitar int vs string)
+    normalized_id = str(provider_account_id).strip()
+    
+    logging.info(f"[SLOT CHECK] Iniciando validación - user_id={user_id}, provider={provider}, account_id_recibido={normalized_id}")
+    
     # ═══════════════════════════════════════════════════════════════════════════
     # PRIORIDAD 1: SALVOCONDUCTO DE RECONEXIÓN (Sin validar límites)
     # ═══════════════════════════════════════════════════════════════════════════
     # Check if this exact provider_account_id is already in cloud_slots_log
-    existing_slot = supabase.table("cloud_slots_log").select("id, is_active, slot_number").eq("user_id", user_id).eq("provider", provider).eq("provider_account_id", provider_account_id).execute()
+    existing_slot = supabase.table("cloud_slots_log").select("id, is_active, slot_number, provider_account_id").eq("user_id", user_id).eq("provider", provider).eq("provider_account_id", normalized_id).execute()
     
     if existing_slot.data and len(existing_slot.data) > 0:
-        # SALVOCONDUCTO: Cuenta histórica reconectándose - permitir SIEMPRE
-        # No importa si clouds_slots_used >= clouds_slots_total
+        slot_info = existing_slot.data[0]
+        logging.info(f"[SALVOCONDUCTO ✓] Slot histórico encontrado - slot_id={slot_info['id']}, slot_number={slot_info['slot_number']}, is_active={slot_info['is_active']}")
         return  # ALLOW (reuses existing slot)
+    
+    logging.info(f"[NEW ACCOUNT] No se encontró slot histórico para account_id={normalized_id}. Validando límites...")
     
     # ═══════════════════════════════════════════════════════════════════════════
     # PRIORIDAD 2: VALIDACIÓN DE CUENTA NUEVA (Solo si no existe en historial)
@@ -362,8 +371,11 @@ def check_cloud_limit_with_slots(supabase: Client, user_id: str, provider: str, 
     clouds_slots_used = plan.get("clouds_slots_used", 0)
     plan_name = plan.get("plan", "free")
     
+    logging.info(f"[SLOT VALIDATION] Plan={plan_name}, slots_used={clouds_slots_used}, slots_total={clouds_slots_total}")
+    
     # Nueva cuenta - verificar disponibilidad de slots
     if clouds_slots_used >= clouds_slots_total:
+        logging.warning(f"[SLOT LIMIT ✗] Usuario {user_id} ha excedido el límite de slots: {clouds_slots_used}/{clouds_slots_total}")
         raise HTTPException(
             status_code=402,
             detail={
@@ -373,6 +385,8 @@ def check_cloud_limit_with_slots(supabase: Client, user_id: str, provider: str, 
                 "used": clouds_slots_used
             }
         )
+    
+    logging.info(f"[SLOT VALIDATION ✓] Usuario puede conectar nueva cuenta. Slots disponibles: {clouds_slots_total - clouds_slots_used}")
 
 
 def connect_cloud_account_with_slot(
