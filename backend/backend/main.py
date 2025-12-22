@@ -156,6 +156,12 @@ async def google_callback(request: Request):
 
     account_email = userinfo.get("email")
     google_account_id = userinfo.get("id")
+    
+    # Normalizar ID de Google para comparación consistente (evitar int vs string)
+    if google_account_id:
+        google_account_id = str(google_account_id).strip()
+        import logging
+        logging.info(f"[OAUTH CALLBACK] ID de Google normalizado: {google_account_id}, email: {account_email}")
 
     # Calculate expiry
     expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)

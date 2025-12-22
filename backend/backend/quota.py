@@ -403,8 +403,15 @@ def connect_cloud_account_with_slot(
     Returns:
         Dict with slot info (id, slot_number, is_new)
     """
+    import logging
+    
+    # Normalizar ID para comparación consistente
+    normalized_id = str(provider_account_id).strip()
+    
+    logging.info(f"[SLOT LINK] Vinculando slot - user_id={user_id}, provider={provider}, account_id={normalized_id}, email={provider_email}")
+    
     # Check if slot already exists (reconnection scenario)
-    existing = supabase.table("cloud_slots_log").select("*").eq("user_id", user_id).eq("provider", provider).eq("provider_account_id", provider_account_id).execute()
+    existing = supabase.table("cloud_slots_log").select("*").eq("user_id", user_id).eq("provider", provider).eq("provider_account_id", normalized_id).execute()
     
     now_iso = datetime.now(timezone.utc).isoformat()
     
@@ -412,6 +419,8 @@ def connect_cloud_account_with_slot(
         # RECONNECTION: Reactivate existing slot
         slot = existing.data[0]
         slot_id = slot["id"]
+        
+        logging.info(f"[RECONEXIÓN] Reactivando slot existente - slot_id={slot_id}, slot_number={slot['slot_number']}")
         
         updated = supabase.table("cloud_slots_log").update({
             "is_active": True,
@@ -427,6 +436,8 @@ def connect_cloud_account_with_slot(
         }
     else:
         # NEW ACCOUNT: Create new slot and increment counter
+        logging.info(f"[NUEVA CUENTA] Creando nuevo slot para account_id={normalized_id}")
+        
         plan = get_or_create_user_plan(supabase, user_id)
         plan_name = plan.get("plan", "free")
         
@@ -440,7 +451,7 @@ def connect_cloud_account_with_slot(
         new_slot = {
             "user_id": user_id,
             "provider": provider,
-            "provider_account_id": provider_account_id,
+            "provider_account_id": normalized_id,
             "provider_email": provider_email,
             "slot_number": next_slot_number,
             "plan_at_connection": plan_name,
@@ -452,11 +463,16 @@ def connect_cloud_account_with_slot(
         created = supabase.table("cloud_slots_log").insert(new_slot).execute()
         slot_id = created.data[0]["id"]
         
+        logging.info(f"[SLOT CREATED] Nuevo slot creado - slot_id={slot_id}, slot_number={next_slot_number}")
+        
         # Increment clouds_slots_used in user_plans
+        new_slots_used = plan.get("clouds_slots_used", 0) + 1
         supabase.table("user_plans").update({
-            "clouds_slots_used": plan.get("clouds_slots_used", 0) + 1,
+            "clouds_slots_used": new_slots_used,
             "updated_at": now_iso
         }).eq("user_id", user_id).execute()
+        
+        logging.info(f"[SLOT COUNTER] Incrementado clouds_slots_used a {new_slots_used} para user_id={user_id}")
         
         return {
             "id": slot_id,
