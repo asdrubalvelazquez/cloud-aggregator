@@ -48,6 +48,25 @@ type QuotaInfo = {
   active_clouds_connected: number;    // Currently active accounts
 } | null;
 
+type BillingQuota = {
+  plan: string;
+  plan_type: string;
+  copies: {
+    used: number;
+    limit: number | null;
+    is_lifetime: boolean;
+  };
+  transfer: {
+    used_bytes: number;
+    limit_bytes: number | null;
+    used_gb: number;
+    limit_gb: number | null;
+    is_lifetime: boolean;
+  };
+  max_file_bytes: number;
+  max_file_gb: number;
+} | null;
+
 function DashboardContent() {
   const [data, setData] = useState<StorageSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,6 +78,7 @@ function DashboardContent() {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const [quota, setQuota] = useState<QuotaInfo>(null);
+  const [billingQuota, setBillingQuota] = useState<BillingQuota>(null);
   const [showReconnectModal, setShowReconnectModal] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -94,6 +114,18 @@ function DashboardContent() {
     }
   };
 
+  const fetchBillingQuota = async () => {
+    try {
+      const res = await authenticatedFetch("/billing/quota");
+      if (res.ok) {
+        const billingData = await res.json();
+        setBillingQuota(billingData);
+      }
+    } catch (e) {
+      console.error("Failed to fetch billing quota:", e);
+    }
+  };
+
   useEffect(() => {
     // Verificar sesión de usuario
     const checkSession = async () => {
@@ -109,7 +141,8 @@ function DashboardContent() {
     const authStatus = searchParams?.get("auth");
     const authError = searchParams?.get("error");
     const allowedParam = searchParams?.get("allowed");
-
+  fetchBillingQuota();
+      
     if (authStatus === "success") {
       setToast({
         message: "Cuenta de Google conectada exitosamente",
@@ -129,7 +162,7 @@ function DashboardContent() {
       });
       window.history.replaceState({}, "", window.location.pathname);
       fetchSummary();
-      fetchQuota();
+      fetchBillingQuota();
     } else if (authError) {
       setToast({
         message: `Error de autenticación: ${authError}`,
@@ -138,9 +171,11 @@ function DashboardContent() {
       window.history.replaceState({}, "", window.location.pathname);
       fetchSummary();
       fetchQuota();
+      fetchBillingQuota();
     } else {
       fetchSummary();
       fetchQuota();
+      fetchBillingQuota();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
@@ -185,6 +220,7 @@ function DashboardContent() {
         // Recargar datos
         fetchSummary();
         fetchQuota();
+        fetchBillingQuota();
       } else {
         const errorData = await res.json();
         throw new Error(errorData.detail || "Error al desconectar cuenta");
@@ -314,6 +350,111 @@ function DashboardContent() {
 
         {data && (
           <>
+            {/* Plan & Límites de Billing */}
+            {billingQuota && (
+              <section className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-xl p-6 shadow-lg border border-slate-700">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    <h2 className="text-xl font-bold text-white">Plan & Límites</h2>
+                    <span
+                      className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide ${
+                        billingQuota.plan === "free"
+                          ? "bg-slate-600 text-slate-200"
+                          : billingQuota.plan === "plus"
+                          ? "bg-blue-600 text-white"
+                          : "bg-purple-600 text-white"
+                      }`}
+                    >
+                      {billingQuota.plan}
+                    </span>
+                  </div>
+                  {billingQuota.plan === "free" && (
+                    <a
+                      href="/pricing"
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold transition"
+                    >
+                      ⬆️ Actualizar plan
+                    </a>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* Copias */}
+                  <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-sm font-semibold text-slate-300">
+                        📋 Copias {billingQuota.copies.is_lifetime ? "(Lifetime)" : "(Mes)"}
+                      </h3>
+                      {billingQuota.copies.limit !== null && (
+                        <span className="text-xs text-slate-400">
+                          {billingQuota.copies.used} / {billingQuota.copies.limit}
+                        </span>
+                      )}
+                    </div>
+                    {billingQuota.copies.limit !== null ? (
+                      <>
+                        <ProgressBar
+                          current={billingQuota.copies.used}
+                          total={billingQuota.copies.limit}
+                          height="sm"
+                        />
+                        <p className="text-xs text-slate-400 mt-2">
+                          {billingQuota.copies.limit - billingQuota.copies.used} restantes
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-sm text-emerald-400 font-semibold">Ilimitadas ✨</p>
+                    )}
+                  </div>
+
+                  {/* Transferencia */}
+                  <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-sm font-semibold text-slate-300">
+                        📡 Transferencia {billingQuota.transfer.is_lifetime ? "(Lifetime)" : "(Mes)"}
+                      </h3>
+                      {billingQuota.transfer.limit_gb !== null && (
+                        <span className="text-xs text-slate-400">
+                          {billingQuota.transfer.used_gb.toFixed(2)} / {billingQuota.transfer.limit_gb} GB
+                        </span>
+                      )}
+                    </div>
+                    {billingQuota.transfer.limit_bytes !== null ? (
+                      <>
+                        <ProgressBar
+                          current={billingQuota.transfer.used_bytes}
+                          total={billingQuota.transfer.limit_bytes}
+                          height="sm"
+                        />
+                        <p className="text-xs text-slate-400 mt-2">
+                          {(
+                            (billingQuota.transfer.limit_bytes - billingQuota.transfer.used_bytes) /
+                            (1024 ** 3)
+                          ).toFixed(2)}{" "}
+                          GB restantes
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-sm text-emerald-400 font-semibold">Ilimitada ✨</p>
+                    )}
+                  </div>
+
+                  {/* Máximo por archivo */}
+                  <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
+                    <h3 className="text-sm font-semibold text-slate-300 mb-2">📄 Máx por archivo</h3>
+                    <p className="text-2xl font-bold text-white">
+                      {billingQuota.max_file_gb.toFixed(1)} GB
+                    </p>
+                    <p className="text-xs text-slate-400 mt-2">
+                      {billingQuota.plan === "free" && "Actualiza a PLUS para 10 GB"}
+                      {billingQuota.plan === "plus" && "Actualiza a PRO para 50 GB"}
+                      {billingQuota.plan === "pro" && "Límite máximo 🎉"}
+                    </p>
+                  </div>
+                </div>
+              </section>
+            )}
+
             {/* Tarjetas de resumen con barra de progreso global */}
             <section className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

@@ -68,6 +68,47 @@ def health_check():
     return {"status": "ok"}
 
 
+@app.get("/billing/quota")
+def get_billing_quota(user_id: str = Depends(verify_supabase_jwt)):
+    """
+    Get current user's plan and quota limits.
+    
+    Returns frontend-friendly quota information including:
+    - plan: free/plus/pro
+    - plan_type: FREE/PAID
+    - copies_used/limit (lifetime for FREE, monthly for PAID)
+    - transfer_used_bytes/limit_bytes
+    - max_file_bytes
+    
+    Protected endpoint: requires valid JWT.
+    """
+    try:
+        quota_data = quota.get_user_quota_info(supabase, user_id)
+        
+        # Map to frontend-friendly response
+        return {
+            "plan": quota_data["plan"],
+            "plan_type": quota_data["plan_type"],
+            "copies": {
+                "used": quota_data["copies"]["used_lifetime"] if quota_data["plan"] == "free" else quota_data["copies"]["used_month"],
+                "limit": quota_data["copies"]["limit_lifetime"] if quota_data["plan"] == "free" else quota_data["copies"]["limit_month"],
+                "is_lifetime": quota_data["plan"] == "free"
+            },
+            "transfer": {
+                "used_bytes": quota_data["transfer"]["used_bytes"],
+                "limit_bytes": quota_data["transfer"]["limit_bytes"],
+                "used_gb": quota_data["transfer"]["used_gb"],
+                "limit_gb": quota_data["transfer"]["limit_gb"],
+                "is_lifetime": quota_data["plan"] == "free"
+            },
+            "max_file_bytes": quota_data["max_file_bytes"],
+            "max_file_gb": quota_data["max_file_gb"]
+        }
+    except Exception as e:
+        logging.error(f"Error fetching billing quota: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch quota information")
+
+
 @app.get("/auth/google/login-url")
 def google_login_url(mode: Optional[str] = None, user_id: str = Depends(verify_supabase_jwt)):
     """
