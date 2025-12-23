@@ -85,27 +85,32 @@ def get_billing_quota(user_id: str = Depends(verify_supabase_jwt)):
     try:
         quota_data = quota.get_user_quota_info(supabase, user_id)
         
-        # Map to frontend-friendly response
+        # Defensive: ensure all required keys exist
+        plan_name = quota_data.get("plan", "free")
+        copies_data = quota_data.get("copies", {})
+        transfer_data = quota_data.get("transfer", {})
+        
+        # Map to frontend-friendly response with safe defaults
         return {
-            "plan": quota_data["plan"],
-            "plan_type": quota_data["plan_type"],
+            "plan": plan_name,
+            "plan_type": quota_data.get("plan_type", "FREE"),
             "copies": {
-                "used": quota_data["copies"]["used_lifetime"] if quota_data["plan"] == "free" else quota_data["copies"]["used_month"],
-                "limit": quota_data["copies"]["limit_lifetime"] if quota_data["plan"] == "free" else quota_data["copies"]["limit_month"],
-                "is_lifetime": quota_data["plan"] == "free"
+                "used": copies_data.get("used_lifetime") if plan_name == "free" else copies_data.get("used_month", 0),
+                "limit": copies_data.get("limit_lifetime") if plan_name == "free" else copies_data.get("limit_month"),
+                "is_lifetime": plan_name == "free"
             },
             "transfer": {
-                "used_bytes": quota_data["transfer"]["used_bytes"],
-                "limit_bytes": quota_data["transfer"]["limit_bytes"],
-                "used_gb": quota_data["transfer"]["used_gb"],
-                "limit_gb": quota_data["transfer"]["limit_gb"],
-                "is_lifetime": quota_data["plan"] == "free"
+                "used_bytes": transfer_data.get("used_bytes", 0),
+                "limit_bytes": transfer_data.get("limit_bytes"),
+                "used_gb": transfer_data.get("used_gb", 0.0),
+                "limit_gb": transfer_data.get("limit_gb"),
+                "is_lifetime": plan_name == "free"
             },
-            "max_file_bytes": quota_data["max_file_bytes"],
-            "max_file_gb": quota_data["max_file_gb"]
+            "max_file_bytes": quota_data.get("max_file_bytes", 1_073_741_824),
+            "max_file_gb": quota_data.get("max_file_gb", 1.0)
         }
     except Exception as e:
-        logging.error(f"Error fetching billing quota: {str(e)}")
+        logging.error(f"Error fetching billing quota for user {user_id}: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to fetch quota information")
 
 

@@ -399,7 +399,7 @@ function DashboardContent() {
                           height="sm"
                         />
                         <p className="text-xs text-slate-400 mt-2">
-                          {billingQuota.copies.limit - billingQuota.copies.used} restantes
+                          {Math.max(0, billingQuota.copies.limit - billingQuota.copies.used)} restantes
                         </p>
                       </>
                     ) : (
@@ -419,7 +419,7 @@ function DashboardContent() {
                         </span>
                       )}
                     </div>
-                    {billingQuota.transfer.limit_bytes !== null ? (
+                    {billingQuota.transfer.limit_bytes !== null && billingQuota.transfer.limit_bytes > 0 ? (
                       <>
                         <ProgressBar
                           current={billingQuota.transfer.used_bytes}
@@ -427,7 +427,7 @@ function DashboardContent() {
                           height="sm"
                         />
                         <p className="text-xs text-slate-400 mt-2">
-                          {(
+                          {Math.max(0, 
                             (billingQuota.transfer.limit_bytes - billingQuota.transfer.used_bytes) /
                             (1024 ** 3)
                           ).toFixed(2)}{" "}
