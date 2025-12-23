@@ -1,20 +1,15 @@
 """
 Quota management system for copy operations
-Phase 2: Slot-based historical tracking with FREE/PAID differentiation
+Phase 3: Bytes-based transfer tracking with centralized billing plans
 """
 from datetime import datetime, timezone
 from typing import Dict, Optional
 from fastapi import HTTPException
 from supabase import Client
 import uuid
+import logging
 
-
-# Plan cloud account limits
-PLAN_CLOUD_LIMITS = {
-    "free": 2,
-    "plus": 3,
-    "pro": 7
-}
+from backend.billing_plans import get_plan_limits, bytes_to_gb
 
 
 def get_or_create_user_plan(supabase: Client, user_id: str) -> Dict:
@@ -34,30 +29,44 @@ def get_or_create_user_plan(supabase: Client, user_id: str) -> Dict:
     
     if result.data and len(result.data) > 0:
         plan = result.data[0]
+        plan_name = plan.get("plan", "free")
         
-        # Check if month changed - auto reset
-        period_start = datetime.fromisoformat(plan["period_start"].replace("Z", "+00:00"))
-        now = datetime.now(period_start.tzinfo)
-        
-        if period_start.month != now.month or period_start.year != now.year:
-            # Reset for new month
-            updated = supabase.table("user_plans").update({
-                "copies_used_month": 0,
-                "period_start": now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat(),
-                "updated_at": now.isoformat()
-            }).eq("user_id", user_id).execute()
+        # Check if month changed - auto reset (PAID only)
+        if plan_name in ("plus", "pro"):
+            period_start = datetime.fromisoformat(plan["period_start"].replace("Z", "+00:00"))
+            now = datetime.now(period_start.tzinfo)
             
-            return updated.data[0]
+            if period_start.month != now.month or period_start.year != now.year:
+                # Reset monthly counters for PAID plans
+                updated = supabase.table("user_plans").update({
+                    "copies_used_month": 0,
+                    "transfer_bytes_used_month": 0,
+                    "period_start": now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat(),
+                    "updated_at": now.isoformat()
+                }).eq("user_id", user_id).execute()
+                
+                return updated.data[0]
         
         return plan
     else:
-        # Create new plan (free tier)
+        # Create new plan (free tier) with centralized limits
         now = datetime.now()
+        free_limits = get_plan_limits("free")
+        
         new_plan = {
             "user_id": user_id,
             "plan": "free",
+            "plan_type": "FREE",
+            "clouds_slots_total": free_limits.clouds_slots_total,
+            "clouds_slots_used": 0,
             "copies_used_month": 0,
-            "copies_limit_month": 20,
+            "copies_limit_month": None,  # FREE uses lifetime
+            "total_lifetime_copies": 0,
+            "transfer_bytes_used_lifetime": 0,
+            "transfer_bytes_limit_lifetime": free_limits.transfer_bytes_limit_lifetime,
+            "transfer_bytes_used_month": 0,
+            "transfer_bytes_limit_month": None,  # FREE doesn't use monthly
+            "max_file_bytes": free_limits.max_file_bytes,
             "period_start": now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
         }
         
@@ -67,33 +76,53 @@ def get_or_create_user_plan(supabase: Client, user_id: str) -> Dict:
 
 def check_quota_available(supabase: Client, user_id: str) -> Dict:
     """
-    Check if user has quota available.
+    Check if user has copy quota available.
+    FREE: Check total_lifetime_copies vs limit (20)
+    PAID: Check copies_used_month vs copies_limit_month
+    
     Raises HTTPException(402) if quota exceeded.
     
     Returns:
         Dict with used, limit, remaining
     """
     plan = get_or_create_user_plan(supabase, user_id)
+    plan_name = plan.get("plan", "free")
     
-    used = plan["copies_used_month"]
-    limit = plan["copies_limit_month"]
-    remaining = limit - used
-    
-    if used >= limit:
-        raise HTTPException(
-            status_code=402,
-            detail={
-                "error": "quota_exceeded",
-                "message": "Has alcanzado el límite de copias este mes.",
-                "used": used,
-                "limit": limit
-            }
-        )
+    if plan_name == "free":
+        # FREE: Lifetime copies
+        used = plan.get("total_lifetime_copies", 0)
+        limit = 20  # FREE limit
+        
+        if used >= limit:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "quota_exceeded",
+                    "message": "Has alcanzado el límite de 20 copias de por vida para el plan FREE. Actualiza a un plan PAID para más copias.",
+                    "used": used,
+                    "limit": limit
+                }
+            )
+    else:
+        # PAID: Monthly copies
+        used = plan.get("copies_used_month", 0)
+        limit = plan.get("copies_limit_month", 1000)
+        
+        if used >= limit:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "quota_exceeded",
+                    "message": f"Has alcanzado el límite de {limit} copias este mes.",
+                    "used": used,
+                    "limit": limit
+                }
+            )
     
     return {
         "used": used,
         "limit": limit,
-        "remaining": remaining
+        "remaining": limit - used
     }
 
 
@@ -224,18 +253,69 @@ def get_user_quota_info(supabase: Client, user_id: str) -> Dict:
     
     historical_slots_total = plan.get("clouds_slots_total", 2)  # Default FREE=2
     
-    copies_used = plan["copies_used_month"]
-    copies_limit = plan["copies_limit_month"]
+    # Copy quota (differentiate FREE lifetime vs PAID monthly)
+    if plan_name == "free":
+        copies_used = plan.get("total_lifetime_copies", 0)
+        copies_limit = 20  # FREE limit
+        copies_used_month = None
+        copies_limit_month = None
+    else:
+        copies_used = plan.get("copies_used_month", 0)
+        copies_limit = plan.get("copies_limit_month", 1000)
+        copies_used_month = copies_used
+        copies_limit_month = copies_limit
+    
+    # Transfer quota (bytes, convert to GB for response)
+    if plan_name == "free":
+        transfer_used_bytes = plan.get("transfer_bytes_used_lifetime", 0)
+        transfer_limit_bytes = plan.get("transfer_bytes_limit_lifetime", 5_368_709_120)
+        transfer_used_month_bytes = None
+        transfer_limit_month_bytes = None
+    else:
+        transfer_used_bytes = plan.get("transfer_bytes_used_month", 0)
+        transfer_limit_bytes = plan.get("transfer_bytes_limit_month", 214_748_364_800)
+        transfer_used_month_bytes = transfer_used_bytes
+        transfer_limit_month_bytes = transfer_limit_bytes
+    
+    max_file_bytes = plan.get("max_file_bytes", 1_073_741_824)
     
     return {
         "plan": plan_name,
+        "plan_type": plan.get("plan_type", "FREE"),
         # Backward-compatible keys (copy quota)
         "used": copies_used,
         "limit": copies_limit,
         "remaining": copies_limit - copies_used,
-        # DEPRECATED cloud limit fields (kept for backward compat, but UI should migrate)
+        # DEPRECATED cloud limit fields (kept for backward compat)
         "clouds_allowed": clouds_allowed,
-        "clouds_connected": active_clouds_connected,  # Changed to active count for accuracy
+        "clouds_connected": active_clouds_connected,
+        "clouds_remaining": max(0, historical_slots_total - historical_slots_used),
+        # NEW EXPLICIT FIELDS (PREFERRED):
+        "historical_slots_used": historical_slots_used,
+        "historical_slots_total": historical_slots_total,
+        "active_clouds_connected": active_clouds_connected,
+        # Copy quota (explicit FREE vs PAID)
+        "copies": {
+            "used_lifetime": copies_used if plan_name == "free" else None,
+            "limit_lifetime": 20 if plan_name == "free" else None,
+            "used_month": copies_used_month,
+            "limit_month": copies_limit_month
+        },
+        # Transfer quota (bytes + GB)
+        "transfer": {
+            "used_bytes": transfer_used_bytes,
+            "limit_bytes": transfer_limit_bytes,
+            "used_gb": round(bytes_to_gb(transfer_used_bytes), 2),
+            "limit_gb": round(bytes_to_gb(transfer_limit_bytes), 1) if transfer_limit_bytes else None,
+            "remaining_gb": round(bytes_to_gb(transfer_limit_bytes - transfer_used_bytes), 2) if transfer_limit_bytes else None
+        },
+        # File size limits
+        "max_file_bytes": max_file_bytes,
+        "max_file_gb": round(bytes_to_gb(max_file_bytes), 1),
+        # Legacy fields (deprecated)
+        "copies_used_month": copies_used_month,
+        "copies_limit_month": copies_limit_month
+    }
         "clouds_remaining": max(0, historical_slots_total - historical_slots_used),
         # NEW EXPLICIT FIELDS (PREFERRED - use these for gating):
         "historical_slots_used": historical_slots_used,
@@ -664,3 +744,96 @@ def check_quota_available_hybrid(supabase: Client, user_id: str) -> Dict:
             "plan_type": "PAID",
             "plan": plan_name
         }
+
+
+def check_file_size_limit_bytes(supabase: Client, user_id: str, file_size_bytes: int) -> None:
+    """
+    Validate file size against plan max_file_bytes limit.
+    Raises HTTPException(413) if file too large.
+    
+    Args:
+        supabase: Supabase client
+        user_id: User UUID
+        file_size_bytes: File size in bytes
+    """
+    plan = get_or_create_user_plan(supabase, user_id)
+    max_bytes = plan.get("max_file_bytes", 1_073_741_824)  # Default 1GB
+    
+    if file_size_bytes > max_bytes:
+        raise HTTPException(
+            status_code=413,  # Payload Too Large
+            detail={
+                "error": "file_too_large",
+                "message": f"Archivo excede {bytes_to_gb(max_bytes):.0f}GB para tu plan.",
+                "file_size_bytes": file_size_bytes,
+                "file_size_gb": round(bytes_to_gb(file_size_bytes), 2),
+                "limit_bytes": max_bytes,
+                "limit_gb": round(bytes_to_gb(max_bytes), 1)
+            }
+        )
+
+
+def check_transfer_bytes_available(supabase: Client, user_id: str, file_size_bytes: int) -> Dict:
+    """
+    Check if user has transfer bandwidth available.
+    FREE: Check transfer_bytes_used_lifetime vs transfer_bytes_limit_lifetime
+    PAID: Check transfer_bytes_used_month vs transfer_bytes_limit_month
+    
+    Raises HTTPException(402) if transfer quota exceeded.
+    
+    Args:
+        supabase: Supabase client
+        user_id: User UUID
+        file_size_bytes: File size in bytes to transfer
+    
+    Returns:
+        Dict with used_bytes, limit_bytes, remaining_bytes, used_gb, limit_gb
+    """
+    plan = get_or_create_user_plan(supabase, user_id)
+    plan_name = plan.get("plan", "free")
+    
+    if plan_name == "free":
+        # FREE: Lifetime transfer
+        used_bytes = plan.get("transfer_bytes_used_lifetime", 0)
+        limit_bytes = plan.get("transfer_bytes_limit_lifetime", 5_368_709_120)  # 5GB default
+        
+        if used_bytes + file_size_bytes > limit_bytes:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "transfer_quota_exceeded",
+                    "message": f"Has usado {bytes_to_gb(used_bytes):.2f}GB de {bytes_to_gb(limit_bytes):.0f}GB lifetime. Este archivo requiere {bytes_to_gb(file_size_bytes):.2f}GB.",
+                    "used_bytes": used_bytes,
+                    "limit_bytes": limit_bytes,
+                    "required_bytes": file_size_bytes,
+                    "used_gb": round(bytes_to_gb(used_bytes), 2),
+                    "limit_gb": round(bytes_to_gb(limit_bytes), 1)
+                }
+            )
+    else:
+        # PAID: Monthly transfer
+        used_bytes = plan.get("transfer_bytes_used_month", 0)
+        limit_bytes = plan.get("transfer_bytes_limit_month", 214_748_364_800)  # 200GB default
+        
+        if used_bytes + file_size_bytes > limit_bytes:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "transfer_quota_exceeded",
+                    "message": f"Has usado {bytes_to_gb(used_bytes):.2f}GB de {bytes_to_gb(limit_bytes):.0f}GB este mes. Este archivo requiere {bytes_to_gb(file_size_bytes):.2f}GB.",
+                    "used_bytes": used_bytes,
+                    "limit_bytes": limit_bytes,
+                    "required_bytes": file_size_bytes,
+                    "used_gb": round(bytes_to_gb(used_bytes), 2),
+                    "limit_gb": round(bytes_to_gb(limit_bytes), 1)
+                }
+            )
+    
+    return {
+        "used_bytes": used_bytes,
+        "limit_bytes": limit_bytes,
+        "remaining_bytes": limit_bytes - used_bytes,
+        "used_gb": round(bytes_to_gb(used_bytes), 2),
+        "limit_gb": round(bytes_to_gb(limit_bytes), 1)
+    }
+

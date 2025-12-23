@@ -477,6 +477,7 @@ async def copy_file(request: CopyFileRequest, user_id: str = Depends(verify_supa
         # 2. Get source file metadata for duplicate detection
         from backend.google_drive import get_file_metadata, find_duplicate_file
         source_metadata = await get_file_metadata(request.source_account_id, request.file_id)
+        file_size_bytes = int(source_metadata.get("size", 0))
         
         # 3. Check if file already exists in target account BEFORE checking quota/rate limits
         duplicate = await find_duplicate_file(
@@ -499,13 +500,19 @@ async def copy_file(request: CopyFileRequest, user_id: str = Depends(verify_supa
                 "quota": quota_info
             }
         
-        # 4. NOT a duplicate - now check rate limit
+        # 4. NOT a duplicate - validate file size limit
+        quota.check_file_size_limit_bytes(supabase, user_id, file_size_bytes)
+        
+        # 4.5. Check transfer bandwidth availability
+        transfer_quota = quota.check_transfer_bytes_available(supabase, user_id, file_size_bytes)
+        
+        # 5. Check rate limit
         quota.check_rate_limit(supabase, user_id)
         
-        # 5. Check quota availability
+        # 6. Check copy quota availability
         quota_info = quota.check_quota_available(supabase, user_id)
         
-        # 6. Create copy job with status='pending' (only if not duplicate)
+        # 7. Create copy job with status='pending' (only if not duplicate)
         job_id = quota.create_copy_job(
             supabase=supabase,
             user_id=user_id,
@@ -515,25 +522,37 @@ async def copy_file(request: CopyFileRequest, user_id: str = Depends(verify_supa
             file_name=source_metadata.get("name")
         )
         
-        # 7. Get tokens with auto-refresh
+        # 8. Get tokens with auto-refresh
         from backend.google_drive import get_valid_token
         await get_valid_token(request.source_account_id)
         await get_valid_token(request.target_account_id)
         
-        # 8. Execute actual copy
+        # 9. Execute actual copy
         result = await copy_file_between_accounts(
             source_account_id=request.source_account_id,
             target_account_id=request.target_account_id,
             file_id=request.file_id
         )
         
-        # 9. Mark job as success AND increment quota atomically
-        quota.complete_copy_job_success(supabase, job_id, user_id)
+        # 10. Get actual bytes copied from result (fallback to metadata)
+        actual_bytes = int(result.get("size", file_size_bytes))
         
-        # 10. Get updated quota
+        # 11. Mark job as success AND increment quota atomically via RPC
+        rpc_result = supabase.rpc("complete_copy_job_success_and_increment_usage", {
+            "p_job_id": job_id,
+            "p_user_id": user_id,
+            "p_bytes_copied": actual_bytes
+        }).execute()
+        
+        if rpc_result.data and len(rpc_result.data) > 0:
+            rpc_status = rpc_result.data[0]
+            if not rpc_status.get("success"):
+                logging.warning(f"RPC returned non-success: {rpc_status.get('message')}")
+        
+        # 12. Get updated quota
         updated_quota = quota.get_user_quota_info(supabase, user_id)
         
-        # 11. Return success (backward compatible + new fields)
+        # 13. Return success (backward compatible + new fields)
         return {
             "success": True,
             "message": "File copied successfully",
