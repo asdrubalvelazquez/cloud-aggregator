@@ -269,14 +269,14 @@ function DashboardContent() {
             </button>
             <button
               onClick={handleConnectGoogle}
-              disabled={quota && quota.historical_slots_used >= quota.historical_slots_total}
+              disabled={!!quota && quota.historical_slots_used >= quota.historical_slots_total}
               className={
-                quota && quota.historical_slots_used >= quota.historical_slots_total
+                !!quota && quota.historical_slots_used >= quota.historical_slots_total
                   ? "rounded-lg transition px-4 py-2 text-sm font-semibold bg-slate-600 text-slate-400 cursor-not-allowed"
                   : "rounded-lg transition px-4 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-600"
               }
               title={
-                quota && quota.historical_slots_used >= quota.historical_slots_total
+                !!quota && quota.historical_slots_used >= quota.historical_slots_total
                   ? "Has usado todos tus slots históricos. Puedes reconectar tus cuentas anteriores desde 'Ver mis cuentas'"
                   : "Conectar una nueva cuenta de Google Drive"
               }
