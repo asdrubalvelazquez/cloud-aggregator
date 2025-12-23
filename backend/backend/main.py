@@ -238,6 +238,26 @@ async def google_callback(request: Request):
             logging.error(f"[CALLBACK ERROR] Unexpected HTTPException {e.status_code} para user_id={user_id}")
             return RedirectResponse(f"{FRONTEND_URL}/app?error=connection_failed")
     
+    # CRITICAL FIX: Get/create slot BEFORE upserting cloud_account
+    # This prevents creating orphan accounts with slot_log_id = NULL
+    # which causes "infinite connections" bug
+    try:
+        slot_result = quota.connect_cloud_account_with_slot(
+            supabase,
+            user_id,
+            "google_drive",
+            google_account_id,
+            account_email
+        )
+        slot_id = slot_result["id"]
+        import logging
+        logging.info(f"[SLOT LINKED] slot_id={slot_id}, is_new={slot_result.get('is_new')}, reconnected={slot_result.get('reconnected')}")
+    except Exception as slot_err:
+        import logging
+        logging.error(f"[CRITICAL] Failed to get/create slot for user {user_id}, account {account_email}: {slot_err}")
+        # ABORT: Do NOT create cloud_account without slot_id (prevents orphan accounts)
+        return RedirectResponse(f"{FRONTEND_URL}/app?error=slot_creation_failed")
+    
     # Preparar datos para guardar (incluye reactivación si es reconexión)
     upsert_data = {
         "account_email": account_email,
@@ -248,6 +268,7 @@ async def google_callback(request: Request):
         "user_id": user_id,
         "is_active": True,              # Reactivar cuenta si estaba soft-deleted
         "disconnected_at": None,        # Limpiar timestamp de desconexión
+        "slot_log_id": slot_id,         # CRITICAL: Link to slot (prevents orphan accounts)
     }
 
     # Save to database
@@ -255,20 +276,6 @@ async def google_callback(request: Request):
         upsert_data,
         on_conflict="google_account_id",
     ).execute()
-
-    # Vincular slot histórico tras guardar la cuenta
-    try:
-        quota.connect_cloud_account_with_slot(
-            supabase,
-            user_id,
-            "google_drive",
-            google_account_id,
-            account_email
-        )
-    except Exception as slot_err:
-        import logging
-        logging.error(f"[SLOT ERROR] Failed to link slot for user {user_id}, account {account_email}: {slot_err}")
-        # Continuar sin fallar la conexión (slot se puede vincular manualmente después)
 
     # Redirect to frontend dashboard
     return RedirectResponse(f"{FRONTEND_URL}/app?auth=success")

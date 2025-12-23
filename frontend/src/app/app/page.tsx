@@ -267,22 +267,28 @@ function DashboardContent() {
             >
               📊 Ver mis cuentas
             </button>
-            <button
-              onClick={handleConnectGoogle}
-              disabled={!!quota && quota.historical_slots_used >= quota.historical_slots_total}
-              className={
-                !!quota && quota.historical_slots_used >= quota.historical_slots_total
-                  ? "rounded-lg transition px-4 py-2 text-sm font-semibold bg-slate-600 text-slate-400 cursor-not-allowed"
-                  : "rounded-lg transition px-4 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-600"
-              }
-              title={
-                !!quota && quota.historical_slots_used >= quota.historical_slots_total
-                  ? "Has usado todos tus slots históricos. Puedes reconectar tus cuentas anteriores desde 'Ver mis cuentas'"
-                  : "Conectar una nueva cuenta de Google Drive"
-              }
-            >
-              Conectar nueva cuenta
-            </button>
+            {(() => {
+              // FIX: Explicit boolean to avoid TS error (boolean | null not assignable)
+              const limitReached = quota ? quota.historical_slots_used >= quota.historical_slots_total : false;
+              return (
+                <button
+                  onClick={handleConnectGoogle}
+                  disabled={limitReached}
+                  className={
+                    limitReached
+                      ? "rounded-lg transition px-4 py-2 text-sm font-semibold bg-slate-600 text-slate-400 cursor-not-allowed"
+                      : "rounded-lg transition px-4 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-600"
+                  }
+                  title={
+                    limitReached
+                      ? "Has usado todos tus slots históricos. Puedes reconectar tus cuentas anteriores desde 'Ver mis cuentas'"
+                      : "Conectar una nueva cuenta de Google Drive"
+                  }
+                >
+                  Conectar nueva cuenta
+                </button>
+              );
+            })()}
             <button
               onClick={handleLogout}
               className="rounded-lg bg-slate-700 hover:bg-slate-600 transition px-4 py-2 text-sm font-semibold"
