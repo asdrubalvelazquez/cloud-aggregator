@@ -8,6 +8,7 @@ import Toast from "@/components/Toast";
 import ProgressBar from "@/components/ProgressBar";
 import AccountStatusBadge from "@/components/AccountStatusBadge";
 import { formatStorage, formatStorageFromGB } from "@/lib/formatStorage";
+import ReconnectSlotsModal from "@/components/ReconnectSlotsModal";
 
 type Account = {
   id: number;
@@ -37,9 +38,14 @@ type QuotaInfo = {
   used: number;
   limit: number;
   remaining: number;
+  // DEPRECATED (ambiguous):
   clouds_allowed: number;
   clouds_connected: number;
   clouds_remaining: number;
+  // NEW EXPLICIT FIELDS (preferred):
+  historical_slots_used: number;      // Lifetime slots consumed
+  historical_slots_total: number;     // Slots allowed by plan
+  active_clouds_connected: number;    // Currently active accounts
 } | null;
 
 function DashboardContent() {
@@ -53,6 +59,7 @@ function DashboardContent() {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const [quota, setQuota] = useState<QuotaInfo>(null);
+  const [showReconnectModal, setShowReconnectModal] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -116,9 +123,8 @@ function DashboardContent() {
         fetchQuota();
       }, 1000);
     } else if (authError === "cloud_limit_reached") {
-      const allowed = allowedParam || "1";
       setToast({
-        message: `Has alcanzado el límite de ${allowed} cuenta(s) en tu plan. Actualiza tu plan para conectar más.`,
+        message: `Has usado tus slots históricos. Puedes reconectar tus cuentas anteriores desde "Ver mis cuentas", pero no puedes agregar cuentas nuevas en plan FREE.`,
         type: "warning",
       });
       window.history.replaceState({}, "", window.location.pathname);
@@ -144,8 +150,18 @@ function DashboardContent() {
       setError("No hay sesión de usuario activa. Recarga la página.");
       return;
     }
-    // Redirige al backend con el user_id en el query param
-    window.location.href = `${API_BASE_URL}/auth/google/login?user_id=${userId}`;
+    
+    try {
+      // CRITICAL FIX: window.location.href NO envía Authorization headers → 401
+      // SOLUCIÓN: Fetch autenticado a /auth/google/login-url → recibe URL → redirect manual
+      // SEGURIDAD: user_id derivado de JWT en backend, NO en querystring
+      const { fetchGoogleLoginUrl } = await import("@/lib/api");
+      const { url } = await fetchGoogleLoginUrl({ mode: "new" });
+      window.location.href = url;
+    } catch (err) {
+      setError(`Error al obtener URL de Google: ${err}`);
+      console.error("handleConnectGoogle error:", err);
+    }
   };
 
   const handleDisconnectAccount = async (accountId: number, accountEmail: string) => {
@@ -227,9 +243,12 @@ function DashboardContent() {
             {quota && (
               <>
                 <p className="text-xs text-slate-500 mt-1">
-                  Plan: {quota.plan.toUpperCase()} • Slots históricos: {quota.clouds_connected} / {quota.clouds_allowed}
+                  Plan: {quota.plan.toUpperCase()} • Slots históricos: {quota.historical_slots_used} / {quota.historical_slots_total}
                 </p>
-                {quota.clouds_connected >= quota.clouds_allowed && (
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Cuentas conectadas: {quota.active_clouds_connected}
+                </p>
+                {quota.historical_slots_used >= quota.historical_slots_total && (
                   <p className="text-xs text-slate-400 italic mt-0.5">
                     Puedes reconectar tus cuentas anteriores en cualquier momento
                   </p>
@@ -243,10 +262,26 @@ function DashboardContent() {
           </div>
           <div className="flex gap-3">
             <button
-              onClick={handleConnectGoogle}
-              className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-600"
+              onClick={() => setShowReconnectModal(true)}
+              className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-700"
             >
-              Conectar nueva cuenta de Google Drive
+              📊 Ver mis cuentas
+            </button>
+            <button
+              onClick={handleConnectGoogle}
+              disabled={quota && quota.historical_slots_used >= quota.historical_slots_total}
+              className={
+                quota && quota.historical_slots_used >= quota.historical_slots_total
+                  ? "rounded-lg transition px-4 py-2 text-sm font-semibold bg-slate-600 text-slate-400 cursor-not-allowed"
+                  : "rounded-lg transition px-4 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-600"
+              }
+              title={
+                quota && quota.historical_slots_used >= quota.historical_slots_total
+                  ? "Has usado todos tus slots históricos. Puedes reconectar tus cuentas anteriores desde 'Ver mis cuentas'"
+                  : "Conectar una nueva cuenta de Google Drive"
+              }
+            >
+              Conectar nueva cuenta
             </button>
             <button
               onClick={handleLogout}
@@ -456,6 +491,12 @@ function DashboardContent() {
           </>
         )}
       </div>
+
+      {/* Modal de slots históricos */}
+      <ReconnectSlotsModal
+        isOpen={showReconnectModal}
+        onClose={() => setShowReconnectModal(false)}
+      />
     </main>
   );
 }

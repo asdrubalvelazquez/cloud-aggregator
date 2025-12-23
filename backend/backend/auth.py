@@ -18,18 +18,28 @@ SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 
 def create_state_token(user_id: str) -> str:
     """Crea un JWT firmado con el user_id para usar como state en OAuth"""
-    payload = {"user_id": user_id, "type": "oauth_state"}
+    from datetime import datetime, timedelta
+    payload = {
+        "user_id": user_id,
+        "type": "oauth_state",
+        "exp": datetime.utcnow() + timedelta(minutes=10),  # Expira en 10 min (seguridad anti-replay)
+        "iat": datetime.utcnow()
+    }
     token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
     return token
 
 
 def decode_state_token(state: str) -> Optional[str]:
     """Decodifica el state JWT y retorna el user_id"""
+    import logging
     try:
         payload = jwt.decode(state, JWT_SECRET, algorithms=["HS256"])
         if payload.get("type") != "oauth_state":
             return None
         return payload.get("user_id")
+    except jwt.ExpiredSignatureError:
+        logging.warning("[SECURITY] Expired state token in OAuth callback (possible replay attack)")
+        return None
     except jwt.InvalidTokenError:
         return None
 

@@ -175,9 +175,14 @@ def get_user_quota_info(supabase: Client, user_id: str) -> Dict:
             "used": 5,
             "limit": 20,
             "remaining": 15,
+            # DEPRECATED (ambiguous) - use explicit fields below:
             "clouds_allowed": 2,
             "clouds_connected": 1,
             "clouds_remaining": 1,
+            # NEW EXPLICIT FIELDS (preferred):
+            "historical_slots_used": 2,      # Lifetime slots consumed (never decreases)
+            "historical_slots_total": 2,     # Slots allowed by plan (free=2 + extras)
+            "active_clouds_connected": 1,    # Currently active cloud accounts
             "copies_used_month": 5,
             "copies_limit_month": 20
         }
@@ -190,9 +195,34 @@ def get_user_quota_info(supabase: Client, user_id: str) -> Dict:
     extra_clouds = plan.get("extra_clouds", 0)
     clouds_allowed = max_clouds + extra_clouds
     
-    # Count connected clouds
-    count_result = supabase.table("cloud_accounts").select("id").eq("user_id", user_id).execute()
-    clouds_connected = len(count_result.data) if count_result.data else 0
+    # Count ACTIVE connected clouds (for UI display)
+    active_count_result = supabase.table("cloud_accounts").select("id").eq("user_id", user_id).eq("is_active", True).execute()
+    active_clouds_connected = len(active_count_result.data) if active_count_result.data else 0
+    
+    # Historical slots (lifetime, never decreases) - FALLBACK ROBUSTO
+    # Prioridad 1: usar clouds_slots_used del plan (incremental, mantenido por connect_cloud_account_with_slot)
+    # Prioridad 2: si es NULL/0 inconsistente, contar DISTINCT desde cloud_slots_log (fuente de verdad)
+    historical_slots_used_from_plan = plan.get("clouds_slots_used", 0)
+    
+    if historical_slots_used_from_plan == 0:
+        # Fallback: contar slots únicos desde cloud_slots_log (incluye activos e inactivos)
+        slots_count_result = supabase.table("cloud_slots_log").select("provider_account_id").eq("user_id", user_id).execute()
+        # COUNT DISTINCT provider_account_id (cada cuenta única cuenta como 1 slot)
+        unique_provider_accounts = set()
+        if slots_count_result.data:
+            for slot in slots_count_result.data:
+                provider_id = slot.get("provider_account_id")
+                # Filtrar NULL, empty strings, y whitespace (defensa contra data inconsistente)
+                if provider_id and str(provider_id).strip():
+                    unique_provider_accounts.add(provider_id)
+        historical_slots_used = len(unique_provider_accounts)
+        
+        import logging
+        logging.warning(f"[FALLBACK SLOTS] user_id={user_id} - plan.clouds_slots_used era 0, usando COUNT desde cloud_slots_log: {historical_slots_used}")
+    else:
+        historical_slots_used = historical_slots_used_from_plan
+    
+    historical_slots_total = plan.get("clouds_slots_total", 2)  # Default FREE=2
     
     copies_used = plan["copies_used_month"]
     copies_limit = plan["copies_limit_month"]
@@ -203,10 +233,14 @@ def get_user_quota_info(supabase: Client, user_id: str) -> Dict:
         "used": copies_used,
         "limit": copies_limit,
         "remaining": copies_limit - copies_used,
-        # New cloud limit fields
+        # DEPRECATED cloud limit fields (kept for backward compat, but UI should migrate)
         "clouds_allowed": clouds_allowed,
-        "clouds_connected": clouds_connected,
-        "clouds_remaining": max(0, clouds_allowed - clouds_connected),
+        "clouds_connected": active_clouds_connected,  # Changed to active count for accuracy
+        "clouds_remaining": max(0, historical_slots_total - historical_slots_used),
+        # NEW EXPLICIT FIELDS (PREFERRED - use these for gating):
+        "historical_slots_used": historical_slots_used,
+        "historical_slots_total": historical_slots_total,
+        "active_clouds_connected": active_clouds_connected,
         # Explicit copy quota fields
         "copies_used_month": copies_used,
         "copies_limit_month": copies_limit
@@ -341,11 +375,34 @@ def check_cloud_limit_with_slots(supabase: Client, user_id: str, provider: str, 
     
     Raises:
         HTTPException(402) if slot limit exceeded for NEW accounts only
+        HTTPException(400) if provider_account_id is empty/invalid
     """
     import logging
     
-    # Normalizar ID para comparación consistente (evitar int vs string)
+    # HARDENING 1: Validación temprana de provider_account_id (rechazar vacío/null)
+    if not provider_account_id:
+        logging.error(f"[VALIDATION ERROR] provider_account_id vacío para user_id={user_id}, provider={provider}")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_account_id",
+                "message": "Provider account ID is required and cannot be empty"
+            }
+        )
+    
+    # HARDENING 2: Normalización estricta (strip whitespace, convertir a string)
     normalized_id = str(provider_account_id).strip()
+    
+    # Verificar que después de normalizar no quedó vacío
+    if not normalized_id:
+        logging.error(f"[VALIDATION ERROR] provider_account_id solo whitespace para user_id={user_id}, provider={provider}")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_account_id",
+                "message": "Provider account ID cannot be empty or whitespace only"
+            }
+        )
     
     logging.info(f"[SLOT CHECK] Iniciando validación - user_id={user_id}, provider={provider}, account_id_recibido={normalized_id}")
     logging.info(f"[SLOT CHECK DEBUG] normalized_id='{normalized_id}' (type={type(normalized_id).__name__}, len={len(normalized_id)})")
@@ -353,7 +410,8 @@ def check_cloud_limit_with_slots(supabase: Client, user_id: str, provider: str, 
     # ═══════════════════════════════════════════════════════════════════════════
     # PRIORIDAD 1: SALVOCONDUCTO DE RECONEXIÓN (Sin validar límites)
     # ═══════════════════════════════════════════════════════════════════════════
-    # Check if this exact provider_account_id is already in cloud_slots_log
+    # HARDENING 3: Query salvoconducto con 3 filtros (user_id + provider + provider_account_id normalizado)
+    # Esto previene colisiones entre providers (ej. Google ID "123" vs OneDrive ID "123")
     existing_slot = supabase.table("cloud_slots_log").select("id, is_active, slot_number, provider_account_id").eq("user_id", user_id).eq("provider", provider).eq("provider_account_id", normalized_id).execute()
     
     logging.info(f"[SLOT CHECK DEBUG] Query result: found={len(existing_slot.data) if existing_slot.data else 0} slots")
@@ -381,11 +439,18 @@ def check_cloud_limit_with_slots(supabase: Client, user_id: str, provider: str, 
     # Nueva cuenta - verificar disponibilidad de slots
     if clouds_slots_used >= clouds_slots_total:
         logging.warning(f"[SLOT LIMIT ✗] Usuario {user_id} ha excedido el límite de slots: {clouds_slots_used}/{clouds_slots_total}")
+        
+        # Mensaje diferenciado para FREE vs PAID (sin exponer PII en respuesta)
+        if plan_name == "free":
+            message = f"Has usado tus {clouds_slots_total} slots históricos. Puedes reconectar tus cuentas anteriores en cualquier momento, pero no puedes agregar cuentas nuevas en plan FREE. Actualiza a un plan PAID para conectar más cuentas."
+        else:
+            message = f"Has alcanzado el límite de {clouds_slots_total} cuenta(s) únicas para tu plan {plan_name}."
+        
         raise HTTPException(
             status_code=402,
             detail={
                 "error": "cloud_limit_reached",
-                "message": f"Has alcanzado el límite de {clouds_slots_total} cuenta(s) únicas para tu plan {plan_name}. Las cuentas desconectadas no liberan slots.",
+                "message": message,
                 "allowed": clouds_slots_total,
                 "used": clouds_slots_used
             }
@@ -421,14 +486,39 @@ def connect_cloud_account_with_slot(
     
     Returns:
         Dict with slot info (id, slot_number, is_new)
+    
+    Raises:
+        HTTPException(400) if provider_account_id is empty/invalid
     """
     import logging
     
-    # Normalizar ID para comparación consistente
+    # HARDENING: Validación temprana de provider_account_id
+    if not provider_account_id:
+        logging.error(f"[VALIDATION ERROR] provider_account_id vacío en connect_cloud_account_with_slot - user_id={user_id}, provider={provider}")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_account_id",
+                "message": "Provider account ID is required"
+            }
+        )
+    
+    # HARDENING: Normalización estricta consistente
     normalized_id = str(provider_account_id).strip()
+    
+    if not normalized_id:
+        logging.error(f"[VALIDATION ERROR] provider_account_id solo whitespace - user_id={user_id}, provider={provider}")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_account_id",
+                "message": "Provider account ID cannot be whitespace only"
+            }
+        )
     
     logging.info(f"[SLOT LINK] Vinculando slot - user_id={user_id}, provider={provider}, account_id={normalized_id}, email={provider_email}")
     
+    # HARDENING: Query con filtro triple (user_id + provider + provider_account_id normalizado)
     # Check if slot already exists (reconnection scenario)
     existing = supabase.table("cloud_slots_log").select("*").eq("user_id", user_id).eq("provider", provider).eq("provider_account_id", normalized_id).execute()
     
@@ -443,8 +533,7 @@ def connect_cloud_account_with_slot(
         
         updated = supabase.table("cloud_slots_log").update({
             "is_active": True,
-            "disconnected_at": None,
-            "updated_at": now_iso
+            "disconnected_at": None
         }).eq("id", slot_id).execute()
         
         return {
@@ -466,11 +555,12 @@ def connect_cloud_account_with_slot(
         if max_slot.data and len(max_slot.data) > 0:
             next_slot_number = max_slot.data[0]["slot_number"] + 1
         
-        # Create new slot
+        # HARDENING: Create new slot con provider_account_id NORMALIZADO
+        # Esto garantiza que TODOS los inserts usan el mismo formato (sin whitespace)
         new_slot = {
             "user_id": user_id,
             "provider": provider,
-            "provider_account_id": normalized_id,
+            "provider_account_id": normalized_id,  # SIEMPRE normalizado (strip whitespace)
             "provider_email": provider_email,
             "slot_number": next_slot_number,
             "plan_at_connection": plan_name,

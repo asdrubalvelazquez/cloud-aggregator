@@ -1,4 +1,5 @@
 import os
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -44,6 +45,11 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
 
+# Google OAuth Scopes - MÍNIMOS NECESARIOS (Google OAuth Compliance)
+# https://www.googleapis.com/auth/drive: Full Drive access (necesario para copy files between accounts)
+# https://www.googleapis.com/auth/userinfo.email: Email del usuario (identificación)
+# openid: OpenID Connect (autenticación)
+# NOTA: drive.readonly NO es suficiente para copiar archivos entre cuentas
 SCOPES = [
     "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/userinfo.email",
@@ -61,46 +67,85 @@ def health_check():
     return {"status": "ok"}
 
 
-@app.get("/auth/google/login")
-def google_login(user_id: Optional[str] = None, mode: Optional[str] = None):
-    """Initiate Google OAuth flow with optional user_id in state"""
+@app.get("/auth/google/login-url")
+def google_login_url(mode: Optional[str] = None, user_id: str = Depends(verify_supabase_jwt)):
+    """
+    Get Google OAuth URL for client-side redirect.
+    
+    CRITICAL FIX: window.location.href NO envía Authorization headers → 401 si endpoint protegido.
+    SOLUCIÓN: Frontend hace fetch autenticado a ESTE endpoint → recibe URL → redirect manual.
+    
+    SEGURIDAD: user_id derivado de JWT (NO query param) para evitar PII en URL/logs.
+    
+    IMPORTANTE: NO hay pre-check de límites aquí porque aún no sabemos qué cuenta
+    elegirá el usuario. La validación definitiva ocurre en callback usando
+    check_cloud_limit_with_slots (que permite reconexión de slots históricos).
+    
+    OAuth Prompt Strategy (Google OAuth Compliance):
+    - "select_account": Muestra selector de cuenta (UX recomendada por Google)
+    - "consent": Fuerza pantalla de permisos (SOLO cuando mode="consent" explícito)
+    
+    Args:
+        mode: "reauth" para reconexión, "consent" para forzar consentimiento, None para nueva
+        user_id: Derivado automáticamente de JWT (verify_supabase_jwt)
+        
+    Returns:
+        {"url": "https://accounts.google.com/o/oauth2/v2/auth?..."}
+    """
     if not GOOGLE_CLIENT_ID or not GOOGLE_REDIRECT_URI:
-        return {"error": "Missing GOOGLE_CLIENT_ID or GOOGLE_REDIRECT_URI"}
+        raise HTTPException(status_code=500, detail="Missing GOOGLE_CLIENT_ID or GOOGLE_REDIRECT_URI")
 
-    # Pre-check cloud limit (unless reauth mode or no user_id)
-    if user_id and mode != "reauth":
-        # Get user plan
-        plan = quota.get_or_create_user_plan(supabase, user_id)
-        plan_name = plan.get("plan", "free")
-        max_clouds = quota.PLAN_CLOUD_LIMITS.get(plan_name, 1)
-        extra_clouds = plan.get("extra_clouds", 0)
-        allowed_clouds = max_clouds + extra_clouds
-        
-        # Count current connected accounts
-        count_result = supabase.table("cloud_accounts").select("id").eq("user_id", user_id).execute()
-        current_count = len(count_result.data) if count_result.data else 0
-        
-        # Check limit
-        if current_count >= allowed_clouds:
-            return RedirectResponse(f"{FRONTEND_URL}/app?error=cloud_limit_reached&allowed={allowed_clouds}")
-
+    # NO PRE-CHECK - La validación se hace en callback cuando conocemos provider_account_id
+    # Esto permite reconexión de slots históricos sin bloqueo prematuro
+    
+    # OAuth Prompt Strategy (Google best practices):
+    # - Default: "select_account" (mejor UX, no agresivo)
+    # - Consent: SOLO si mode="consent" explícito (primera vez o refresh_token perdido)
+    # - Evitar "consent" innecesario (Google OAuth review lo penaliza)
+    if mode == "consent":
+        oauth_prompt = "consent"  # Forzar pantalla de permisos (casos excepcionales)
+    else:
+        oauth_prompt = "select_account"  # Default recomendado por Google
+    
     params = {
         "client_id": GOOGLE_CLIENT_ID,
         "redirect_uri": GOOGLE_REDIRECT_URI,
         "response_type": "code",
         "scope": " ".join(SCOPES),
-        "access_type": "offline",
-        "prompt": "consent",
+        "access_type": "offline",  # Solicita refresh_token
+        "prompt": oauth_prompt,
+        "include_granted_scopes": "true",  # Incremental authorization (Google best practice)
     }
     
-    # Si se proporciona user_id, crear un state JWT
-    if user_id:
-        state_token = create_state_token(user_id)
-        params["state"] = state_token
+    # Crear state JWT con user_id (seguro, firmado)
+    state_token = create_state_token(user_id)
+    params["state"] = state_token
 
     from urllib.parse import urlencode
     url = f"{GOOGLE_AUTH_ENDPOINT}?{urlencode(params)}"
-    return RedirectResponse(url)
+    
+    # Log sin PII (solo hash parcial + mode)
+    user_hash = hashlib.sha256(user_id.encode()).hexdigest()[:8]
+    print(f"[OAuth URL Generated] user_hash={user_hash} mode={mode or 'new'} prompt={oauth_prompt}")
+    
+    return {"url": url}
+
+
+@app.get("/auth/google/login")
+def google_login_deprecated(mode: Optional[str] = None):
+    """
+    DEPRECATED: Use /auth/google/login-url instead.
+    
+    This endpoint kept for backwards compatibility but should not be used.
+    Frontend should call /auth/google/login-url (authenticated) to get OAuth URL,
+    then redirect manually with window.location.href.
+    
+    Reason: window.location.href does NOT send Authorization headers → 401 if protected.
+    """
+    raise HTTPException(
+        status_code=410,
+        detail="Endpoint deprecated. Use GET /auth/google/login-url (authenticated) instead."
+    )
 
 
 @app.get("/auth/google/callback")
@@ -175,10 +220,23 @@ async def google_callback(request: Request):
     try:
         quota.check_cloud_limit_with_slots(supabase, user_id, "google_drive", google_account_id)
     except HTTPException as e:
-        # Extract error details
-        error_detail = e.detail
-        allowed = error_detail.get("allowed", 0) if isinstance(error_detail, dict) else 0
-        return RedirectResponse(f"{FRONTEND_URL}/app?error=cloud_limit_reached&allowed={allowed}")
+        import logging
+        # Diferenciar tipos de error para mejor UX
+        if e.status_code == 400:
+            # VALIDATION ERROR: provider_account_id vacío/inválido (raro pero posible)
+            # Log interno con detalles, redirect con error genérico sin PII
+            error_detail = e.detail if isinstance(e.detail, dict) else {"error": "unknown"}
+            logging.error(f"[CALLBACK VALIDATION ERROR] HTTP 400 - {error_detail.get('error', 'unknown')} para user_id={user_id}, provider=google_drive")
+            return RedirectResponse(f"{FRONTEND_URL}/app?error=oauth_invalid_account")
+        elif e.status_code == 402:
+            # QUOTA ERROR: Límite de slots alcanzado
+            # NO exponer PII (emails) en URL - frontend llamará a /me/slots para obtener detalles
+            logging.info(f"[CALLBACK QUOTA] Usuario {user_id} alcanzó límite de slots")
+            return RedirectResponse(f"{FRONTEND_URL}/app?error=cloud_limit_reached")
+        else:
+            # Otros errores HTTP inesperados
+            logging.error(f"[CALLBACK ERROR] Unexpected HTTPException {e.status_code} para user_id={user_id}")
+            return RedirectResponse(f"{FRONTEND_URL}/app?error=connection_failed")
     
     # Preparar datos para guardar (incluye reactivación si es reconexión)
     upsert_data = {
@@ -519,6 +577,46 @@ async def get_my_plan(user_id: str = Depends(verify_supabase_jwt)):
         return quota_info
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get plan info: {str(e)}")
+
+
+@app.get("/me/slots")
+async def get_user_slots(user_id: str = Depends(verify_supabase_jwt)):
+    """
+    Get all historical cloud slots (active and inactive) for the authenticated user.
+    
+    Returns:
+        {
+            "slots": [
+                {
+                    "id": "uuid",
+                    "provider": "google_drive",
+                    "provider_email": "user@gmail.com",
+                    "slot_number": 1,
+                    "is_active": true,
+                    "connected_at": "2025-12-01T00:00:00Z",
+                    "disconnected_at": null,
+                    "plan_at_connection": "free"
+                }
+            ]
+        }
+    
+    Security:
+    - Only returns slots for authenticated user
+    - No PII in URL (querystring)
+    - Minimal field exposure: provider_account_id REMOVED (no necesario para UI)
+    - UI reconecta via OAuth, no necesita account_id interno
+    """
+    try:
+        # IMPORTANTE: NO devolver provider_account_id (identificador interno, no necesario)
+        slots_result = supabase.table("cloud_slots_log").select(
+            "id,provider,provider_email,slot_number,is_active,connected_at,disconnected_at,plan_at_connection"
+        ).eq("user_id", user_id).order("slot_number").execute()
+        
+        return {"slots": slots_result.data or []}
+    except Exception as e:
+        import logging
+        logging.error(f"[SLOTS ERROR] Failed to fetch slots for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch slots: {str(e)}")
 
 
 class RenameFileRequest(BaseModel):
