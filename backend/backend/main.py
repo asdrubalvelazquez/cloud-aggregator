@@ -1,5 +1,6 @@
 import os
 import hashlib
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -441,7 +442,7 @@ class CopyFileRequest(BaseModel):
 
 
 @app.post("/drive/copy-file")
-async def copy_file(request: CopyFileRequest, user_id: str = Depends(verify_supabase_jwt)):
+async def copy_file(http_request: Request, payload: CopyFileRequest, user_id: str = Depends(verify_supabase_jwt)):
     """
     Copy a file from one Drive account to another.
     Detects duplicates first, then enforces quota limits.
@@ -450,11 +451,26 @@ async def copy_file(request: CopyFileRequest, user_id: str = Depends(verify_supa
     job_id = None
     
     try:
+        # 0. Extract/validate Authorization header EARLY to avoid inconsistent states
+        # (e.g., file copied but RPC fails due to missing/invalid header)
+        authorization = http_request.headers.get("authorization") or http_request.headers.get("Authorization")
+        if not authorization:
+            raise HTTPException(status_code=401, detail="Authorization header required")
+
+        parts = authorization.strip().split(None, 1)
+        if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
+            raise HTTPException(status_code=401, detail="Invalid Authorization header format")
+
+        jwt_token = parts[1].strip()
+
+        from backend.auth import create_user_scoped_client
+        user_client = create_user_scoped_client(jwt_token)
+
         # 1. Validate both accounts exist and belong to the user
         source_acc = (
             supabase.table("cloud_accounts")
             .select("id")
-            .eq("id", request.source_account_id)
+            .eq("id", payload.source_account_id)
             .eq("user_id", user_id)
             .single()
             .execute()
@@ -462,7 +478,7 @@ async def copy_file(request: CopyFileRequest, user_id: str = Depends(verify_supa
         target_acc = (
             supabase.table("cloud_accounts")
             .select("id")
-            .eq("id", request.target_account_id)
+            .eq("id", payload.target_account_id)
             .eq("user_id", user_id)
             .single()
             .execute()
@@ -476,12 +492,12 @@ async def copy_file(request: CopyFileRequest, user_id: str = Depends(verify_supa
         
         # 2. Get source file metadata for duplicate detection
         from backend.google_drive import get_file_metadata, find_duplicate_file
-        source_metadata = await get_file_metadata(request.source_account_id, request.file_id)
+        source_metadata = await get_file_metadata(payload.source_account_id, payload.file_id)
         file_size_bytes = int(source_metadata.get("size", 0))
         
         # 3. Check if file already exists in target account BEFORE checking quota/rate limits
         duplicate = await find_duplicate_file(
-            account_id=request.target_account_id,
+            account_id=payload.target_account_id,
             file_name=source_metadata.get("name", ""),
             mime_type=source_metadata.get("mimeType", ""),
             md5_checksum=source_metadata.get("md5Checksum"),
@@ -516,29 +532,29 @@ async def copy_file(request: CopyFileRequest, user_id: str = Depends(verify_supa
         job_id = quota.create_copy_job(
             supabase=supabase,
             user_id=user_id,
-            source_account_id=request.source_account_id,
-            target_account_id=request.target_account_id,
-            file_id=request.file_id,
+            source_account_id=payload.source_account_id,
+            target_account_id=payload.target_account_id,
+            file_id=payload.file_id,
             file_name=source_metadata.get("name")
         )
         
         # 8. Get tokens with auto-refresh
         from backend.google_drive import get_valid_token
-        await get_valid_token(request.source_account_id)
-        await get_valid_token(request.target_account_id)
+        await get_valid_token(payload.source_account_id)
+        await get_valid_token(payload.target_account_id)
         
         # 9. Execute actual copy
         result = await copy_file_between_accounts(
-            source_account_id=request.source_account_id,
-            target_account_id=request.target_account_id,
-            file_id=request.file_id
+            source_account_id=payload.source_account_id,
+            target_account_id=payload.target_account_id,
+            file_id=payload.file_id
         )
         
         # 10. Get actual bytes copied from result (fallback to metadata)
         actual_bytes = int(result.get("size", file_size_bytes))
         
-        # 11. Mark job as success AND increment quota atomically via RPC
-        rpc_result = supabase.rpc("complete_copy_job_success_and_increment_usage", {
+        # 11. Mark job as success AND increment quota atomically via RPC (USER-SCOPED for auth.uid())
+        rpc_result = user_client.rpc("complete_copy_job_success_and_increment_usage", {
             "p_job_id": job_id,
             "p_user_id": user_id,
             "p_bytes_copied": actual_bytes

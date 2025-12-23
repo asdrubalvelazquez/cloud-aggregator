@@ -6,6 +6,7 @@ import jwt
 from typing import Optional
 from fastapi import Header, HTTPException
 from supabase import create_client, Client
+from supabase.lib.client_options import ClientOptions
 
 # Secret para firmar el state JWT (debe ser el mismo que SUPABASE_JWT_SECRET)
 JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "your-super-secret-jwt-key")
@@ -112,3 +113,17 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> str:
             raise HTTPException(status_code=401, detail="Invalid token")
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Token validation failed: {str(e)}")
+
+
+def create_user_scoped_client(jwt_token: str) -> Client:
+    """
+    Create a user-scoped Supabase client (ANON key) that injects the user's JWT
+    via default Authorization header, so PostgREST RPC sees auth.uid().
+    """
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        raise ValueError("SUPABASE_URL and SUPABASE_ANON_KEY must be configured")
+    if not jwt_token or not jwt_token.strip():
+        raise ValueError("jwt_token is required")
+
+    options = ClientOptions(headers={"Authorization": f"Bearer {jwt_token.strip()}"})
+    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY, options=options)
