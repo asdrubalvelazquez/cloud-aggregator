@@ -316,15 +316,6 @@ def get_user_quota_info(supabase: Client, user_id: str) -> Dict:
         "copies_used_month": copies_used_month,
         "copies_limit_month": copies_limit_month
     }
-        "clouds_remaining": max(0, historical_slots_total - historical_slots_used),
-        # NEW EXPLICIT FIELDS (PREFERRED - use these for gating):
-        "historical_slots_used": historical_slots_used,
-        "historical_slots_total": historical_slots_total,
-        "active_clouds_connected": active_clouds_connected,
-        # Explicit copy quota fields
-        "copies_used_month": copies_used,
-        "copies_limit_month": copies_limit
-    }
 
 
 def check_rate_limit(supabase: Client, user_id: str) -> None:

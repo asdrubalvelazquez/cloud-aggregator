@@ -17,36 +17,36 @@ ALTER TABLE user_plans
 ALTER COLUMN copies_limit_month DROP NOT NULL,
 ALTER COLUMN copies_limit_month DROP DEFAULT;
 
--- Constraints
-ALTER TABLE user_plans
-ADD CONSTRAINT IF NOT EXISTS check_transfer_monthly_positive 
-CHECK (transfer_bytes_used_month >= 0),
+-- Constraints (idempotent: only add if not exists)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'check_transfer_monthly_positive'
+    ) THEN
+        ALTER TABLE user_plans
+        ADD CONSTRAINT check_transfer_monthly_positive 
+        CHECK (transfer_bytes_used_month >= 0);
+    END IF;
 
-ADD CONSTRAINT IF NOT EXISTS check_transfer_lifetime_positive 
-CHECK (transfer_bytes_used_lifetime >= 0),
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'check_transfer_lifetime_positive'
+    ) THEN
+        ALTER TABLE user_plans
+        ADD CONSTRAINT check_transfer_lifetime_positive 
+        CHECK (transfer_bytes_used_lifetime >= 0);
+    END IF;
 
-ADD CONSTRAINT IF NOT EXISTS check_max_file_positive 
-CHECK (max_file_bytes > 0);
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'check_max_file_positive'
+    ) THEN
+        ALTER TABLE user_plans
+        ADD CONSTRAINT check_max_file_positive 
+        CHECK (max_file_bytes > 0);
+    END IF;
 
--- Constraint: FREE plans must have lifetime limits
-ALTER TABLE user_plans
-ADD CONSTRAINT IF NOT EXISTS check_free_has_lifetime
-CHECK (
-    plan != 'free' OR (
-        transfer_bytes_limit_lifetime IS NOT NULL 
-        AND total_lifetime_copies IS NOT NULL
-    )
-);
-
--- Constraint: PAID plans must have monthly limits
-ALTER TABLE user_plans
-ADD CONSTRAINT IF NOT EXISTS check_paid_has_monthly
-CHECK (
-    plan NOT IN ('plus', 'pro') OR (
-        transfer_bytes_limit_month IS NOT NULL 
-        AND copies_limit_month IS NOT NULL
-    )
-);
+    -- NOTE: check_free_has_lifetime and check_paid_has_monthly constraints
+    -- are added in backfill_billing_bytes.sql AFTER populating values
+END $$;
 
 -- Comments
 COMMENT ON COLUMN user_plans.plan IS 'Source of truth: free, plus, pro. Use this for limit lookups.';

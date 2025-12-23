@@ -89,6 +89,38 @@ BEGIN
     END IF;
 END $$;
 
+-- Step 4: Add data-dependent constraints (now that values are populated)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'check_free_has_lifetime'
+    ) THEN
+        ALTER TABLE user_plans
+        ADD CONSTRAINT check_free_has_lifetime
+        CHECK (
+            plan != 'free' OR (
+                transfer_bytes_limit_lifetime IS NOT NULL 
+                AND total_lifetime_copies IS NOT NULL
+            )
+        );
+        RAISE NOTICE '✓ Added constraint: check_free_has_lifetime';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'check_paid_has_monthly'
+    ) THEN
+        ALTER TABLE user_plans
+        ADD CONSTRAINT check_paid_has_monthly
+        CHECK (
+            plan NOT IN ('plus', 'pro') OR (
+                transfer_bytes_limit_month IS NOT NULL 
+                AND copies_limit_month IS NOT NULL
+            )
+        );
+        RAISE NOTICE '✓ Added constraint: check_paid_has_monthly';
+    END IF;
+END $$;
+
 COMMIT;
 
 -- Post-migration verification query (run manually)

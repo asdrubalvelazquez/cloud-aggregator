@@ -8,13 +8,25 @@ ALTER TABLE copy_jobs
 ADD COLUMN IF NOT EXISTS bytes_copied BIGINT NOT NULL DEFAULT 0,
 ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
 
--- Constraints
-ALTER TABLE copy_jobs
-ADD CONSTRAINT IF NOT EXISTS check_bytes_copied_positive 
-CHECK (bytes_copied >= 0),
+-- Constraints (idempotent: only add if not exists)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'check_bytes_copied_positive'
+    ) THEN
+        ALTER TABLE copy_jobs
+        ADD CONSTRAINT check_bytes_copied_positive 
+        CHECK (bytes_copied >= 0);
+    END IF;
 
-ADD CONSTRAINT IF NOT EXISTS check_completed_after_created 
-CHECK (completed_at IS NULL OR completed_at >= created_at);
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'check_completed_after_created'
+    ) THEN
+        ALTER TABLE copy_jobs
+        ADD CONSTRAINT check_completed_after_created 
+        CHECK (completed_at IS NULL OR completed_at >= created_at);
+    END IF;
+END $$;
 
 -- Index for analytics
 CREATE INDEX IF NOT EXISTS idx_copy_jobs_bytes 
