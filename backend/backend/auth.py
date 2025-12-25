@@ -6,7 +6,7 @@ import jwt
 from typing import Optional
 from fastapi import Header, HTTPException
 from supabase import create_client, Client
-from supabase.lib.client_options import ClientOptions
+from supabase.lib.client_options import SyncClientOptions
 
 # Secret para firmar el state JWT (debe ser el mismo que SUPABASE_JWT_SECRET)
 JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "your-super-secret-jwt-key")
@@ -125,5 +125,5 @@ def create_user_scoped_client(jwt_token: str) -> Client:
     if not jwt_token or not jwt_token.strip():
         raise ValueError("jwt_token is required")
 
-    options = ClientOptions(headers={"Authorization": f"Bearer {jwt_token.strip()}"})
+    options = SyncClientOptions(headers={"Authorization": f"Bearer {jwt_token.strip()}"})
     return create_client(SUPABASE_URL, SUPABASE_ANON_KEY, options=options)

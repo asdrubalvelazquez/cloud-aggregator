@@ -2,7 +2,7 @@
 Helper functions for Google Drive API interactions
 """
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dateutil import parser as dateutil_parser
 import httpx
 
@@ -16,7 +16,13 @@ async def get_valid_token(account_id: int) -> str:
     """
     Get a valid access token for the account.
     If expired, refresh it automatically.
+    Raises HTTPException(401) if token is missing or refresh fails.
     """
+    import logging
+    from fastapi import HTTPException
+    
+    logger = logging.getLogger(__name__)
+    
     # Get account from database
     resp = supabase.table("cloud_accounts").select("*").eq("id", account_id).single().execute()
     account = resp.data
@@ -24,50 +30,147 @@ async def get_valid_token(account_id: int) -> str:
     if not account:
         raise ValueError(f"Account {account_id} not found")
 
-    # Check if token is expired
+    access_token = account.get("access_token")
+    account_email = account.get("account_email", "unknown")
+    
+    # CRITICAL: Validate token exists before checking expiry
+    if not access_token or not access_token.strip():
+        logger.error(f"[TOKEN ERROR] account_id={account_id} email={account_email} has empty access_token")
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "message": "Google Drive token missing. Please reconnect your account.",
+                "account_email": account_email,
+                "needs_reconnect": True
+            }
+        )
+
+    # Check if token is expired (with 60s buffer to avoid race conditions)
     token_expiry = account.get("token_expiry")
+    needs_refresh = False
+    
     if token_expiry:
         expiry_dt = dateutil_parser.parse(token_expiry)
         now = datetime.now(timezone.utc)
+        buffer = timedelta(seconds=60)
         
-        # If token is still valid (with 5 min buffer), return it
-        if expiry_dt > now:
-            return account["access_token"]
+        # If token expires in less than 60s, refresh it proactively
+        if expiry_dt <= (now + buffer):
+            needs_refresh = True
+            logger.info(f"[TOKEN REFRESH] account_id={account_id} token expires soon, refreshing")
+    else:
+        # No expiry info - refresh to be safe
+        needs_refresh = True
+        logger.warning(f"[TOKEN REFRESH] account_id={account_id} has no token_expiry, refreshing")
 
-    # Token expired, refresh it
+    if not needs_refresh:
+        return access_token
+
+    # Token expired or missing expiry - refresh it
     refresh_token = account.get("refresh_token")
     if not refresh_token:
-        raise ValueError(f"No refresh token available for account {account_id}")
-
-    # Request new access token
-    async with httpx.AsyncClient() as client:
-        token_res = await client.post(
-            GOOGLE_TOKEN_ENDPOINT,
-            data={
-                "client_id": os.getenv("GOOGLE_CLIENT_ID"),
-                "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
-                "refresh_token": refresh_token,
-                "grant_type": "refresh_token",
+        logger.error(f"[TOKEN ERROR] account_id={account_id} email={account_email} has no refresh_token")
+        # Mark account as needing reconnection
+        supabase.table("cloud_accounts").update({
+            "is_active": False,
+            "disconnected_at": datetime.now(timezone.utc).isoformat()
+        }).eq("id", account_id).execute()
+        
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "message": "Google Drive refresh token missing. Please reconnect your account.",
+                "account_email": account_email,
+                "needs_reconnect": True
             }
         )
-        token_json = token_res.json()
+
+    # Request new access token
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            token_res = await client.post(
+                GOOGLE_TOKEN_ENDPOINT,
+                data={
+                    "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+                    "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+                    "refresh_token": refresh_token,
+                    "grant_type": "refresh_token",
+                }
+            )
+            
+            # Handle refresh errors (invalid_grant, revoked token, etc.)
+            if token_res.status_code != 200:
+                error_data = token_res.json() if token_res.headers.get("content-type", "").startswith("application/json") else {}
+                error_type = error_data.get("error", "unknown")
+                
+                logger.error(
+                    f"[TOKEN REFRESH FAILED] account_id={account_id} email={account_email} "
+                    f"status={token_res.status_code} error={error_type}"
+                )
+                
+                # Mark account as needing reconnection
+                supabase.table("cloud_accounts").update({
+                    "is_active": False,
+                    "disconnected_at": datetime.now(timezone.utc).isoformat()
+                }).eq("id", account_id).execute()
+                
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "message": f"Google Drive token expired or revoked. Please reconnect your account. (Error: {error_type})",
+                        "account_email": account_email,
+                        "needs_reconnect": True,
+                        "error_type": error_type
+                    }
+                )
+            
+            # Parse JSON response (success case)
+            try:
+                token_json = token_res.json()
+            except Exception as json_err:
+                logger.error(f"[TOKEN REFRESH ERROR] account_id={account_id} invalid JSON response: {str(json_err)}")
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "message": "Invalid token refresh response",
+                        "account_email": account_email
+                    }
+                )
+    except httpx.HTTPError as e:
+        logger.error(f"[TOKEN REFRESH ERROR] account_id={account_id} network error: {str(e)}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "Failed to refresh Google Drive token. Network error.",
+                "account_email": account_email
+            }
+        )
 
     new_access_token = token_json.get("access_token")
     expires_in = token_json.get("expires_in", 3600)
 
     if not new_access_token:
-        raise ValueError(f"Failed to refresh token: {token_json}")
+        logger.error(f"[TOKEN REFRESH FAILED] account_id={account_id} no access_token in response")
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "message": "Google Drive token refresh failed. Please reconnect your account.",
+                "account_email": account_email,
+                "needs_reconnect": True
+            }
+        )
 
     # Calculate new expiry
-    from datetime import timedelta
     new_expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
-    # Update database
+    # Update database with new token and expiry
     supabase.table("cloud_accounts").update({
         "access_token": new_access_token,
         "token_expiry": new_expiry.isoformat(),
+        "is_active": True,  # Reactivate if was marked inactive
     }).eq("id", account_id).execute()
 
+    logger.info(f"[TOKEN REFRESH SUCCESS] account_id={account_id} new_expiry={new_expiry.isoformat()}")
     return new_access_token
 
 
