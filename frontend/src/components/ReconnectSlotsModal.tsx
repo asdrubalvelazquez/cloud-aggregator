@@ -298,7 +298,7 @@ export default function ReconnectSlotsModal({
                               handleReconnect(account);
                             }}
                             disabled={reconnecting === account.slot_log_id}
-                            className="ml-4 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition shadow-lg shadow-emerald-500/20"
+                            className="ml-4 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-all shadow-lg shadow-emerald-400/50 border-2 border-emerald-400/60 hover:shadow-xl hover:shadow-emerald-400/60 hover:border-emerald-300"
                           >
                             {reconnecting === account.slot_log_id ? "Redirigiendo..." : "Reconectar"}
                           </button>
