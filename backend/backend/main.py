@@ -299,22 +299,37 @@ async def google_callback(request: Request):
     # Handle reconnect mode: verify account match and skip slot consumption
     if mode == "reconnect":
         if google_account_id != reconnect_account_id:
-            logging.error(f"[RECONNECT ERROR] Account mismatch: expected {reconnect_account_id}, got {google_account_id}")
+            logging.error(
+                f"[RECONNECT ERROR] Account mismatch: "
+                f"expected={reconnect_account_id} got={google_account_id} "
+                f"user_id={user_id} slot_lookup={reconnect_account_id}"
+            )
             return RedirectResponse(f"{FRONTEND_URL}/app?error=account_mismatch")
         
-        # Update or create cloud_account (reconnect)
+        # Update or create cloud_account
         existing_account = supabase.table("cloud_accounts").select("id").eq("user_id", user_id).eq("google_account_id", google_account_id).limit(1).execute()
         
         if existing_account.data:
             # UPDATE existing account with new tokens
             account_id = existing_account.data[0]["id"]
-            update_result = supabase.table("cloud_accounts").update({
+            
+            # CRITICAL: Solo actualizar refresh_token si viene uno nuevo
+            # Google NO devuelve refresh_token en reconexiones subsecuentes
+            update_payload = {
                 "access_token": access_token,
-                "refresh_token": refresh_token,
                 "token_expiry": expiry_iso,
                 "is_active": True,
                 "disconnected_at": None,
-            }).eq("id", account_id).execute()
+            }
+            
+            # Solo actualizar refresh_token si viene un valor real (no None)
+            if refresh_token:
+                update_payload["refresh_token"] = refresh_token
+                logging.info(f"[RECONNECT] Got new refresh_token for account_id={account_id}")
+            else:
+                logging.info(f"[RECONNECT] No new refresh_token, keeping existing one for account_id={account_id}")
+            
+            update_result = supabase.table("cloud_accounts").update(update_payload).eq("id", account_id).execute()
             
             rows_updated = len(update_result.data) if update_result.data else 0
             if rows_updated == 0:
@@ -327,7 +342,8 @@ async def google_callback(request: Request):
                     f"[RECONNECT SUCCESS - cloud_accounts] "
                     f"user_id={user_id} account_id={account_id} "
                     f"google_account_id={google_account_id} email={account_email} "
-                    f"rows_updated={rows_updated} is_active=True disconnected_at=None"
+                    f"rows_updated={rows_updated} is_active=True disconnected_at=None "
+                    f"refresh_token_updated={bool(refresh_token)}"
                 )
         else:
             # CREATE new cloud_account (edge case: account deleted but slot exists)
@@ -359,23 +375,26 @@ async def google_callback(request: Request):
                 f"google_account_id={google_account_id} email={account_email}"
             )
         
-        # Ensure slot is active
+        # Ensure slot is active and update provider info
         slot_update = supabase.table("cloud_slots_log").update({
             "is_active": True,
-            "disconnected_at": None
+            "disconnected_at": None,
+            "provider_email": account_email,
         }).eq("user_id", user_id).eq("provider_account_id", google_account_id).execute()
         
         slots_updated = len(slot_update.data) if slot_update.data else 0
         if slots_updated == 0:
             logging.warning(
                 f"[RECONNECT WARNING] cloud_slots_log UPDATE affected 0 rows. "
-                f"user_id={user_id} google_account_id={google_account_id}"
+                f"user_id={user_id} provider_account_id={google_account_id} "
+                f"This may indicate slot was deleted or provider_account_id mismatch"
             )
         else:
             logging.info(
                 f"[RECONNECT SUCCESS - cloud_slots_log] "
                 f"user_id={user_id} google_account_id={google_account_id} "
-                f"email={account_email} slots_updated={slots_updated}"
+                f"email={account_email} slots_updated={slots_updated} "
+                f"is_active=True disconnected_at=None"
             )
         
         return RedirectResponse(f"{FRONTEND_URL}/app?reconnect=success")

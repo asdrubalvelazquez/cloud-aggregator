@@ -52,6 +52,12 @@ export default function ReconnectSlotsModal({
   };
 
   const handleReconnect = async (account: CloudAccountStatus) => {
+    // Prevenir navegación si ya está reconectando
+    if (reconnecting) {
+      console.log("[RECONNECT] Already reconnecting, ignoring click");
+      return;
+    }
+    
     // Verificar que hay sesión activa
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.user?.id) {
@@ -63,6 +69,7 @@ export default function ReconnectSlotsModal({
       setReconnecting(account.slot_log_id);
       setError(null);
       
+      console.log("[RECONNECT] Fetching OAuth URL for:", account.provider_email, account.provider_account_id);
       // Fetch OAuth URL with reconnect mode
       const { url } = await fetchGoogleLoginUrl({ 
         mode: "reconnect",
@@ -200,9 +207,16 @@ export default function ReconnectSlotsModal({
                             )}
                           </div>
                           <button
-                            onClick={() => handleReconnect(account)}
+                            onClick={(e) => {
+                              if (reconnecting === account.slot_log_id) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                return;
+                              }
+                              handleReconnect(account);
+                            }}
                             disabled={reconnecting === account.slot_log_id}
-                            className="ml-4 px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-600 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition"
+                            className="ml-4 px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition"
                           >
                             {reconnecting === account.slot_log_id ? "Redirigiendo..." : "Reconectar"}
                           </button>
@@ -242,9 +256,16 @@ export default function ReconnectSlotsModal({
                             </p>
                           </div>
                           <button
-                            onClick={() => handleReconnect(account)}
+                            onClick={(e) => {
+                              if (reconnecting === account.slot_log_id) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                return;
+                              }
+                              handleReconnect(account);
+                            }}
                             disabled={reconnecting === account.slot_log_id}
-                            className="ml-4 px-4 py-2 bg-slate-600 hover:bg-slate-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition"
+                            className="ml-4 px-4 py-2 bg-slate-600 hover:bg-slate-500 disabled:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition"
                           >
                             {reconnecting === account.slot_log_id ? "Redirigiendo..." : "Reconectar"}
                           </button>
