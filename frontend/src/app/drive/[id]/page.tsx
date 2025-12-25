@@ -211,7 +211,33 @@ export default function DriveFilesPage() {
         try {
           errorData = await res.json();
           correlationId = errorData.correlation_id || errorData.detail?.correlation_id || "N/A";
-          errorMessage = errorData.message || errorData.detail?.message || errorData.detail || "Error desconocido";
+          
+          // Handle structured error detail (may be string or object)
+          const detail = errorData.detail || errorData;
+          
+          // Special handling for 413 FILE_TOO_LARGE
+          if (res.status === 413 && detail.code === "FILE_TOO_LARGE") {
+            const fileSizeGB = detail.file?.size_gb || 0;
+            const limitGB = detail.limits?.max_file_gb || 0;
+            const excessGB = (fileSizeGB - limitGB).toFixed(2);
+            const planTier = detail.plan?.tier || "FREE";
+            const suggestedPlan = detail.action?.to || "PLUS";
+            
+            errorMessage = `Archivo demasiado grande para tu plan ${planTier}. ` +
+              `Tamaño: ${fileSizeGB}GB, Límite: ${limitGB}GB (excede por ${excessGB}GB). ` +
+              `Actualiza a plan ${suggestedPlan} para archivos más grandes.`;
+          } 
+          // Generic message extraction (handle both string and object detail)
+          else if (typeof detail === "string") {
+            errorMessage = detail;
+          } else if (detail.message) {
+            errorMessage = detail.message;
+          } else if (typeof detail === "object") {
+            // Fallback: stringify object if no message field
+            errorMessage = JSON.stringify(detail);
+          } else {
+            errorMessage = errorData.message || "Error desconocido";
+          }
         } catch {
           // If JSON parse fails, use text response
           const textResponse = await res.text().catch(() => "Error desconocido");
