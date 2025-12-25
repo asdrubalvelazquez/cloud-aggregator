@@ -131,6 +131,17 @@ function DashboardContent() {
   const fetchCloudStatusData = async () => {
     try {
       const data = await fetchCloudStatus();
+      // TEMPORAL DEBUG: Verificar que needs_reconnect baja después de reconectar
+      console.log("[DEBUG - fetchCloudStatus]", {
+        connected: data.summary.connected,
+        needs_reconnect: data.summary.needs_reconnect,
+        disconnected: data.summary.disconnected,
+        accounts: data.accounts.map(a => ({
+          email: a.provider_email,
+          status: a.connection_status,
+          reason: a.reason,
+        }))
+      });
       setCloudStatus(data);
     } catch (e) {
       console.error("Failed to fetch cloud status:", e);
@@ -151,8 +162,8 @@ function DashboardContent() {
     // Verificar si el usuario acaba de autenticarse (usando searchParams)
     const authStatus = searchParams?.get("auth");
     const authError = searchParams?.get("error");
+    const reconnectStatus = searchParams?.get("reconnect");
     const allowedParam = searchParams?.get("allowed");
-  fetchBillingQuota();
       
     if (authStatus === "success") {
       setToast({
@@ -165,6 +176,21 @@ function DashboardContent() {
       setTimeout(() => {
         fetchSummary();
         fetchQuota();
+        fetchBillingQuota();
+        fetchCloudStatusData();
+      }, 1000);
+    } else if (reconnectStatus === "success") {
+      setToast({
+        message: "✅ Cuenta reconectada exitosamente",
+        type: "success",
+      });
+      // Limpiar URL sin recargar la página
+      window.history.replaceState({}, "", window.location.pathname);
+      // CRITICAL: Refrescar todos los datos para actualizar needs_reconnect
+      setTimeout(() => {
+        fetchSummary();
+        fetchQuota();
+        fetchBillingQuota();
         fetchCloudStatusData();
       }, 1000);
     } else if (authError === "cloud_limit_reached") {
