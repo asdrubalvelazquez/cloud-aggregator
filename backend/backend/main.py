@@ -1,9 +1,11 @@
 import os
 import hashlib
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import httpx
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -494,9 +496,23 @@ async def copy_file(http_request: Request, payload: CopyFileRequest, user_id: st
     Detects duplicates first, then enforces quota limits.
     Returns job_id and quota info.
     """
+    # Generate correlation ID for request tracing
+    correlation_id = str(uuid.uuid4())
+    logger = logging.getLogger(__name__)
+    
     job_id = None
+    file_name = None
+    mime_type = None
+    file_size_bytes = None
     
     try:
+        # Log request start
+        logger.info(
+            f"[COPY START] correlation_id={correlation_id} user_id={user_id} "
+            f"source_account_id={payload.source_account_id} target_account_id={payload.target_account_id} "
+            f"file_id={payload.file_id}"
+        )
+        
         # 0. Extract/validate Authorization header EARLY to avoid inconsistent states
         # (e.g., file copied but RPC fails due to missing/invalid header)
         authorization = http_request.headers.get("authorization") or http_request.headers.get("Authorization")
@@ -539,7 +555,15 @@ async def copy_file(http_request: Request, payload: CopyFileRequest, user_id: st
         # 2. Get source file metadata for duplicate detection
         from backend.google_drive import get_file_metadata, find_duplicate_file
         source_metadata = await get_file_metadata(payload.source_account_id, payload.file_id)
+        file_name = source_metadata.get("name", "unknown")
+        mime_type = source_metadata.get("mimeType", "unknown")
         file_size_bytes = int(source_metadata.get("size", 0))
+        
+        # Log file metadata
+        logger.info(
+            f"[FILE METADATA] correlation_id={correlation_id} file_name={file_name} "
+            f"mime_type={mime_type} size_bytes={file_size_bytes}"
+        )
         
         # 3. Check if file already exists in target account BEFORE checking quota/rate limits
         duplicate = await find_duplicate_file(
@@ -552,6 +576,7 @@ async def copy_file(http_request: Request, payload: CopyFileRequest, user_id: st
         
         if duplicate:
             # File already exists - don't consume quota, don't create job, don't check rate limits
+            logger.info(f"[DUPLICATE FOUND] correlation_id={correlation_id} file already exists in target account")
             # Get current quota for response (read-only, doesn't modify)
             quota_info = quota.get_user_quota_info(supabase, user_id)
             return {
@@ -559,7 +584,8 @@ async def copy_file(http_request: Request, payload: CopyFileRequest, user_id: st
                 "message": "Archivo ya existe en cuenta destino",
                 "duplicate": True,
                 "file": duplicate,
-                "quota": quota_info
+                "quota": quota_info,
+                "correlation_id": correlation_id
             }
         
         # 4. NOT a duplicate - validate file size limit
@@ -567,6 +593,7 @@ async def copy_file(http_request: Request, payload: CopyFileRequest, user_id: st
         
         # 4.5. Check transfer bandwidth availability
         transfer_quota = quota.check_transfer_bytes_available(supabase, user_id, file_size_bytes)
+        logger.info(f"[QUOTA CHECK] correlation_id={correlation_id} transfer_quota_ok={transfer_quota}")
         
         # 5. Check rate limit
         quota.check_rate_limit(supabase, user_id)
@@ -583,6 +610,7 @@ async def copy_file(http_request: Request, payload: CopyFileRequest, user_id: st
             file_id=payload.file_id,
             file_name=source_metadata.get("name")
         )
+        logger.info(f"[JOB CREATED] correlation_id={correlation_id} job_id={job_id}")
         
         # 8. Get tokens with auto-refresh
         from backend.google_drive import get_valid_token
@@ -590,6 +618,7 @@ async def copy_file(http_request: Request, payload: CopyFileRequest, user_id: st
         await get_valid_token(payload.target_account_id)
         
         # 9. Execute actual copy
+        logger.info(f"[COPY EXECUTE] correlation_id={correlation_id} starting file transfer")
         result = await copy_file_between_accounts(
             source_account_id=payload.source_account_id,
             target_account_id=payload.target_account_id,
@@ -598,6 +627,7 @@ async def copy_file(http_request: Request, payload: CopyFileRequest, user_id: st
         
         # 10. Get actual bytes copied from result (fallback to metadata)
         actual_bytes = int(result.get("size", file_size_bytes))
+        logger.info(f"[COPY SUCCESS] correlation_id={correlation_id} bytes_copied={actual_bytes}")
         
         # 11. Mark job as success AND increment quota atomically via RPC (USER-SCOPED for auth.uid())
         rpc_result = user_client.rpc("complete_copy_job_success_and_increment_usage", {
@@ -609,7 +639,7 @@ async def copy_file(http_request: Request, payload: CopyFileRequest, user_id: st
         if rpc_result.data and len(rpc_result.data) > 0:
             rpc_status = rpc_result.data[0]
             if not rpc_status.get("success"):
-                logging.warning(f"RPC returned non-success: {rpc_status.get('message')}")
+                logger.warning(f"[RPC WARNING] correlation_id={correlation_id} {rpc_status.get('message')}")
         
         # 12. Get updated quota
         updated_quota = quota.get_user_quota_info(supabase, user_id)
@@ -620,26 +650,93 @@ async def copy_file(http_request: Request, payload: CopyFileRequest, user_id: st
             "message": "File copied successfully",
             "file": result,
             "job_id": job_id,
-            "quota": updated_quota
+            "quota": updated_quota,
+            "correlation_id": correlation_id
         }
         
     except HTTPException as e:
         # Quota exceeded or auth error - mark job as failed if created
+        logger.error(
+            f"[COPY FAILED] correlation_id={correlation_id} HTTPException status={e.status_code} "
+            f"detail={e.detail} file_name={file_name}"
+        )
         if job_id:
             quota.complete_copy_job_failed(supabase, job_id, str(e.detail))
-        raise
+        # Re-raise with correlation_id in detail
+        raise HTTPException(
+            status_code=e.status_code,
+            detail={
+                "message": str(e.detail) if isinstance(e.detail, str) else e.detail,
+                "correlation_id": correlation_id
+            }
+        )
+    
+    except httpx.HTTPStatusError as e:
+        # Google Drive API errors (401, 403, 404, 429, etc.)
+        response_text = e.response.text[:500] if hasattr(e.response, 'text') else "N/A"
+        logger.error(
+            f"[GOOGLE API ERROR] correlation_id={correlation_id} "
+            f"status={e.response.status_code} url={e.request.url} "
+            f"response_body={response_text} file_name={file_name}"
+        )
+        if job_id:
+            quota.complete_copy_job_failed(supabase, job_id, f"Google API error: {e.response.status_code}")
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail={
+                "message": f"Google Drive API error: {e.response.status_code}. El archivo podría ser inaccesible o el token expiró.",
+                "correlation_id": correlation_id,
+                "upstream_status": e.response.status_code
+            }
+        )
+    
+    except httpx.TimeoutException as e:
+        # Timeout during download/upload
+        logger.error(
+            f"[TIMEOUT ERROR] correlation_id={correlation_id} "
+            f"error={str(e)} file_name={file_name} size_bytes={file_size_bytes}"
+        )
+        if job_id:
+            quota.complete_copy_job_failed(supabase, job_id, "Timeout: File transfer took too long")
+        raise HTTPException(
+            status_code=504,
+            detail={
+                "message": "La copia excedió el tiempo límite. El archivo podría ser demasiado grande o la conexión es lenta.",
+                "correlation_id": correlation_id
+            }
+        )
         
     except ValueError as e:
         # Validation error - mark job as failed if created
+        logger.error(
+            f"[VALIDATION ERROR] correlation_id={correlation_id} "
+            f"error={str(e)} file_name={file_name}"
+        )
         if job_id:
             quota.complete_copy_job_failed(supabase, job_id, str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": str(e),
+                "correlation_id": correlation_id
+            }
+        )
         
     except Exception as e:
-        # Generic error - mark job as failed if created
+        # Generic unexpected error
+        logger.exception(
+            f"[COPY FAILED - UNEXPECTED] correlation_id={correlation_id} "
+            f"error_type={type(e).__name__} error={str(e)} file_name={file_name}"
+        )
         if job_id:
             quota.complete_copy_job_failed(supabase, job_id, str(e))
-        raise HTTPException(status_code=500, detail=f"Copy failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": f"Error inesperado al copiar archivo: {str(e)}",
+                "correlation_id": correlation_id
+            }
+        )
 
 
 @app.get("/me/plan")

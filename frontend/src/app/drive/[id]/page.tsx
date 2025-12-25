@@ -203,17 +203,35 @@ export default function DriveFilesPage() {
       if (!res.ok) {
         clearInterval(progressInterval);
         
-        // Errores de cuota y rate limit
-        if (res.status === 402 || res.status === 429) {
-          const errorData = await res.json().catch(() => ({}));
-          const message = errorData.detail?.message || errorData.detail || 
-            (res.status === 429 
-              ? "Demasiadas copias en poco tiempo. Espera un momento." 
-              : "Has alcanzado el límite de copias este mes. Actualiza tu plan.");
-          throw new Error(message);
+        // Parse error response with correlation_id (try JSON, fallback to text)
+        let errorData: any = {};
+        let errorMessage = "Error desconocido";
+        let correlationId = "N/A";
+        
+        try {
+          errorData = await res.json();
+          correlationId = errorData.correlation_id || errorData.detail?.correlation_id || "N/A";
+          errorMessage = errorData.message || errorData.detail?.message || errorData.detail || "Error desconocido";
+        } catch {
+          // If JSON parse fails, use text response
+          const textResponse = await res.text().catch(() => "Error desconocido");
+          errorMessage = textResponse;
         }
         
-        throw new Error(`Error: ${res.status}`);
+        // Log detailed error info to console for debugging
+        console.error("[COPY ERROR]", {
+          status: res.status,
+          correlationId,
+          fileName,
+          fileId,
+          sourceAccountId: parseInt(accountId),
+          targetAccountId: targetId,
+          errorData,
+          timestamp: new Date().toISOString()
+        });
+        
+        // Throw error with proper status code and correlation_id
+        throw new Error(`Error ${res.status}: ${errorMessage} (ID: ${correlationId})`);
       }
 
       const result = await res.json();
@@ -240,10 +258,18 @@ export default function DriveFilesPage() {
         resetCopy();
       }, displayDuration);
     } catch (e: any) {
+      // Log exception to console
+      console.error("[COPY EXCEPTION]", {
+        error: e.message,
+        fileName,
+        fileId,
+        timestamp: new Date().toISOString()
+      });
+      
       if (e.name === "AbortError") {
         cancelCopyGlobal("❌ Copia cancelada");
       } else {
-        cancelCopyGlobal(`❌ Error: ${e.message}`);
+        cancelCopyGlobal(`❌ ${e.message}`);
       }
       setTimeout(() => {
         setShowCopyModal(false);

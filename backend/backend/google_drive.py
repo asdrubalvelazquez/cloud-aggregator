@@ -294,10 +294,18 @@ async def copy_file_between_accounts(
     Uses streaming to avoid loading large files entirely in memory.
     Returns metadata of the newly created file in target account.
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     # 1. Get file metadata from source
     metadata = await get_file_metadata(source_account_id, file_id)
     file_name = metadata.get("name", "copied_file")
     mime_type = metadata.get("mimeType", "application/octet-stream")
+    
+    logger.info(
+        f"[DRIVE COPY] Starting copy: source_account={source_account_id} "
+        f"target_account={target_account_id} file={file_name} mime={mime_type}"
+    )
     
     source_token = await get_valid_token(source_account_id)
     target_token = await get_valid_token(target_account_id)
@@ -307,6 +315,7 @@ async def copy_file_between_accounts(
         # Google Workspace files need export
         if mime_type.startswith("application/vnd.google-apps."):
             export_mime = "application/pdf"
+            logger.info(f"[DRIVE COPY] Exporting Google Workspace file: {file_name} as {export_mime}")
             download_resp = await client.get(
                 f"{GOOGLE_DRIVE_API_BASE}/files/{file_id}/export",
                 params={"mimeType": export_mime},
@@ -316,6 +325,7 @@ async def copy_file_between_accounts(
             mime_type = "application/pdf"
         else:
             # Regular files
+            logger.info(f"[DRIVE COPY] Downloading regular file: {file_name}")
             download_resp = await client.get(
                 f"{GOOGLE_DRIVE_API_BASE}/files/{file_id}",
                 params={"alt": "media"},
@@ -324,12 +334,14 @@ async def copy_file_between_accounts(
         
         download_resp.raise_for_status()
         file_bytes = download_resp.content
+        logger.info(f"[DRIVE COPY] Downloaded {len(file_bytes)} bytes from source")
     
     # 3. Upload to target account
     metadata_obj = {"name": file_name}
     
     async with httpx.AsyncClient(timeout=120.0) as client:
         # Multipart upload
+        logger.info(f"[DRIVE COPY] Uploading {len(file_bytes)} bytes to target account")
         files = {
             "metadata": (None, str(metadata_obj).replace("'", '"'), "application/json"),
             "file": (file_name, file_bytes, mime_type)
@@ -343,6 +355,7 @@ async def copy_file_between_accounts(
         upload_resp.raise_for_status()
         new_file = upload_resp.json()
     
+    logger.info(f"[DRIVE COPY] Upload complete: new_file_id={new_file.get('id')}")
     return new_file
 
 
