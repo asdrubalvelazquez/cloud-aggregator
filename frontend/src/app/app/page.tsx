@@ -128,14 +128,15 @@ function DashboardContent() {
     }
   };
 
-  const fetchCloudStatusData = async () => {
+  const fetchCloudStatusData = async (forceRefresh = false) => {
     try {
-      const data = await fetchCloudStatus();
+      const data = await fetchCloudStatus(forceRefresh);
       // TEMPORAL DEBUG: Verificar que needs_reconnect baja después de reconectar
       console.log("[DEBUG - fetchCloudStatus]", {
         connected: data.summary.connected,
         needs_reconnect: data.summary.needs_reconnect,
         disconnected: data.summary.disconnected,
+        forceRefresh,
         accounts: data.accounts.map(a => ({
           email: a.provider_email,
           status: a.connection_status,
@@ -186,12 +187,12 @@ function DashboardContent() {
       });
       // Limpiar URL sin recargar la página
       window.history.replaceState({}, "", window.location.pathname);
-      // CRITICAL: Refrescar todos los datos para actualizar needs_reconnect
+      // CRITICAL: Refrescar todos los datos con cache: 'no-store' para actualizar needs_reconnect
       setTimeout(() => {
         fetchSummary();
         fetchQuota();
         fetchBillingQuota();
-        fetchCloudStatusData();
+        fetchCloudStatusData(true);  // forceRefresh = true
       }, 1000);
     } else if (authError === "cloud_limit_reached") {
       setToast({

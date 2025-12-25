@@ -166,11 +166,13 @@ def google_login_url(
             logging.error(f"[QUOTA CHECK ERROR] user_id={user_id} error={str(e)}")
             raise HTTPException(status_code=500, detail="Failed to check quota")
     
-    # For reconnect: verify slot exists
+    # For reconnect: verify slot exists and get email for login_hint
+    reconnect_email = None
     if mode == "reconnect":
-        slot_check = supabase.table("cloud_slots_log").select("id").eq("user_id", user_id).eq("provider_account_id", reconnect_account_id).limit(1).execute()
+        slot_check = supabase.table("cloud_slots_log").select("id,provider_email").eq("user_id", user_id).eq("provider_account_id", reconnect_account_id).limit(1).execute()
         if not slot_check.data:
             raise HTTPException(status_code=404, detail="Slot not found for this account")
+        reconnect_email = slot_check.data[0].get("provider_email")
     
     # OAuth Prompt Strategy (Google best practices):
     # - Default: "select_account" (mejor UX, no agresivo)
@@ -190,6 +192,10 @@ def google_login_url(
         "prompt": oauth_prompt,
         "include_granted_scopes": "true",  # Incremental authorization (Google best practice)
     }
+    
+    # Agregar login_hint para reconnect (mejora UX y previene account_mismatch)
+    if mode == "reconnect" and reconnect_email:
+        params["login_hint"] = reconnect_email
     
     # Crear state JWT con user_id, mode, reconnect_account_id (seguro, firmado)
     state_token = create_state_token(user_id, mode=mode or "connect", reconnect_account_id=reconnect_account_id)
@@ -298,13 +304,27 @@ async def google_callback(request: Request):
     
     # Handle reconnect mode: verify account match and skip slot consumption
     if mode == "reconnect":
-        if google_account_id != reconnect_account_id:
+        # Normalizar IDs para comparación consistente
+        reconnect_account_id_normalized = str(reconnect_account_id).strip() if reconnect_account_id else ""
+        google_account_id_normalized = str(google_account_id).strip() if google_account_id else ""
+        
+        if google_account_id_normalized != reconnect_account_id_normalized:
+            # Obtener email esperado del slot para mejor UX
+            expected_email = "unknown"
+            try:
+                slot_info = supabase.table("cloud_slots_log").select("provider_email").eq("user_id", user_id).eq("provider_account_id", reconnect_account_id_normalized).limit(1).execute()
+                if slot_info.data:
+                    expected_email = slot_info.data[0].get("provider_email", "unknown")
+            except Exception:
+                pass
+            
             logging.error(
                 f"[RECONNECT ERROR] Account mismatch: "
-                f"expected={reconnect_account_id} got={google_account_id} "
-                f"user_id={user_id} slot_lookup={reconnect_account_id}"
+                f"expected_id={reconnect_account_id_normalized} got_id={google_account_id_normalized} "
+                f"expected_email={expected_email} got_email={account_email} "
+                f"user_id={user_id}"
             )
-            return RedirectResponse(f"{FRONTEND_URL}/app?error=account_mismatch")
+            return RedirectResponse(f"{FRONTEND_URL}/app?error=account_mismatch&expected={expected_email}")
         
         # Update or create cloud_account
         existing_account = supabase.table("cloud_accounts").select("id").eq("user_id", user_id).eq("google_account_id", google_account_id).limit(1).execute()
@@ -1026,40 +1046,57 @@ def classify_account_status(slot: dict, cloud_account: dict) -> dict:
             "can_reconnect": True
         }
     
-    # Caso 4: No tiene refresh_token (crítico para renovar acceso)
-    if not cloud_account.get("refresh_token"):
+    # Caso 4: Verificar token_expiry primero
+    token_expiry = cloud_account.get("token_expiry")
+    access_token = cloud_account.get("access_token")
+    refresh_token = cloud_account.get("refresh_token")
+    
+    # Calcular si el token está expirado (con buffer de 60s)
+    token_is_expired = False
+    if token_expiry:
+        try:
+            expiry_dt = datetime.fromisoformat(token_expiry.replace("Z", "+00:00"))
+            buffer = timedelta(seconds=60)
+            token_is_expired = expiry_dt < (datetime.now(timezone.utc) + buffer)
+        except (ValueError, AttributeError):
+            token_is_expired = True  # Invalid date format, assume expired
+    
+    # Caso 4a: Token expirado y NO hay refresh_token (bloqueante)
+    if token_is_expired and not refresh_token:
         return {
             "connection_status": "needs_reconnect",
-            "reason": "missing_refresh_token",
+            "reason": "token_expired_no_refresh",
             "can_reconnect": True
         }
     
-    # Caso 5: refresh_token existe pero access_token vacío
-    # (no crítico, se puede refresh, pero sospechoso)
-    if not cloud_account.get("access_token"):
+    # Caso 4b: Token expirado pero hay refresh_token (puede auto-renovarse)
+    if token_is_expired and refresh_token:
+        return {
+            "connection_status": "needs_reconnect",
+            "reason": "token_expired",
+            "can_reconnect": True
+        }
+    
+    # Caso 5: Token NO expirado pero falta access_token (sospechoso)
+    if not access_token:
         return {
             "connection_status": "needs_reconnect",
             "reason": "missing_access_token",
             "can_reconnect": True
         }
     
-    # Caso 6: Token expirado (verificar token_expiry)
-    token_expiry = cloud_account.get("token_expiry")
-    if token_expiry:
-        try:
-            expiry_dt = datetime.fromisoformat(token_expiry.replace("Z", "+00:00"))
-            if expiry_dt < datetime.now(timezone.utc):
-                # Token expirado PERO tenemos refresh_token → puede auto-renovarse
-                # Si no se ha renovado, probablemente refresh_token invalid_grant
-                return {
-                    "connection_status": "needs_reconnect",
-                    "reason": "token_expired",
-                    "can_reconnect": True
-                }
-        except (ValueError, AttributeError):
-            pass  # Invalid date format, skip check
+    # Caso 6: Token válido, access_token existe
+    # SI falta refresh_token PERO token NO expirado → connected (permisivo)
+    # El token actual funciona, solo requerirá reconexion cuando expire
+    if not refresh_token:
+        # Token funcional pero sin refresh_token (requiere atención futura)
+        return {
+            "connection_status": "connected",
+            "reason": "limited_no_refresh",  # Opcional: para UI informativa
+            "can_reconnect": False
+        }
     
-    # Caso 7: Todo OK
+    # Caso 7: Todo OK - token válido, access_token existe, puede o no tener refresh_token
     return {
         "connection_status": "connected",
         "reason": None,
@@ -1117,9 +1154,19 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
         
         for slot in slots_result.data:
             # 2. Try to find matching cloud_account
-            cloud_account_result = supabase.table("cloud_accounts").select("*").eq("user_id", user_id).eq("google_account_id", slot["provider_account_id"]).limit(1).execute()
+            # CRITICAL: Normalizar provider_account_id (strip) en ambos lados para evitar mismatch
+            slot_provider_id = str(slot["provider_account_id"]).strip() if slot.get("provider_account_id") else ""
             
-            cloud_account = cloud_account_result.data[0] if cloud_account_result.data else None
+            # Buscar por google_account_id normalizado
+            cloud_account_result = supabase.table("cloud_accounts").select("*").eq("user_id", user_id).execute()
+            
+            # Filtrar manualmente con normalización
+            cloud_account = None
+            for acc in (cloud_account_result.data or []):
+                acc_google_id = str(acc.get("google_account_id", "")).strip()
+                if acc_google_id == slot_provider_id:
+                    cloud_account = acc
+                    break
             
             # 3. Classify status
             status = classify_account_status(slot, cloud_account)

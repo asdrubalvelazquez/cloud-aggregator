@@ -25,6 +25,8 @@ export async function authenticatedFetch(
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
     headers,
+    // Permitir cache: 'no-store' para forzar refetch
+    cache: options.cache || 'default',
   });
 
   return response;
@@ -82,9 +84,12 @@ export type CloudStatusResponse = {
  * 
  * Returns connection status including whether accounts need reconnection,
  * helping distinguish between historical slots and actually usable accounts.
+ * 
+ * @param forceRefresh - If true, bypasses cache with cache: 'no-store'
  */
-export async function fetchCloudStatus(): Promise<CloudStatusResponse> {
-  const res = await authenticatedFetch("/me/cloud-status");
+export async function fetchCloudStatus(forceRefresh = false): Promise<CloudStatusResponse> {
+  const options: RequestInit = forceRefresh ? { cache: 'no-store' } : {};
+  const res = await authenticatedFetch("/me/cloud-status", options);
   if (!res.ok) {
     throw new Error(`Failed to fetch cloud status: ${res.status}`);
   }
