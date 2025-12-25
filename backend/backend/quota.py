@@ -739,7 +739,7 @@ def check_quota_available_hybrid(supabase: Client, user_id: str) -> Dict:
         }
 
 
-def check_file_size_limit_bytes(supabase: Client, user_id: str, file_size_bytes: int) -> None:
+def check_file_size_limit_bytes(supabase: Client, user_id: str, file_size_bytes: int, file_name: str = "archivo") -> None:
     """
     Validate file size against plan max_file_bytes limit.
     Raises HTTPException(413) if file too large.
@@ -748,20 +748,37 @@ def check_file_size_limit_bytes(supabase: Client, user_id: str, file_size_bytes:
         supabase: Supabase client
         user_id: User UUID
         file_size_bytes: File size in bytes
+        file_name: File name for error message
     """
     plan = get_or_create_user_plan(supabase, user_id)
+    plan_name = plan.get("plan", "free").upper()
     max_bytes = plan.get("max_file_bytes", 1_073_741_824)  # Default 1GB
     
     if file_size_bytes > max_bytes:
+        # Determine suggested upgrade plan
+        suggested_plan = "PLUS" if plan_name == "FREE" else "PRO"
+        
         raise HTTPException(
             status_code=413,  # Payload Too Large
             detail={
-                "error": "file_too_large",
-                "message": f"Archivo excede {bytes_to_gb(max_bytes):.0f}GB para tu plan.",
-                "file_size_bytes": file_size_bytes,
-                "file_size_gb": round(bytes_to_gb(file_size_bytes), 2),
-                "limit_bytes": max_bytes,
-                "limit_gb": round(bytes_to_gb(max_bytes), 1)
+                "code": "FILE_TOO_LARGE",
+                "message": f"Archivo demasiado grande para tu plan {plan_name}",
+                "file": {
+                    "name": file_name,
+                    "size_bytes": file_size_bytes,
+                    "size_gb": round(bytes_to_gb(file_size_bytes), 2)
+                },
+                "limits": {
+                    "max_file_bytes": max_bytes,
+                    "max_file_gb": round(bytes_to_gb(max_bytes), 1)
+                },
+                "plan": {
+                    "tier": plan_name
+                },
+                "action": {
+                    "type": "UPGRADE",
+                    "to": suggested_plan
+                }
             }
         )
 

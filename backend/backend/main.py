@@ -589,7 +589,7 @@ async def copy_file(http_request: Request, payload: CopyFileRequest, user_id: st
             }
         
         # 4. NOT a duplicate - validate file size limit
-        quota.check_file_size_limit_bytes(supabase, user_id, file_size_bytes)
+        quota.check_file_size_limit_bytes(supabase, user_id, file_size_bytes, file_name)
         
         # 4.5. Check transfer bandwidth availability
         transfer_quota = quota.check_transfer_bytes_available(supabase, user_id, file_size_bytes)
