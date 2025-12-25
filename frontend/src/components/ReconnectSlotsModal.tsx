@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CloudAccountStatus, fetchCloudStatus, fetchGoogleLoginUrl } from "@/lib/api";
+import { CloudAccountStatus, fetchCloudStatus, fetchGoogleLoginUrl, authenticatedFetch } from "@/lib/api";
 import { supabase } from "@/lib/supabaseClient";
 
 type ReconnectSlotsModalProps = {
   isOpen: boolean;
   onClose: () => void;
   onReconnect?: (account: CloudAccountStatus) => void;
+  onDisconnect?: (account: CloudAccountStatus) => void;
 };
 
 // Reason labels for UI display
@@ -24,6 +25,7 @@ export default function ReconnectSlotsModal({
   isOpen,
   onClose,
   onReconnect,
+  onDisconnect,
 }: ReconnectSlotsModalProps) {
   const [accounts, setAccounts] = useState<CloudAccountStatus[]>([]);
   const [summary, setSummary] = useState<any>(null);
@@ -163,6 +165,37 @@ export default function ReconnectSlotsModal({
                               Slot #{account.slot_number} • Tokens válidos
                             </p>
                           </div>
+                          <button
+                            onClick={async () => {
+                              if (!account.cloud_account_id) return;
+                              if (!confirm(`¿Desconectar ${account.provider_email}? Esta acción no se puede deshacer.`)) {
+                                return;
+                              }
+                              
+                              try {
+                                const res = await authenticatedFetch("/auth/revoke-account", {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ account_id: account.cloud_account_id }),
+                                });
+
+                                if (res.ok) {
+                                  await loadCloudStatus();
+                                  if (onDisconnect) {
+                                    onDisconnect(account);
+                                  }
+                                } else {
+                                  const errorData = await res.json();
+                                  setError(errorData.detail || "Error al desconectar cuenta");
+                                }
+                              } catch (err: any) {
+                                setError(err.message || "Error al desconectar cuenta");
+                              }
+                            }}
+                            className="ml-4 px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-sm font-semibold rounded-lg transition"
+                          >
+                            Desconectar
+                          </button>
                         </div>
                       </div>
                     ))}
@@ -265,7 +298,7 @@ export default function ReconnectSlotsModal({
                               handleReconnect(account);
                             }}
                             disabled={reconnecting === account.slot_log_id}
-                            className="ml-4 px-4 py-2 bg-slate-600 hover:bg-slate-500 disabled:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition"
+                            className="ml-4 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition shadow-lg shadow-emerald-500/20"
                           >
                             {reconnecting === account.slot_log_id ? "Redirigiendo..." : "Reconectar"}
                           </button>
