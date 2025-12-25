@@ -220,7 +220,8 @@ def get_user_quota_info(supabase: Client, user_id: str) -> Dict:
     
     # Calculate cloud limits
     plan_name = plan.get("plan", "free")
-    max_clouds = PLAN_CLOUD_LIMITS.get(plan_name, 1)
+    plan_limits = get_plan_limits(plan_name)
+    max_clouds = plan_limits.clouds_slots_total
     extra_clouds = plan.get("extra_clouds", 0)
     clouds_allowed = max_clouds + extra_clouds
     
@@ -400,7 +401,8 @@ def check_cloud_limit(supabase: Client, user_id: str, google_account_id: str) ->
     
     # Calculate allowed clouds
     plan_name = plan.get("plan", "free")
-    max_clouds = PLAN_CLOUD_LIMITS.get(plan_name, 1)
+    plan_limits = get_plan_limits(plan_name)
+    max_clouds = plan_limits.clouds_slots_total
     extra_clouds = plan.get("extra_clouds", 0)
     allowed_clouds = max_clouds + extra_clouds
     
