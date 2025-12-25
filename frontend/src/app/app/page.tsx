@@ -181,19 +181,61 @@ function DashboardContent() {
         fetchCloudStatusData();
       }, 1000);
     } else if (reconnectStatus === "success") {
-      setToast({
-        message: "✅ Cuenta reconectada exitosamente",
-        type: "success",
-      });
-      // Limpiar URL sin recargar la página
+      const slotId = searchParams?.get("slot_id");
+      
+      // Clear URL immediately
       window.history.replaceState({}, "", window.location.pathname);
-      // CRITICAL: Refrescar todos los datos con cache: 'no-store' para actualizar needs_reconnect
-      setTimeout(() => {
-        fetchSummary();
-        fetchQuota();
-        fetchBillingQuota();
-        fetchCloudStatusData(true);  // forceRefresh = true
-      }, 1000);
+      
+      // CRITICAL: Validate real reconnection before showing success toast
+      const validateReconnect = async () => {
+        try {
+          // Fetch fresh cloud status to verify actual connection state
+          const data = await fetchCloudStatus(true);  // forceRefresh = true
+          
+          // If slot_id provided, validate that specific slot is now connected
+          if (slotId) {
+            // Normalize both IDs to string for comparison (slot_log_id could be number or string)
+            const normalizedSlotId = String(slotId);
+            const reconnectedSlot = data.accounts.find(
+              (acc: any) => String(acc.slot_log_id) === normalizedSlotId && acc.connection_status === "connected"
+            );
+            
+            if (reconnectedSlot) {
+              setToast({
+                message: `✅ Cuenta ${reconnectedSlot.provider_email} reconectada exitosamente`,
+                type: "success",
+              });
+            } else {
+              // Slot not found or not connected - show warning
+              setToast({
+                message: "⚠️ La reconexión no se completó correctamente. Intenta nuevamente.",
+                type: "warning",
+              });
+            }
+          } else {
+            // No slot_id provided, use generic success message
+            setToast({
+              message: "✅ Cuenta reconectada exitosamente",
+              type: "success",
+            });
+          }
+          
+          // Update all data
+          setCloudStatus(data);
+          fetchSummary();
+          fetchQuota();
+          fetchBillingQuota();
+        } catch (error) {
+          console.error("Failed to validate reconnect:", error);
+          setToast({
+            message: "⚠️ Error al validar reconexión. Actualiza la página.",
+            type: "warning",
+          });
+        }
+      };
+      
+      // Execute validation after 1 second delay
+      setTimeout(validateReconnect, 1000);
     } else if (authError === "cloud_limit_reached") {
       setToast({
         message: `Has usado tus slots históricos. Puedes reconectar tus cuentas anteriores desde "Ver mis cuentas", pero no puedes agregar cuentas nuevas en plan FREE.`,

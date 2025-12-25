@@ -166,13 +166,15 @@ def google_login_url(
             logging.error(f"[QUOTA CHECK ERROR] user_id={user_id} error={str(e)}")
             raise HTTPException(status_code=500, detail="Failed to check quota")
     
-    # For reconnect: verify slot exists and get email for login_hint
+    # For reconnect: verify slot exists and get email for login_hint + slot_log_id
     reconnect_email = None
+    slot_log_id = None
     if mode == "reconnect":
         slot_check = supabase.table("cloud_slots_log").select("id,provider_email").eq("user_id", user_id).eq("provider_account_id", reconnect_account_id).limit(1).execute()
         if not slot_check.data:
             raise HTTPException(status_code=404, detail="Slot not found for this account")
         reconnect_email = slot_check.data[0].get("provider_email")
+        slot_log_id = slot_check.data[0].get("id")
     
     # OAuth Prompt Strategy (Google best practices):
     # - Default: "select_account" (mejor UX, no agresivo)
@@ -197,8 +199,13 @@ def google_login_url(
     if mode == "reconnect" and reconnect_email:
         params["login_hint"] = reconnect_email
     
-    # Crear state JWT con user_id, mode, reconnect_account_id (seguro, firmado)
-    state_token = create_state_token(user_id, mode=mode or "connect", reconnect_account_id=reconnect_account_id)
+    # Crear state JWT con user_id, mode, reconnect_account_id, slot_log_id (seguro, firmado)
+    state_token = create_state_token(
+        user_id, 
+        mode=mode or "connect", 
+        reconnect_account_id=reconnect_account_id,
+        slot_log_id=slot_log_id
+    )
     params["state"] = state_token
 
     from urllib.parse import urlencode
@@ -246,16 +253,18 @@ async def google_callback(request: Request):
     if not code:
         return RedirectResponse(f"{FRONTEND_URL}?error=no_code")
     
-    # Decodificar el state para obtener user_id, mode, reconnect_account_id
+    # Decodificar el state para obtener user_id, mode, reconnect_account_id, slot_log_id
     user_id = None
     mode = "connect"
     reconnect_account_id = None
+    slot_log_id = None
     if state:
         state_data = decode_state_token(state)
         if state_data:
             user_id = state_data.get("user_id")
             mode = state_data.get("mode", "connect")
             reconnect_account_id = state_data.get("reconnect_account_id")
+            slot_log_id = state_data.get("slot_log_id")
 
     # Exchange code for tokens
     data = {
@@ -396,28 +405,42 @@ async def google_callback(request: Request):
             )
         
         # Ensure slot is active and update provider info
-        slot_update = supabase.table("cloud_slots_log").update({
-            "is_active": True,
-            "disconnected_at": None,
-            "provider_email": account_email,
-        }).eq("user_id", user_id).eq("provider_account_id", google_account_id).execute()
+        # CRITICAL: Use slot_log_id if available (more precise), fallback to provider_account_id
+        if slot_log_id:
+            slot_update = supabase.table("cloud_slots_log").update({
+                "is_active": True,
+                "disconnected_at": None,
+                "provider_email": account_email,
+            }).eq("id", slot_log_id).eq("user_id", user_id).execute()
+        else:
+            slot_update = supabase.table("cloud_slots_log").update({
+                "is_active": True,
+                "disconnected_at": None,
+                "provider_email": account_email,
+            }).eq("user_id", user_id).eq("provider_account_id", google_account_id).execute()
         
         slots_updated = len(slot_update.data) if slot_update.data else 0
-        if slots_updated == 0:
-            logging.warning(
-                f"[RECONNECT WARNING] cloud_slots_log UPDATE affected 0 rows. "
-                f"user_id={user_id} provider_account_id={google_account_id} "
-                f"This may indicate slot was deleted or provider_account_id mismatch"
-            )
-        else:
-            logging.info(
-                f"[RECONNECT SUCCESS - cloud_slots_log] "
-                f"user_id={user_id} google_account_id={google_account_id} "
-                f"email={account_email} slots_updated={slots_updated} "
-                f"is_active=True disconnected_at=None"
-            )
         
-        return RedirectResponse(f"{FRONTEND_URL}/app?reconnect=success")
+        # CRITICAL: Return error if slot update failed (no fake success)
+        if slots_updated == 0:
+            logging.error(
+                f"[RECONNECT ERROR] cloud_slots_log UPDATE affected 0 rows (CRITICAL FAILURE). "
+                f"user_id={user_id} provider_account_id={google_account_id} "
+                f"This indicates slot was deleted, provider_account_id mismatch, or database error."
+            )
+            return RedirectResponse(f"{FRONTEND_URL}/app?error=reconnect_failed&reason=slot_not_updated")
+        
+        # Get slot_log_id for frontend validation (prefer from state JWT, fallback to database)
+        validated_slot_id = slot_log_id if slot_log_id else slot_update.data[0].get("id")
+        
+        logging.info(
+            f"[RECONNECT SUCCESS - cloud_slots_log] "
+            f"user_id={user_id} google_account_id={google_account_id} "
+            f"email={account_email} slots_updated={slots_updated} "
+            f"slot_id={validated_slot_id} is_active=True disconnected_at=None"
+        )
+        
+        return RedirectResponse(f"{FRONTEND_URL}/app?reconnect=success&slot_id={validated_slot_id}")
     
     # Check cloud account limit with slot-based validation (only for connect mode)
     try:
@@ -542,7 +565,7 @@ async def list_accounts(user_id: str = Depends(verify_supabase_jwt)):
         return {"accounts": accounts}
     
     except Exception as e:
-        logger.error(f"[ACCOUNTS FETCH ERROR] user_id={user_id} error={str(e)}")
+        logging.error(f"[ACCOUNTS FETCH ERROR] user_id={user_id} error={str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch accounts: {str(e)}")
 
 
@@ -1003,7 +1026,7 @@ async def get_user_slots(user_id: str = Depends(verify_supabase_jwt)):
         
         return {"slots": slots_result.data or []}
     except Exception as e:
-        logger.error(f"[SLOTS FETCH ERROR] user_id={user_id} error={str(e)}")
+        logging.error(f"[SLOTS FETCH ERROR] user_id={user_id} error={str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch slots: {str(e)}")
 
 
@@ -1085,18 +1108,16 @@ def classify_account_status(slot: dict, cloud_account: dict) -> dict:
             "can_reconnect": True
         }
     
-    # Caso 6: Token válido, access_token existe
-    # SI falta refresh_token PERO token NO expirado → connected (permisivo)
-    # El token actual funciona, solo requerirá reconexion cuando expire
+    # Caso 6: Token NO expirado pero falta refresh_token (requiere reconexión)
+    # Sin refresh_token, el token expirará y no podrá renovarse → needs_reconnect
     if not refresh_token:
-        # Token funcional pero sin refresh_token (requiere atención futura)
         return {
-            "connection_status": "connected",
-            "reason": "limited_no_refresh",  # Opcional: para UI informativa
-            "can_reconnect": False
+            "connection_status": "needs_reconnect",
+            "reason": "missing_refresh_token",
+            "can_reconnect": True
         }
     
-    # Caso 7: Todo OK - token válido, access_token existe, puede o no tener refresh_token
+    # Caso 7: Todo OK - token válido, access_token existe, refresh_token existe
     return {
         "connection_status": "connected",
         "reason": None,
@@ -1149,29 +1170,28 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
         # 1. Fetch all slots (active and inactive)
         slots_result = supabase.table("cloud_slots_log").select("*").eq("user_id", user_id).order("slot_number").execute()
         
+        # 2. Fetch ALL cloud_accounts ONCE (eliminate N+1 query)
+        all_accounts_result = supabase.table("cloud_accounts").select("*").eq("user_id", user_id).execute()
+        
+        # 3. Build normalized lookup map: google_account_id (normalized) -> cloud_account
+        accounts_map = {}
+        for acc in (all_accounts_result.data or []):
+            acc_google_id_normalized = str(acc.get("google_account_id", "")).strip()
+            if acc_google_id_normalized:
+                accounts_map[acc_google_id_normalized] = acc
+        
         accounts_status = []
         summary = {"connected": 0, "needs_reconnect": 0, "disconnected": 0}
         
         for slot in slots_result.data:
-            # 2. Try to find matching cloud_account
-            # CRITICAL: Normalizar provider_account_id (strip) en ambos lados para evitar mismatch
+            # 4. Match slot to cloud_account using normalized ID
             slot_provider_id = str(slot["provider_account_id"]).strip() if slot.get("provider_account_id") else ""
+            cloud_account = accounts_map.get(slot_provider_id)
             
-            # Buscar por google_account_id normalizado
-            cloud_account_result = supabase.table("cloud_accounts").select("*").eq("user_id", user_id).execute()
-            
-            # Filtrar manualmente con normalización
-            cloud_account = None
-            for acc in (cloud_account_result.data or []):
-                acc_google_id = str(acc.get("google_account_id", "")).strip()
-                if acc_google_id == slot_provider_id:
-                    cloud_account = acc
-                    break
-            
-            # 3. Classify status
+            # 5. Classify status
             status = classify_account_status(slot, cloud_account)
             
-            # 4. Build response
+            # 6. Build response
             accounts_status.append({
                 "slot_log_id": slot["id"],
                 "slot_number": slot["slot_number"],
@@ -1199,7 +1219,7 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
         }
     
     except Exception as e:
-        logger.error(f"[CLOUD STATUS ERROR] user_id={user_id} error={str(e)}")
+        logging.error(f"[CLOUD STATUS ERROR] user_id={user_id} error={str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch cloud status: {str(e)}")
 
 

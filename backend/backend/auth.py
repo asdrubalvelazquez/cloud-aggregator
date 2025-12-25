@@ -17,13 +17,14 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 
 
-def create_state_token(user_id: str, mode: str = "connect", reconnect_account_id: str = None) -> str:
+def create_state_token(user_id: str, mode: str = "connect", reconnect_account_id: str = None, slot_log_id: str = None) -> str:
     """Crea un JWT firmado con el user_id para usar como state en OAuth
     
     Args:
         user_id: User ID from Supabase JWT
         mode: OAuth mode (connect|reauth|reconnect)
         reconnect_account_id: Google account ID for reconnect mode
+        slot_log_id: Slot log ID for precise slot identification (preferred for reconnect)
     """
     from datetime import datetime, timedelta
     payload = {
@@ -35,15 +36,17 @@ def create_state_token(user_id: str, mode: str = "connect", reconnect_account_id
     }
     if reconnect_account_id:
         payload["reconnect_account_id"] = reconnect_account_id
+    if slot_log_id:
+        payload["slot_log_id"] = slot_log_id
     token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
     return token
 
 
 def decode_state_token(state: str) -> Optional[dict]:
-    """Decodifica el state JWT y retorna payload con user_id, mode, reconnect_account_id
+    """Decodifica el state JWT y retorna payload con user_id, mode, reconnect_account_id, slot_log_id
     
     Returns:
-        dict: {user_id, mode, reconnect_account_id?} or None if invalid
+        dict: {user_id, mode, reconnect_account_id?, slot_log_id?} or None if invalid
     """
     import logging
     try:
@@ -53,7 +56,8 @@ def decode_state_token(state: str) -> Optional[dict]:
         return {
             "user_id": payload.get("user_id"),
             "mode": payload.get("mode", "connect"),
-            "reconnect_account_id": payload.get("reconnect_account_id")
+            "reconnect_account_id": payload.get("reconnect_account_id"),
+            "slot_log_id": payload.get("slot_log_id")
         }
     except jwt.ExpiredSignatureError:
         logging.warning("[SECURITY] Expired state token in OAuth callback (possible replay attack)")
