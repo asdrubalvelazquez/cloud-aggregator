@@ -117,7 +117,11 @@ def get_billing_quota(user_id: str = Depends(verify_supabase_jwt)):
 
 
 @app.get("/auth/google/login-url")
-def google_login_url(mode: Optional[str] = None, user_id: str = Depends(verify_supabase_jwt)):
+def google_login_url(
+    mode: Optional[str] = None, 
+    reconnect_account_id: Optional[str] = None,
+    user_id: str = Depends(verify_supabase_jwt)
+):
     """
     Get Google OAuth URL for client-side redirect.
     
@@ -126,16 +130,18 @@ def google_login_url(mode: Optional[str] = None, user_id: str = Depends(verify_s
     
     SEGURIDAD: user_id derivado de JWT (NO query param) para evitar PII en URL/logs.
     
-    IMPORTANTE: NO hay pre-check de límites aquí porque aún no sabemos qué cuenta
-    elegirá el usuario. La validación definitiva ocurre en callback usando
-    check_cloud_limit_with_slots (que permite reconexión de slots históricos).
+    OAuth Modes:
+    - "connect": New account connection (checks slot availability)
+    - "reauth": Re-authorize existing account (prompt=select_account)
+    - "reconnect": Restore slot without consuming new slot (requires reconnect_account_id)
     
     OAuth Prompt Strategy (Google OAuth Compliance):
     - "select_account": Muestra selector de cuenta (UX recomendada por Google)
     - "consent": Fuerza pantalla de permisos (SOLO cuando mode="consent" explícito)
     
     Args:
-        mode: "reauth" para reconexión, "consent" para forzar consentimiento, None para nueva
+        mode: "connect"|"reauth"|"reconnect"|"consent"
+        reconnect_account_id: Google account ID (required for mode=reconnect)
         user_id: Derivado automáticamente de JWT (verify_supabase_jwt)
         
     Returns:
@@ -144,8 +150,27 @@ def google_login_url(mode: Optional[str] = None, user_id: str = Depends(verify_s
     if not GOOGLE_CLIENT_ID or not GOOGLE_REDIRECT_URI:
         raise HTTPException(status_code=500, detail="Missing GOOGLE_CLIENT_ID or GOOGLE_REDIRECT_URI")
 
-    # NO PRE-CHECK - La validación se hace en callback cuando conocemos provider_account_id
-    # Esto permite reconexión de slots históricos sin bloqueo prematuro
+    # Validation: reconnect requires account_id
+    if mode == "reconnect" and not reconnect_account_id:
+        raise HTTPException(status_code=400, detail="reconnect_account_id required for mode=reconnect")
+    
+    # Validation: connect mode requires available slots (reconnect bypasses this)
+    if mode == "connect" or mode is None:
+        try:
+            user_quota = quota.get_user_quota(supabase, user_id)
+            if user_quota["clouds_remaining"] <= 0:
+                raise HTTPException(status_code=403, detail="No slots available. Disconnect an account or upgrade your plan.")
+        except Exception as e:
+            if isinstance(e, HTTPException):
+                raise
+            logging.error(f"[QUOTA CHECK ERROR] user_id={user_id} error={str(e)}")
+            raise HTTPException(status_code=500, detail="Failed to check quota")
+    
+    # For reconnect: verify slot exists
+    if mode == "reconnect":
+        slot_check = supabase.table("cloud_slots_log").select("id").eq("user_id", user_id).eq("provider_account_id", reconnect_account_id).limit(1).execute()
+        if not slot_check.data:
+            raise HTTPException(status_code=404, detail="Slot not found for this account")
     
     # OAuth Prompt Strategy (Google best practices):
     # - Default: "select_account" (mejor UX, no agresivo)
@@ -166,8 +191,8 @@ def google_login_url(mode: Optional[str] = None, user_id: str = Depends(verify_s
         "include_granted_scopes": "true",  # Incremental authorization (Google best practice)
     }
     
-    # Crear state JWT con user_id (seguro, firmado)
-    state_token = create_state_token(user_id)
+    # Crear state JWT con user_id, mode, reconnect_account_id (seguro, firmado)
+    state_token = create_state_token(user_id, mode=mode or "connect", reconnect_account_id=reconnect_account_id)
     params["state"] = state_token
 
     from urllib.parse import urlencode
@@ -175,7 +200,7 @@ def google_login_url(mode: Optional[str] = None, user_id: str = Depends(verify_s
     
     # Log sin PII (solo hash parcial + mode)
     user_hash = hashlib.sha256(user_id.encode()).hexdigest()[:8]
-    print(f"[OAuth URL Generated] user_hash={user_hash} mode={mode or 'new'} prompt={oauth_prompt}")
+    print(f"[OAuth URL Generated] user_hash={user_hash} mode={mode or 'connect'} prompt={oauth_prompt}")
     
     return {"url": url}
 
@@ -215,10 +240,16 @@ async def google_callback(request: Request):
     if not code:
         return RedirectResponse(f"{FRONTEND_URL}?error=no_code")
     
-    # Decodificar el state para obtener el user_id
+    # Decodificar el state para obtener user_id, mode, reconnect_account_id
     user_id = None
+    mode = "connect"
+    reconnect_account_id = None
     if state:
-        user_id = decode_state_token(state)
+        state_data = decode_state_token(state)
+        if state_data:
+            user_id = state_data.get("user_id")
+            mode = state_data.get("mode", "connect")
+            reconnect_account_id = state_data.get("reconnect_account_id")
 
     # Exchange code for tokens
     data = {
@@ -265,7 +296,53 @@ async def google_callback(request: Request):
     if not user_id:
         return RedirectResponse(f"{FRONTEND_URL}/app?error=missing_user_id")
     
-    # Check cloud account limit with slot-based validation
+    # Handle reconnect mode: verify account match and skip slot consumption
+    if mode == "reconnect":
+        if google_account_id != reconnect_account_id:
+            logging.error(f"[RECONNECT ERROR] Account mismatch: expected {reconnect_account_id}, got {google_account_id}")
+            return RedirectResponse(f"{FRONTEND_URL}/app?error=account_mismatch")
+        
+        # Update or create cloud_account (reconnect)
+        existing_account = supabase.table("cloud_accounts").select("id").eq("user_id", user_id).eq("google_account_id", google_account_id).limit(1).execute()
+        
+        if existing_account.data:
+            # UPDATE existing account with new tokens
+            supabase.table("cloud_accounts").update({
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "token_expiry": expiry_iso,
+                "is_active": True,
+                "disconnected_at": None,
+            }).eq("id", existing_account.data[0]["id"]).execute()
+            logging.info(f"[RECONNECT] Updated cloud_account id={existing_account.data[0]['id']} for user {user_id}")
+        else:
+            # CREATE new cloud_account (edge case: account deleted but slot exists)
+            # Need to get slot_id first
+            slot_result = supabase.table("cloud_slots_log").select("id").eq("user_id", user_id).eq("provider_account_id", google_account_id).limit(1).execute()
+            slot_id = slot_result.data[0]["id"] if slot_result.data else None
+            
+            supabase.table("cloud_accounts").insert({
+                "user_id": user_id,
+                "google_account_id": google_account_id,
+                "account_email": account_email,
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "token_expiry": expiry_iso,
+                "is_active": True,
+                "slot_log_id": slot_id,
+            }).execute()
+            logging.info(f"[RECONNECT] Created cloud_account for user {user_id}, slot_id={slot_id}")
+        
+        # Ensure slot is active
+        supabase.table("cloud_slots_log").update({
+            "is_active": True,
+            "disconnected_at": None
+        }).eq("user_id", user_id).eq("provider_account_id", google_account_id).execute()
+        
+        logging.info(f"[RECONNECT SUCCESS] user_id={user_id}, account={account_email}")
+        return RedirectResponse(f"{FRONTEND_URL}/app?reconnect=success")
+    
+    # Check cloud account limit with slot-based validation (only for connect mode)
     try:
         quota.check_cloud_limit_with_slots(supabase, user_id, "google_drive", google_account_id)
     except HTTPException as e:
@@ -812,6 +889,214 @@ async def get_my_plan(user_id: str = Depends(verify_supabase_jwt)):
         return quota_info
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get plan info: {str(e)}")
+
+
+@app.get("/me/slots")
+async def get_user_slots(user_id: str = Depends(verify_supabase_jwt)):
+    """
+    Get all historical cloud slots (active and inactive) for the authenticated user.
+    
+    Returns:
+        {
+            "slots": [
+                {
+                    "id": "uuid",
+                    "provider": "google_drive",
+                    "provider_email": "user@gmail.com",
+                    "slot_number": 1,
+                    "is_active": true,
+                    "connected_at": "2025-12-01T00:00:00Z",
+                    "disconnected_at": null,
+                    "plan_at_connection": "free"
+                }
+            ]
+        }
+    
+    Security:
+    - Only returns slots for authenticated user
+    - No PII in URL (querystring)
+    - Minimal field exposure: provider_account_id REMOVED (no necesario para UI)
+    - UI reconecta via OAuth, no necesita account_id interno
+    """
+    try:
+        # IMPORTANTE: NO devolver provider_account_id (identificador interno, no necesario)
+        slots_result = supabase.table("cloud_slots_log").select(
+            "id,provider,provider_email,slot_number,is_active,connected_at,disconnected_at,plan_at_connection"
+        ).eq("user_id", user_id).order("slot_number").execute()
+        
+        return {"slots": slots_result.data or []}
+    except Exception as e:
+        logger.error(f"[SLOTS FETCH ERROR] user_id={user_id} error={str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch slots: {str(e)}")
+
+
+def classify_account_status(slot: dict, cloud_account: dict) -> dict:
+    """
+    Determina el estado de conexión de una cuenta basado en slot y cloud_account.
+    
+    Args:
+        slot: Row de cloud_slots_log
+        cloud_account: Row de cloud_accounts (puede ser None)
+    
+    Returns:
+        {
+            "connection_status": "connected" | "needs_reconnect" | "disconnected",
+            "reason": str | None,
+            "can_reconnect": bool
+        }
+    """
+    # Caso 1: Slot inactivo (usuario desconectó explícitamente)
+    if not slot.get("is_active"):
+        return {
+            "connection_status": "disconnected",
+            "reason": "slot_inactive",
+            "can_reconnect": True
+        }
+    
+    # Caso 2: Slot activo pero no hay cloud_account
+    if cloud_account is None:
+        return {
+            "connection_status": "needs_reconnect",
+            "reason": "cloud_account_missing",
+            "can_reconnect": True
+        }
+    
+    # Caso 3: cloud_account existe pero marcada is_active=false
+    if not cloud_account.get("is_active"):
+        return {
+            "connection_status": "needs_reconnect",
+            "reason": "account_is_active_false",
+            "can_reconnect": True
+        }
+    
+    # Caso 4: No tiene refresh_token (crítico para renovar acceso)
+    if not cloud_account.get("refresh_token"):
+        return {
+            "connection_status": "needs_reconnect",
+            "reason": "missing_refresh_token",
+            "can_reconnect": True
+        }
+    
+    # Caso 5: refresh_token existe pero access_token vacío
+    # (no crítico, se puede refresh, pero sospechoso)
+    if not cloud_account.get("access_token"):
+        return {
+            "connection_status": "needs_reconnect",
+            "reason": "missing_access_token",
+            "can_reconnect": True
+        }
+    
+    # Caso 6: Token expirado (verificar token_expiry)
+    token_expiry = cloud_account.get("token_expiry")
+    if token_expiry:
+        try:
+            expiry_dt = datetime.fromisoformat(token_expiry.replace("Z", "+00:00"))
+            if expiry_dt < datetime.now(timezone.utc):
+                # Token expirado PERO tenemos refresh_token → puede auto-renovarse
+                # Si no se ha renovado, probablemente refresh_token invalid_grant
+                return {
+                    "connection_status": "needs_reconnect",
+                    "reason": "token_expired",
+                    "can_reconnect": True
+                }
+        except (ValueError, AttributeError):
+            pass  # Invalid date format, skip check
+    
+    # Caso 7: Todo OK
+    return {
+        "connection_status": "connected",
+        "reason": None,
+        "can_reconnect": False
+    }
+
+
+@app.get("/me/cloud-status")
+async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
+    """
+    Get detailed connection status for all cloud slots.
+    
+    Returns account status including connection state, reason for disconnection,
+    and whether the account can be reconnected. This endpoint helps distinguish
+    between slots that exist historically vs accounts that are actually usable.
+    
+    Connection statuses:
+    - connected: Account has valid tokens and is usable
+    - needs_reconnect: Slot exists but account requires reauthorization
+    - disconnected: Slot was manually disconnected
+    
+    Returns:
+        {
+            "accounts": [
+                {
+                    "slot_log_id": "uuid",
+                    "slot_number": 1,
+                    "slot_is_active": true,
+                    "provider": "google_drive",
+                    "provider_email": "user@gmail.com",
+                    "provider_account_id": "google-id-123",
+                    "connection_status": "connected",
+                    "reason": null,
+                    "can_reconnect": false,
+                    "cloud_account_id": 42,
+                    "has_refresh_token": true,
+                    "account_is_active": true
+                }
+            ],
+            "summary": {
+                "total_slots": 2,
+                "active_slots": 2,
+                "connected": 1,
+                "needs_reconnect": 1,
+                "disconnected": 0
+            }
+        }
+    """
+    try:
+        # 1. Fetch all slots (active and inactive)
+        slots_result = supabase.table("cloud_slots_log").select("*").eq("user_id", user_id).order("slot_number").execute()
+        
+        accounts_status = []
+        summary = {"connected": 0, "needs_reconnect": 0, "disconnected": 0}
+        
+        for slot in slots_result.data:
+            # 2. Try to find matching cloud_account
+            cloud_account_result = supabase.table("cloud_accounts").select("*").eq("user_id", user_id).eq("google_account_id", slot["provider_account_id"]).limit(1).execute()
+            
+            cloud_account = cloud_account_result.data[0] if cloud_account_result.data else None
+            
+            # 3. Classify status
+            status = classify_account_status(slot, cloud_account)
+            
+            # 4. Build response
+            accounts_status.append({
+                "slot_log_id": slot["id"],
+                "slot_number": slot["slot_number"],
+                "slot_is_active": slot["is_active"],
+                "provider": slot["provider"],
+                "provider_email": slot["provider_email"],
+                "provider_account_id": slot["provider_account_id"],
+                "connection_status": status["connection_status"],
+                "reason": status["reason"],
+                "can_reconnect": status["can_reconnect"],
+                "cloud_account_id": cloud_account["id"] if cloud_account else None,
+                "has_refresh_token": bool(cloud_account and cloud_account.get("refresh_token")),
+                "account_is_active": cloud_account["is_active"] if cloud_account else False
+            })
+            
+            summary[status["connection_status"]] += 1
+        
+        return {
+            "accounts": accounts_status,
+            "summary": {
+                "total_slots": len(slots_result.data),
+                "active_slots": len([s for s in slots_result.data if s["is_active"]]),
+                **summary
+            }
+        }
+    
+    except Exception as e:
+        logger.error(f"[CLOUD STATUS ERROR] user_id={user_id} error={str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch cloud status: {str(e)}")
 
 
 @app.get("/me/slots")

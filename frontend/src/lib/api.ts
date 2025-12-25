@@ -49,6 +49,49 @@ export type SlotsResponse = {
 };
 
 /**
+ * Types for cloud account status (new endpoint)
+ */
+export type CloudAccountStatus = {
+  slot_log_id: string;
+  slot_number: number;
+  slot_is_active: boolean;
+  provider: string;
+  provider_email: string;
+  provider_account_id: string;
+  connection_status: "connected" | "needs_reconnect" | "disconnected";
+  reason: string | null;
+  can_reconnect: boolean;
+  cloud_account_id: number | null;
+  has_refresh_token: boolean;
+  account_is_active: boolean;
+};
+
+export type CloudStatusResponse = {
+  accounts: CloudAccountStatus[];
+  summary: {
+    total_slots: number;
+    active_slots: number;
+    connected: number;
+    needs_reconnect: number;
+    disconnected: number;
+  };
+};
+
+/**
+ * Fetch detailed connection status for all cloud accounts
+ * 
+ * Returns connection status including whether accounts need reconnection,
+ * helping distinguish between historical slots and actually usable accounts.
+ */
+export async function fetchCloudStatus(): Promise<CloudStatusResponse> {
+  const res = await authenticatedFetch("/me/cloud-status");
+  if (!res.ok) {
+    throw new Error(`Failed to fetch cloud status: ${res.status}`);
+  }
+  return await res.json();
+}
+
+/**
  * Fetch all cloud slots (active and inactive) for the authenticated user
  * 
  * Returns historical slot data including disconnected accounts,
@@ -76,15 +119,19 @@ export type GoogleLoginUrlResponse = {
  * This endpoint is protected with JWT, so we fetch it first,
  * then redirect manually to the returned OAuth URL.
  * 
- * @param mode - "reauth" for reconnecting slots, "consent" for forced consent, undefined for new
+ * @param params - mode: "connect"|"reauth"|"reconnect", reconnect_account_id: Google account ID for reconnect
  * @returns OAuth URL to redirect user to Google
  */
 export async function fetchGoogleLoginUrl(params?: {
-  mode?: "reauth" | "consent" | "new";
+  mode?: "connect" | "reauth" | "reconnect" | "consent";
+  reconnect_account_id?: string;
 }): Promise<GoogleLoginUrlResponse> {
   const queryParams = new URLSearchParams();
-  if (params?.mode && params.mode !== "new") {
+  if (params?.mode) {
     queryParams.set("mode", params.mode);
+  }
+  if (params?.reconnect_account_id) {
+    queryParams.set("reconnect_account_id", params.reconnect_account_id);
   }
   
   const endpoint = `/auth/google/login-url${

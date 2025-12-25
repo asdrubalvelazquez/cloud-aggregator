@@ -2,7 +2,8 @@
 
 import { useEffect, useState, Suspense } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { authenticatedFetch } from "@/lib/api";
+import { authenticatedFetch, fetchCloudStatus } from "@/lib/api";
+import type { CloudStatusResponse } from "@/lib/api";
 import { useRouter, useSearchParams } from "next/navigation";
 import Toast from "@/components/Toast";
 import ProgressBar from "@/components/ProgressBar";
@@ -79,6 +80,7 @@ function DashboardContent() {
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const [quota, setQuota] = useState<QuotaInfo>(null);
   const [billingQuota, setBillingQuota] = useState<BillingQuota>(null);
+  const [cloudStatus, setCloudStatus] = useState<CloudStatusResponse | null>(null);
   const [showReconnectModal, setShowReconnectModal] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -126,6 +128,15 @@ function DashboardContent() {
     }
   };
 
+  const fetchCloudStatusData = async () => {
+    try {
+      const data = await fetchCloudStatus();
+      setCloudStatus(data);
+    } catch (e) {
+      console.error("Failed to fetch cloud status:", e);
+    }
+  };
+
   useEffect(() => {
     // Verificar sesión de usuario
     const checkSession = async () => {
@@ -154,6 +165,7 @@ function DashboardContent() {
       setTimeout(() => {
         fetchSummary();
         fetchQuota();
+        fetchCloudStatusData();
       }, 1000);
     } else if (authError === "cloud_limit_reached") {
       setToast({
@@ -163,6 +175,7 @@ function DashboardContent() {
       window.history.replaceState({}, "", window.location.pathname);
       fetchSummary();
       fetchBillingQuota();
+      fetchCloudStatusData();
     } else if (authError) {
       setToast({
         message: `Error de autenticación: ${authError}`,
@@ -172,10 +185,12 @@ function DashboardContent() {
       fetchSummary();
       fetchQuota();
       fetchBillingQuota();
+      fetchCloudStatusData();
     } else {
       fetchSummary();
       fetchQuota();
       fetchBillingQuota();
+      fetchCloudStatusData();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
@@ -191,7 +206,7 @@ function DashboardContent() {
       // SOLUCIÓN: Fetch autenticado a /auth/google/login-url → recibe URL → redirect manual
       // SEGURIDAD: user_id derivado de JWT en backend, NO en querystring
       const { fetchGoogleLoginUrl } = await import("@/lib/api");
-      const { url } = await fetchGoogleLoginUrl({ mode: "new" });
+      const { url } = await fetchGoogleLoginUrl({ mode: "connect" });
       window.location.href = url;
     } catch (err) {
       setError(`Error al obtener URL de Google: ${err}`);
@@ -518,15 +533,41 @@ function DashboardContent() {
             <section className="bg-slate-800 rounded-xl p-6 shadow-lg border border-slate-700">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-bold text-white">
-                  Cuentas conectadas ({data.accounts.length})
+                  Cuentas conectadas ({cloudStatus?.summary.connected || 0})
                 </h2>
                 <button
-                  onClick={fetchSummary}
+                  onClick={() => {
+                    fetchSummary();
+                    fetchCloudStatusData();
+                  }}
                   className="text-sm border border-slate-600 rounded-lg px-3 py-1.5 hover:bg-slate-700 transition font-medium"
                 >
                   🔄 Refrescar
                 </button>
               </div>
+
+              {/* Alert para cuentas que necesitan reconexión */}
+              {cloudStatus && cloudStatus.summary.needs_reconnect > 0 && (
+                <div className="bg-amber-500/20 border border-amber-500 rounded-lg p-3 text-sm mb-4">
+                  <div className="flex items-start gap-2">
+                    <span className="text-amber-400 text-lg">⚠️</span>
+                    <div className="flex-1">
+                      <p className="text-amber-200 font-semibold">
+                        {cloudStatus.summary.needs_reconnect} cuenta(s) necesitan reconexión
+                      </p>
+                      <p className="text-amber-300 text-xs mt-1">
+                        Estas cuentas requieren reautorización. Haz clic en "Ver mis cuentas" para reconectarlas.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setShowReconnectModal(true)}
+                      className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded transition"
+                    >
+                      Ver detalles
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Búsqueda y Sorting */}
               <div className="flex gap-3 mb-4">
