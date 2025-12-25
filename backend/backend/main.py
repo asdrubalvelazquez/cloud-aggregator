@@ -1108,12 +1108,13 @@ def classify_account_status(slot: dict, cloud_account: dict) -> dict:
             "can_reconnect": True
         }
     
-    # Caso 6: Token NO expirado pero falta refresh_token (requiere reconexión)
-    # Sin refresh_token, el token expirará y no podrá renovarse → needs_reconnect
+    # Caso 6: Token NO expirado pero falta refresh_token (funcional pero limitado)
+    # El token actual funciona, solo requerirá reconexión cuando expire
+    # NO activar banner - la cuenta está operativa AHORA
     if not refresh_token:
         return {
-            "connection_status": "needs_reconnect",
-            "reason": "missing_refresh_token",
+            "connection_status": "connected",
+            "reason": "limited_no_refresh",
             "can_reconnect": True
         }
     
