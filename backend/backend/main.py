@@ -307,21 +307,41 @@ async def google_callback(request: Request):
         
         if existing_account.data:
             # UPDATE existing account with new tokens
-            supabase.table("cloud_accounts").update({
+            account_id = existing_account.data[0]["id"]
+            update_result = supabase.table("cloud_accounts").update({
                 "access_token": access_token,
                 "refresh_token": refresh_token,
                 "token_expiry": expiry_iso,
                 "is_active": True,
                 "disconnected_at": None,
-            }).eq("id", existing_account.data[0]["id"]).execute()
-            logging.info(f"[RECONNECT] Updated cloud_account id={existing_account.data[0]['id']} for user {user_id}")
+            }).eq("id", account_id).execute()
+            
+            rows_updated = len(update_result.data) if update_result.data else 0
+            if rows_updated == 0:
+                logging.warning(
+                    f"[RECONNECT WARNING] cloud_accounts UPDATE affected 0 rows. "
+                    f"account_id={account_id} user_id={user_id}"
+                )
+            else:
+                logging.info(
+                    f"[RECONNECT SUCCESS - cloud_accounts] "
+                    f"user_id={user_id} account_id={account_id} "
+                    f"google_account_id={google_account_id} email={account_email} "
+                    f"rows_updated={rows_updated} is_active=True disconnected_at=None"
+                )
         else:
             # CREATE new cloud_account (edge case: account deleted but slot exists)
-            # Need to get slot_id first
             slot_result = supabase.table("cloud_slots_log").select("id").eq("user_id", user_id).eq("provider_account_id", google_account_id).limit(1).execute()
             slot_id = slot_result.data[0]["id"] if slot_result.data else None
             
-            supabase.table("cloud_accounts").insert({
+            if not slot_id:
+                logging.error(
+                    f"[RECONNECT ERROR] No slot found for reconnection. "
+                    f"user_id={user_id} google_account_id={google_account_id} email={account_email}"
+                )
+                return RedirectResponse(f"{FRONTEND_URL}/app?error=slot_not_found")
+            
+            insert_result = supabase.table("cloud_accounts").insert({
                 "user_id": user_id,
                 "google_account_id": google_account_id,
                 "account_email": account_email,
@@ -331,15 +351,33 @@ async def google_callback(request: Request):
                 "is_active": True,
                 "slot_log_id": slot_id,
             }).execute()
-            logging.info(f"[RECONNECT] Created cloud_account for user {user_id}, slot_id={slot_id}")
+            
+            new_account_id = insert_result.data[0]["id"] if insert_result.data else "unknown"
+            logging.info(
+                f"[RECONNECT SUCCESS - cloud_accounts CREATED] "
+                f"user_id={user_id} account_id={new_account_id} slot_id={slot_id} "
+                f"google_account_id={google_account_id} email={account_email}"
+            )
         
         # Ensure slot is active
-        supabase.table("cloud_slots_log").update({
+        slot_update = supabase.table("cloud_slots_log").update({
             "is_active": True,
             "disconnected_at": None
         }).eq("user_id", user_id).eq("provider_account_id", google_account_id).execute()
         
-        logging.info(f"[RECONNECT SUCCESS] user_id={user_id}, account={account_email}")
+        slots_updated = len(slot_update.data) if slot_update.data else 0
+        if slots_updated == 0:
+            logging.warning(
+                f"[RECONNECT WARNING] cloud_slots_log UPDATE affected 0 rows. "
+                f"user_id={user_id} google_account_id={google_account_id}"
+            )
+        else:
+            logging.info(
+                f"[RECONNECT SUCCESS - cloud_slots_log] "
+                f"user_id={user_id} google_account_id={google_account_id} "
+                f"email={account_email} slots_updated={slots_updated}"
+            )
+        
         return RedirectResponse(f"{FRONTEND_URL}/app?reconnect=success")
     
     # Check cloud account limit with slot-based validation (only for connect mode)
