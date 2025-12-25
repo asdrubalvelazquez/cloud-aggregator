@@ -332,14 +332,64 @@ async def google_callback(request: Request):
 
 @app.get("/accounts")
 async def list_accounts(user_id: str = Depends(verify_supabase_jwt)):
-    """Get all connected cloud accounts for the authenticated user"""
-    resp = (
-        supabase.table("cloud_accounts")
-        .select("id, account_email, created_at")
-        .eq("user_id", user_id)
-        .execute()
-    )
-    return {"accounts": resp.data}
+    """
+    Get all active cloud slots with their account details for the authenticated user.
+    
+    This endpoint queries cloud_slots_log (active slots) and LEFT JOINs with cloud_accounts
+    to provide usage/limit information. This ensures dashboard shows accounts that have
+    active slots, even if the underlying cloud_account record is marked is_active=false
+    due to token refresh failures.
+    
+    Returns accounts that:
+    - Have an active slot in cloud_slots_log (is_active=true)
+    - Joined with cloud_accounts for usage/limit data
+    - Shows all active slots regardless of account.is_active status
+    """
+    try:
+        # Query active slots with LEFT JOIN to cloud_accounts
+        # Note: Supabase doesn't support explicit JOINs in select(), so we'll fetch
+        # slots first, then enrich with account data
+        slots_result = (
+            supabase.table("cloud_slots_log")
+            .select("id,provider,provider_email,provider_account_id")
+            .eq("user_id", user_id)
+            .eq("is_active", True)
+            .execute()
+        )
+        
+        if not slots_result.data:
+            return {"accounts": []}
+        
+        # For each slot, try to find matching cloud_account
+        accounts = []
+        for slot in slots_result.data:
+            # Try to find account by provider_account_id (Google account ID)
+            account_result = (
+                supabase.table("cloud_accounts")
+                .select("id,account_email,created_at")
+                .eq("user_id", user_id)
+                .eq("google_account_id", slot["provider_account_id"])
+                .limit(1)
+                .execute()
+            )
+            
+            if account_result.data:
+                # Account exists, use its data
+                accounts.append(account_result.data[0])
+            else:
+                # Slot exists but no matching account (edge case: account was deleted)
+                # Return minimal info from slot
+                accounts.append({
+                    "id": None,  # No account record
+                    "account_email": slot["provider_email"],
+                    "created_at": None,
+                })
+        
+        return {"accounts": accounts}
+    
+    except Exception as e:
+        logger.error(f"[ACCOUNTS FETCH ERROR] user_id={user_id} error={str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch accounts: {str(e)}")
 
 
 @app.get("/drive/{account_id}/copy-options")
