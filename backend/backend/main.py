@@ -376,14 +376,24 @@ def handle_checkout_completed(event: dict):
         from backend.billing_plans import get_plan_limits
         plan_limits = get_plan_limits(plan_code)
         
+        # Retrieve Stripe subscription to get current_period_end
+        subscription_obj = stripe.Subscription.retrieve(subscription_id)
+        plan_expires_at = datetime.fromtimestamp(
+            subscription_obj.current_period_end, 
+            tz=timezone.utc
+        ).isoformat()
+        
         update_data = {
             "plan": plan_code,
+            "plan_type": "PAID",  # Required by check_paid_plan_has_expiration
+            "plan_expires_at": plan_expires_at,  # Required for PAID plans
             "stripe_customer_id": customer_id,
             "stripe_subscription_id": subscription_id,
             "subscription_status": "active",
             # Set monthly limits (required by check_paid_has_monthly constraint)
-            "copies_monthly": plan_limits.copies_limit_month,
-            "transfer_bytes_monthly": plan_limits.transfer_bytes_limit_month,
+            # Use REAL column names: copies_limit_month, transfer_bytes_limit_month
+            "copies_limit_month": plan_limits.copies_limit_month,
+            "transfer_bytes_limit_month": plan_limits.transfer_bytes_limit_month,
             # Reset usage counters for new billing period
             "copies_used_month": 0,
             "transfer_bytes_used_month": 0,
@@ -392,9 +402,10 @@ def handle_checkout_completed(event: dict):
         }
         
         logging.info(
-            f"[STRIPE_WEBHOOK] Applying plan limits: plan={plan_code} "
-            f"copies_monthly={plan_limits.copies_limit_month} "
-            f"transfer_monthly_gb={plan_limits.transfer_bytes_limit_month / 1_073_741_824:.1f}"
+            f"[STRIPE_WEBHOOK] Applying limits: plan={plan_code} "
+            f"copies_limit_month={plan_limits.copies_limit_month} "
+            f"transfer_bytes_limit_month_gb={plan_limits.transfer_bytes_limit_month / 1_073_741_824:.1f} "
+            f"expires_at={plan_expires_at}"
         )
         
         result = supabase.table("user_plans").update(update_data).eq("user_id", user_id).execute()
@@ -447,16 +458,24 @@ def handle_subscription_deleted(event: dict):
         
         downgrade_data = {
             "plan": "free",
+            "plan_type": "FREE",  # Required by check_free_plan_no_expiration
+            "plan_expires_at": None,  # FREE plans must NOT have expiration
             "stripe_subscription_id": None,  # Clear subscription
             "subscription_status": "canceled",  # Mark as canceled
-            # Reset monthly fields to NULL (FREE plan uses lifetime counters)
-            "copies_monthly": None,
-            "transfer_bytes_monthly": None,
+            # Reset monthly limit fields to NULL (FREE plan uses lifetime counters)
+            # Use REAL column names: copies_limit_month, transfer_bytes_limit_month
+            "copies_limit_month": None,
+            "transfer_bytes_limit_month": None,
             "copies_used_month": 0,
             "transfer_bytes_used_month": 0,
             "period_start": period_start.isoformat(),
             "updated_at": now.isoformat()
         }
+        
+        logging.info(
+            f"[STRIPE_WEBHOOK] Downgrading to FREE: "
+            f"plan_type=FREE, plan_expires_at=NULL, monthly limits cleared"
+        )
         
         logging.info(f"[STRIPE_WEBHOOK] Downgrading user {user_id} to FREE (subscription canceled)")
         
