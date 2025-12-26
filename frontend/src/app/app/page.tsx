@@ -167,28 +167,71 @@ function DashboardContent() {
     const allowedParam = searchParams?.get("allowed");
       
     if (authStatus === "success") {
-      setToast({
-        message: "Cuenta de Google conectada exitosamente",
-        type: "success",
-      });
-      // Limpiar URL sin recargar la página
-      window.history.replaceState({}, "", window.location.pathname);
-      // Esperar 1 segundo antes de cargar los datos
-      setTimeout(() => {
-        fetchSummary();
-        fetchQuota();
-        fetchBillingQuota();
-        fetchCloudStatusData();
-      }, 1000);
+      // CRITICAL: Refresh Supabase session after OAuth redirect
+      // Ensures auth token is fresh before calling /me/* endpoints
+      const refreshAndLoad = async () => {
+        try {
+          const { data, error } = await supabase.auth.refreshSession();
+          if (error) {
+            console.error("[OAUTH] Failed to refresh session:", error);
+            setToast({
+              message: "Error al refrescar sesión. Recarga la página.",
+              type: "error",
+            });
+            return;
+          }
+          
+          console.log("[OAUTH] Session refreshed successfully:", {
+            user: data.session?.user?.email,
+            expires_at: data.session?.expires_at,
+          });
+          
+          setToast({
+            message: "Cuenta de Google conectada exitosamente",
+            type: "success",
+          });
+          
+          // Clean URL after successful refresh
+          window.history.replaceState({}, "", window.location.pathname);
+          
+          // Load dashboard data with fresh session
+          fetchSummary();
+          fetchQuota();
+          fetchBillingQuota();
+          fetchCloudStatusData();
+        } catch (err) {
+          console.error("[OAUTH] Exception refreshing session:", err);
+          setToast({
+            message: "Error inesperado. Recarga la página.",
+            type: "error",
+          });
+        }
+      };
+      
+      // Execute refresh after 500ms delay (allow cookies to settle)
+      setTimeout(refreshAndLoad, 500);
     } else if (reconnectStatus === "success") {
       const slotId = searchParams?.get("slot_id");
       
       // Clear URL immediately
       window.history.replaceState({}, "", window.location.pathname);
       
-      // CRITICAL: Validate real reconnection before showing success toast
+      // CRITICAL: Refresh session before validating reconnection
       const validateReconnect = async () => {
         try {
+          // Refresh Supabase session first (OAuth redirect may have stale token)
+          const { data: sessionData, error: sessionError } = await supabase.auth.refreshSession();
+          if (sessionError) {
+            console.error("[RECONNECT] Failed to refresh session:", sessionError);
+            setToast({
+              message: "⚠️ Error al refrescar sesión. Recarga la página.",
+              type: "warning",
+            });
+            return;
+          }
+          
+          console.log("[RECONNECT] Session refreshed successfully");
+          
           // Fetch fresh cloud status to verify actual connection state
           const data = await fetchCloudStatus(true);  // forceRefresh = true
           
@@ -234,8 +277,8 @@ function DashboardContent() {
         }
       };
       
-      // Execute validation after 1 second delay
-      setTimeout(validateReconnect, 1000);
+      // Execute validation after 500ms delay (allow cookies to settle)
+      setTimeout(validateReconnect, 500);
     } else if (authError === "cloud_limit_reached") {
       setToast({
         message: `Has usado tus slots históricos. Puedes reconectar tus cuentas anteriores desde "Ver mis cuentas", pero no puedes agregar cuentas nuevas en plan FREE.`,
