@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { authenticatedFetch } from "@/lib/api";
 import PricingPaymentStatus from "@/components/PricingPaymentStatus";
@@ -128,7 +128,9 @@ export default function PricingPage() {
         </header>
 
         {/* Payment Status Banner */}
-        <PricingPaymentStatus onPlanRefresh={handlePlanRefresh} />
+        <Suspense fallback={null}>
+          <PricingPaymentStatus onPlanRefresh={handlePlanRefresh} />
+        </Suspense>
 
         {/* Pricing Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
