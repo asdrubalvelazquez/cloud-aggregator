@@ -221,9 +221,13 @@ def get_user_quota_info(supabase: Client, user_id: str) -> Dict:
     # Calculate cloud limits
     plan_name = plan.get("plan", "free")
     plan_limits = get_plan_limits(plan_name)
+    
+    # DERIVE slots_total from PLAN_LIMITS (Single Source of Truth)
+    # DO NOT use plan.get("clouds_slots_total") from DB (stale snapshot)
     max_clouds = plan_limits.clouds_slots_total
     extra_clouds = plan.get("extra_clouds", 0)
     clouds_allowed = max_clouds + extra_clouds
+    historical_slots_total = clouds_allowed  # Derived, not from DB
     
     # Count ACTIVE connected clouds (for UI display)
     active_count_result = supabase.table("cloud_accounts").select("id").eq("user_id", user_id).eq("is_active", True).execute()
@@ -252,9 +256,7 @@ def get_user_quota_info(supabase: Client, user_id: str) -> Dict:
     else:
         historical_slots_used = historical_slots_used_from_plan
     
-    historical_slots_total = plan.get("clouds_slots_total", 2)  # Default FREE=2
-    
-    # Copy quota (differentiate FREE lifetime vs PAID monthly)
+    # Transfer quota (bytes, convert to GB for response)
     if plan_name == "free":
         copies_used = plan.get("total_lifetime_copies", 0)
         copies_limit = 20  # FREE limit
