@@ -1044,6 +1044,11 @@ export default function DriveFilesPage() {
                 Selecciona la cuenta destino donde deseas copiar este archivo:
               </p>
 
+              {/* Disclaimer */}
+              <p className="text-xs text-slate-400 italic mb-4 border-l-2 border-slate-600 pl-3">
+                Manual action — requires confirmation.
+              </p>
+
               {/* Dropdown Select */}
               <div className="mb-6">
                 <select

@@ -653,6 +653,9 @@ function DashboardContent() {
                 <p className="text-xs text-slate-400 mb-1">
                   <span className="text-slate-500">Separate accounts. Consolidated view for management.</span>
                 </p>
+                <p className="text-xs text-slate-500 mb-1 italic">
+                  Storage limits are enforced by Google Drive. Transfers only occur when you confirm an action.
+                </p>
                 <p className="text-xs text-slate-400 mb-3">
                   {formatStorageFromGB(data.total_usage / (1024 ** 3))} usados de{" "}
                   {formatStorageFromGB(data.total_limit / (1024 ** 3))} ({formatStorageFromGB((data.total_limit - data.total_usage) / (1024 ** 3))} libre)

@@ -68,6 +68,11 @@ export default function Home() {
               and transfer files between them with user-initiated copy operations.
             </p>
 
+            {/* Disclaimer */}
+            <p className="text-sm text-slate-500 max-w-2xl mx-auto border-l-2 border-slate-700 pl-4 italic">
+              Separate accounts. Cloud Aggregator helps you manage multiple Google Drives and perform manual transfers. It doesn't change Google Drive storage limits.
+            </p>
+
             {/* CTA Buttons */}
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
               <Link

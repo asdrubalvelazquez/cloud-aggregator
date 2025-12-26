@@ -325,8 +325,11 @@ export default function ReconnectSlotsModal({
               {/* Info Box */}
               {summary && summary.total_slots > 0 && (
                 <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mt-6">
-                  <p className="text-sm text-blue-200">
+                  <p className="text-sm text-blue-200 mb-2">
                     💡 <strong>Reconnection:</strong> You can reconnect your accounts at any time without consuming new slots, even with a full FREE plan.
+                  </p>
+                  <p className="text-xs text-blue-300 italic">
+                    ℹ️ Reconnecting restores access to this account. It does not add storage.
                   </p>
                 </div>
               )}
