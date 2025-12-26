@@ -63,6 +63,7 @@ SCOPES = [
 
 # Stripe Configuration
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
 
@@ -268,6 +269,185 @@ def create_checkout_session(
             status_code=500,
             detail="Failed to create checkout session"
         )
+
+
+@app.post("/stripe/webhooks")
+async def stripe_webhooks(request: Request):
+    """
+    Stripe webhook handler.
+    
+    Events handled:
+    - checkout.session.completed: Upgrade user to PLUS/PRO
+    - customer.subscription.deleted: Downgrade user to FREE
+    
+    Security: Validates webhook signature with STRIPE_WEBHOOK_SECRET
+    """
+    # Validation 1: Webhook secret configured
+    if not STRIPE_WEBHOOK_SECRET:
+        logging.error("[STRIPE_WEBHOOK] STRIPE_WEBHOOK_SECRET not configured")
+        raise HTTPException(status_code=500, detail="Webhook not configured")
+    
+    # Get raw body and signature
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+    
+    if not sig_header:
+        logging.error("[STRIPE_WEBHOOK] Missing stripe-signature header")
+        raise HTTPException(status_code=400, detail="Missing signature")
+    
+    try:
+        # Verify webhook signature
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, STRIPE_WEBHOOK_SECRET
+        )
+        logging.info(f"[STRIPE_WEBHOOK] Event received: {event['type']}")
+        
+    except ValueError as e:
+        # Invalid payload
+        logging.error(f"[STRIPE_WEBHOOK] Invalid payload: {str(e)}")
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    except stripe.error.SignatureVerificationError as e:
+        # Invalid signature
+        logging.error(f"[STRIPE_WEBHOOK] Invalid signature: {str(e)}")
+        raise HTTPException(status_code=400, detail="Invalid signature")
+    
+    # Handle events
+    event_type = event["type"]
+    
+    if event_type == "checkout.session.completed":
+        handle_checkout_completed(event)
+    elif event_type == "customer.subscription.deleted":
+        handle_subscription_deleted(event)
+    else:
+        logging.info(f"[STRIPE_WEBHOOK] Unhandled event type: {event_type}")
+    
+    return {"received": True}
+
+
+def handle_checkout_completed(event: dict):
+    """
+    Handle checkout.session.completed event.
+    
+    Updates user_plans:
+    - Map metadata.plan_code → plan (plus/pro)
+    - Set stripe_customer_id, stripe_subscription_id
+    - Set subscription_status = 'active'
+    - Update period_start to first day of current month
+    """
+    session = event["data"]["object"]
+    
+    # Extract metadata (required)
+    metadata = session.get("metadata", {})
+    user_id = metadata.get("user_id")
+    plan_code = metadata.get("plan_code")
+    
+    # Extract Stripe IDs
+    customer_id = session.get("customer")
+    subscription_id = session.get("subscription")
+    
+    # Validation: user_id required
+    if not user_id:
+        logging.error(f"[STRIPE_WEBHOOK] Missing user_id in metadata: session_id={session.get('id')}")
+        raise HTTPException(status_code=400, detail="Missing user_id in metadata")
+    
+    # Validation: subscription_id required
+    if not subscription_id:
+        logging.error(f"[STRIPE_WEBHOOK] Missing subscription_id: session_id={session.get('id')}")
+        raise HTTPException(status_code=400, detail="Missing subscription_id")
+    
+    # Validation: plan_code required
+    if not plan_code:
+        logging.error(f"[STRIPE_WEBHOOK] Missing plan_code in metadata: session_id={session.get('id')}")
+        raise HTTPException(status_code=400, detail="Missing plan_code in metadata")
+    
+    # Normalize and validate plan_code
+    plan_code = plan_code.lower()  # "plus" or "pro"
+    
+    if plan_code not in ["plus", "pro"]:
+        logging.error(f"[STRIPE_WEBHOOK] Invalid plan_code: {plan_code}, session_id={session.get('id')}")
+        raise HTTPException(status_code=400, detail=f"Invalid plan_code: {plan_code}")
+    
+    # Update user_plans
+    try:
+        now = datetime.now(timezone.utc)
+        period_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        
+        update_data = {
+            "plan": plan_code,
+            "stripe_customer_id": customer_id,
+            "stripe_subscription_id": subscription_id,
+            "subscription_status": "active",
+            "period_start": period_start.isoformat(),
+            "updated_at": now.isoformat()
+        }
+        
+        result = supabase.table("user_plans").update(update_data).eq("user_id", user_id).execute()
+        
+        if result.data:
+            logging.info(f"[STRIPE_WEBHOOK] User {user_id} upgraded to {plan_code.upper()}")
+        else:
+            logging.error(f"[STRIPE_WEBHOOK] Failed to update user_plans for user_id={user_id}")
+    
+    except Exception as e:
+        logging.error(f"[STRIPE_WEBHOOK] Error updating user_plans: {str(e)}")
+        raise
+
+
+def handle_subscription_deleted(event: dict):
+    """
+    Handle customer.subscription.deleted event.
+    
+    Downgrades user to FREE:
+    - Set plan = 'free'
+    - Clear stripe_subscription_id (keep customer_id for reactivation)
+    - Set subscription_status = NULL
+    - Reset monthly counters to 0
+    - Update period_start to first day of current month
+    """
+    subscription = event["data"]["object"]
+    
+    # Extract subscription_id
+    subscription_id = subscription.get("id")
+    
+    if not subscription_id:
+        logging.error("[STRIPE_WEBHOOK] Missing subscription_id in event")
+        return
+    
+    # Find user by subscription_id
+    try:
+        user_result = supabase.table("user_plans").select(
+            "user_id"
+        ).eq("stripe_subscription_id", subscription_id).execute()
+        
+        if not user_result.data:
+            logging.warning(f"[STRIPE_WEBHOOK] No user found for subscription_id={subscription_id}")
+            return
+        
+        user_id = user_result.data[0]["user_id"]
+        
+        # Downgrade to FREE
+        now = datetime.now(timezone.utc)
+        period_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        
+        downgrade_data = {
+            "plan": "free",
+            "stripe_subscription_id": None,  # Clear subscription
+            "subscription_status": None,  # NULL (not "canceled")
+            "copies_used_month": 0,  # Reset monthly counters
+            "transfer_bytes_used_month": 0,
+            "period_start": period_start.isoformat(),
+            "updated_at": now.isoformat()
+        }
+        
+        result = supabase.table("user_plans").update(downgrade_data).eq("user_id", user_id).execute()
+        
+        if result.data:
+            logging.info(f"[STRIPE_WEBHOOK] User {user_id} downgraded to FREE (subscription deleted)")
+        else:
+            logging.error(f"[STRIPE_WEBHOOK] Failed to downgrade user_id={user_id}")
+    
+    except Exception as e:
+        logging.error(f"[STRIPE_WEBHOOK] Error handling subscription deletion: {str(e)}")
 
 
 @app.get("/auth/google/login-url")
