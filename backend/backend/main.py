@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
+import stripe
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +22,7 @@ from backend.google_drive import (
 )
 from backend.auth import create_state_token, decode_state_token, verify_supabase_jwt, get_current_user
 from backend import quota
+from backend.stripe_utils import STRIPE_PRICE_PLUS, STRIPE_PRICE_PRO
 
 app = FastAPI()
 
@@ -58,6 +60,11 @@ SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
     "openid",
 ]
+
+# Stripe Configuration
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
 
 
 @app.get("/")
@@ -114,6 +121,153 @@ def get_billing_quota(user_id: str = Depends(verify_supabase_jwt)):
     except Exception as e:
         logging.error(f"Error fetching billing quota for user {user_id}: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to fetch quota information")
+
+
+class CreateCheckoutSessionRequest(BaseModel):
+    plan_code: str  # "PLUS" or "PRO"
+
+
+@app.post("/stripe/create-checkout-session")
+def create_checkout_session(
+    request: CreateCheckoutSessionRequest,
+    user_id: str = Depends(verify_supabase_jwt)
+):
+    """
+    Create Stripe Checkout Session for subscription upgrade.
+    
+    Args:
+        request.plan_code: "PLUS" or "PRO"
+        user_id: Derived from JWT (authenticated)
+    
+    Returns:
+        {"url": "https://checkout.stripe.com/..."}
+    
+    Errors:
+        400: Invalid plan_code
+        409: User already has active subscription
+        500: Stripe API error or configuration issue
+    """
+    # Validation 1: Stripe configured
+    if not STRIPE_SECRET_KEY:
+        logging.error("[STRIPE] STRIPE_SECRET_KEY not configured")
+        raise HTTPException(status_code=500, detail="Payment system not configured")
+    
+    # Validation 2: plan_code allowlist
+    plan_code = request.plan_code.upper()
+    if plan_code not in ["PLUS", "PRO"]:
+        raise HTTPException(status_code=400, detail="Invalid plan_code. Must be PLUS or PRO")
+    
+    # Map plan_code to Stripe price_id
+    price_id = STRIPE_PRICE_PLUS if plan_code == "PLUS" else STRIPE_PRICE_PRO
+    
+    try:
+        # Query 1: Check if user already has active subscription
+        user_plan_result = supabase.table("user_plans").select(
+            "stripe_customer_id, stripe_subscription_id, subscription_status, plan"
+        ).eq("user_id", user_id).execute()
+        
+        if not user_plan_result.data:
+            # User plan doesn't exist - create it first (safety fallback)
+            logging.warning(f"[STRIPE] User plan not found for user_id={user_id}, creating...")
+            quota.get_or_create_user_plan(supabase, user_id)
+            user_plan_result = supabase.table("user_plans").select(
+                "stripe_customer_id, stripe_subscription_id, subscription_status, plan"
+            ).eq("user_id", user_id).execute()
+        
+        user_plan = user_plan_result.data[0]
+        
+        # Validation 3: Block if already has active subscription or paid plan
+        # Double defense: status OR plan (webhook not implemented yet in Phase 2A)
+        if user_plan.get("subscription_status") == "active":
+            raise HTTPException(
+                status_code=409,
+                detail="Ya tienes una suscripción activa. Cancela primero para cambiar de plan."
+            )
+        
+        # Additional defensive check: block if user already has paid plan
+        current_plan = user_plan.get("plan", "free").lower()
+        if current_plan in ["plus", "pro"]:
+            raise HTTPException(
+                status_code=409,
+                detail="Ya tienes un plan de pago activo. Cancela primero para cambiar de plan."
+            )
+        
+        # Query 2: Get user email for Stripe Customer
+        user_result = supabase.auth.admin.get_user_by_id(user_id)
+        user_email = user_result.user.email if user_result and user_result.user else None
+        
+        if not user_email:
+            logging.error(f"[STRIPE] Could not retrieve email for user_id={user_id}")
+            raise HTTPException(status_code=500, detail="Could not retrieve user information")
+        
+        # Query 3: Get or Create Stripe Customer
+        stripe_customer_id = user_plan.get("stripe_customer_id")
+        
+        if not stripe_customer_id:
+            # Create new Stripe Customer
+            logging.info(f"[STRIPE] Creating new customer for user_id={user_id}")
+            customer = stripe.Customer.create(
+                email=user_email,
+                metadata={"supabase_user_id": user_id}
+            )
+            stripe_customer_id = customer.id
+            
+            # Save customer_id to DB
+            supabase.table("user_plans").update({
+                "stripe_customer_id": stripe_customer_id,
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("user_id", user_id).execute()
+            
+            logging.info(f"[STRIPE] Customer created: {stripe_customer_id}")
+        else:
+            logging.info(f"[STRIPE] Reusing existing customer: {stripe_customer_id}")
+        
+        # Generate success/cancel URLs (consistent routing to /app/pricing)
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        success_url = f"{frontend_url}/app/pricing?payment=success"
+        cancel_url = f"{frontend_url}/app/pricing?payment=canceled"
+        
+        # Create Stripe Checkout Session
+        logging.info(f"[STRIPE] Creating checkout session for plan={plan_code}, customer={stripe_customer_id}")
+        checkout_session = stripe.checkout.Session.create(
+            customer=stripe_customer_id,
+            payment_method_types=["card"],
+            line_items=[{
+                "price": price_id,
+                "quantity": 1
+            }],
+            mode="subscription",
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata={
+                "user_id": user_id,
+                "plan_code": plan_code.lower()  # "plus" or "pro"
+            },
+            allow_promotion_codes=True,
+            billing_address_collection="auto"
+        )
+        
+        logging.info(f"[STRIPE] Checkout session created: {checkout_session.id}")
+        
+        return {"url": checkout_session.url}
+    
+    except stripe.error.StripeError as e:
+        # Stripe API errors (card declined, network issues, etc.)
+        logging.error(f"[STRIPE] Stripe API error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Payment system error. Please try again later."
+        )
+    except HTTPException:
+        # Re-raise HTTPExceptions (validation errors)
+        raise
+    except Exception as e:
+        # Unexpected errors
+        logging.error(f"[STRIPE] Unexpected error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to create checkout session"
+        )
 
 
 @app.get("/auth/google/login-url")
