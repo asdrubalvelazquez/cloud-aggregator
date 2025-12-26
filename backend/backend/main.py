@@ -226,7 +226,7 @@ def create_checkout_session(
         # Generate success/cancel URLs (consistent routing to /app/pricing)
         frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
         success_url = f"{frontend_url}/app/pricing?payment=success"
-        cancel_url = f"{frontend_url}/app/pricing?payment=canceled"
+        cancel_url = f"{frontend_url}/app/pricing?payment=cancel"
         
         # Create Stripe Checkout Session
         logging.info(f"[STRIPE] Creating checkout session for plan={plan_code}, customer={stripe_customer_id}")
@@ -377,28 +377,46 @@ def handle_checkout_completed(event: dict):
         plan_limits = get_plan_limits(plan_code)
         
         # Retrieve Stripe subscription to get current_period_end
-        # Stripe API returns dict, not object - access with ["key"] or .get()
         logging.info(f"[STRIPE_WEBHOOK] Retrieving subscription details: subscription_id={subscription_id}")
-        subscription_obj = stripe.Subscription.retrieve(subscription_id)
+        sub = stripe.Subscription.retrieve(subscription_id)
         
-        # Access current_period_end as dict key (Stripe returns dict)
-        current_period_end = subscription_obj.get("current_period_end")
+        # ROBUST extraction of current_period_end (StripeObject can be tricky)
+        current_period_end = None
         
-        if not current_period_end:
-            logging.error(
-                f"[STRIPE_WEBHOOK] Missing current_period_end in subscription: "
+        # Attempt 1: getattr (works with StripeObject attributes)
+        current_period_end = getattr(sub, "current_period_end", None)
+        
+        # Attempt 2: dict-style access (works if StripeObject supports __getitem__)
+        if current_period_end is None:
+            try:
+                current_period_end = sub["current_period_end"]
+            except (KeyError, TypeError):
+                pass
+        
+        # Attempt 3: to_dict() method (some Stripe objects have this)
+        if current_period_end is None:
+            try:
+                sub_dict = sub.to_dict() if hasattr(sub, "to_dict") else dict(sub)
+                current_period_end = sub_dict.get("current_period_end")
+            except (AttributeError, TypeError):
+                pass
+        
+        # Fallback: use 31 days from now if all attempts fail
+        if current_period_end is None:
+            available_keys = list(sub.keys()) if hasattr(sub, "keys") else "unknown"
+            logging.warning(
+                f"[STRIPE_WEBHOOK] ⚠️ Could not extract current_period_end from subscription. "
+                f"Available keys: {available_keys}. Using 31-day fallback. "
                 f"subscription_id={subscription_id}, user_id={user_id}"
             )
-            raise HTTPException(
-                status_code=400, 
-                detail="Stripe subscription missing current_period_end"
-            )
-        
-        # Convert epoch seconds to ISO timestamp UTC
-        plan_expires_at = datetime.fromtimestamp(
-            current_period_end, 
-            tz=timezone.utc
-        ).isoformat()
+            # Fallback: 31 days from now (UTC)
+            plan_expires_at = (now + timedelta(days=31)).isoformat()
+        else:
+            # Convert epoch seconds to ISO timestamp UTC
+            plan_expires_at = datetime.fromtimestamp(
+                current_period_end, 
+                tz=timezone.utc
+            ).isoformat()
         
         logging.info(
             f"[STRIPE_WEBHOOK] checkout.session.completed: "
@@ -438,7 +456,11 @@ def handle_checkout_completed(event: dict):
         
         if result.data:
             logging.info(
-                f"[STRIPE_WEBHOOK] ✅ User {user_id} upgraded to {plan_code.upper()} successfully"
+                f"[STRIPE_WEBHOOK] ✅ UPGRADE SUCCESS: user_id={user_id}, "
+                f"plan={plan_code.upper()}, plan_type=PAID, "
+                f"plan_expires_at={plan_expires_at}, "
+                f"copies_limit_month={plan_limits.copies_limit_month}, "
+                f"transfer_bytes_limit_month={plan_limits.transfer_bytes_limit_month}"
             )
         else:
             logging.error(
