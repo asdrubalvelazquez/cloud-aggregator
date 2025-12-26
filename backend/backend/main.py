@@ -27,15 +27,26 @@ from backend.stripe_utils import STRIPE_PRICE_PLUS, STRIPE_PRICE_PRO
 app = FastAPI()
 
 # CORS Configuration
+# FRONTEND_URL: Canonical domain for redirects (OAuth, Stripe, etc.)
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+# CORS_ALLOWED_ORIGINS: Comma-separated list of allowed origins
+# If not set, use defaults: FRONTEND_URL + Vercel domain + localhost
+cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS")
+if cors_origins_env:
+    # Use explicitly configured origins (comma-separated)
+    allowed_origins = [origin.strip() for origin in cors_origins_env.split(",")]
+else:
+    # Default: Allow canonical domain, legacy Vercel domain, and localhost
+    allowed_origins = [
+        FRONTEND_URL,
+        "https://cloud-aggregator-umy5.vercel.app",
+        "http://localhost:3000",
+    ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        FRONTEND_URL,
-        "http://localhost:3000",
-        "https://*.vercel.app",
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
