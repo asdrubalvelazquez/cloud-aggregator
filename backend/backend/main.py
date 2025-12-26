@@ -654,9 +654,12 @@ def google_login_url(
     from urllib.parse import urlencode
     url = f"{GOOGLE_AUTH_ENDPOINT}?{urlencode(params)}"
     
-    # Log sin PII (solo hash parcial + mode)
+    # Log structured para observability (sin PII)
     user_hash = hashlib.sha256(user_id.encode()).hexdigest()[:8]
-    print(f"[OAuth URL Generated] user_hash={user_hash} mode={mode or 'connect'} prompt={oauth_prompt}")
+    logging.info(
+        f"[OAUTH_URL_GENERATED] user_hash={user_hash} mode={mode or 'connect'} "
+        f"prompt={oauth_prompt} reconnect_account_id={bool(reconnect_account_id)}"
+    )
     
     return {"url": url}
 
@@ -887,7 +890,9 @@ async def google_callback(request: Request):
     
     # Check cloud account limit with slot-based validation (only for connect mode)
     try:
+        logging.info(f"[OAUTH_SLOT_VALIDATION] user_id={user_id} provider=google_drive account_id={google_account_id}")
         quota.check_cloud_limit_with_slots(supabase, user_id, "google_drive", google_account_id)
+        logging.info(f"[OAUTH_SLOT_VALIDATION_PASSED] user_id={user_id} account_id={google_account_id}")
     except HTTPException as e:
         import logging
         # Diferenciar tipos de error para mejor UX
