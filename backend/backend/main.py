@@ -377,11 +377,36 @@ def handle_checkout_completed(event: dict):
         plan_limits = get_plan_limits(plan_code)
         
         # Retrieve Stripe subscription to get current_period_end
+        # Stripe API returns dict, not object - access with ["key"] or .get()
+        logging.info(f"[STRIPE_WEBHOOK] Retrieving subscription details: subscription_id={subscription_id}")
         subscription_obj = stripe.Subscription.retrieve(subscription_id)
+        
+        # Access current_period_end as dict key (Stripe returns dict)
+        current_period_end = subscription_obj.get("current_period_end")
+        
+        if not current_period_end:
+            logging.error(
+                f"[STRIPE_WEBHOOK] Missing current_period_end in subscription: "
+                f"subscription_id={subscription_id}, user_id={user_id}"
+            )
+            raise HTTPException(
+                status_code=400, 
+                detail="Stripe subscription missing current_period_end"
+            )
+        
+        # Convert epoch seconds to ISO timestamp UTC
         plan_expires_at = datetime.fromtimestamp(
-            subscription_obj.current_period_end, 
+            current_period_end, 
             tz=timezone.utc
         ).isoformat()
+        
+        logging.info(
+            f"[STRIPE_WEBHOOK] checkout.session.completed: "
+            f"user_id={user_id}, plan={plan_code}, "
+            f"subscription_id={subscription_id}, "
+            f"current_period_end={current_period_end}, "
+            f"plan_expires_at={plan_expires_at}"
+        )
         
         update_data = {
             "plan": plan_code,
@@ -404,19 +429,28 @@ def handle_checkout_completed(event: dict):
         logging.info(
             f"[STRIPE_WEBHOOK] Applying limits: plan={plan_code} "
             f"copies_limit_month={plan_limits.copies_limit_month} "
-            f"transfer_bytes_limit_month_gb={plan_limits.transfer_bytes_limit_month / 1_073_741_824:.1f} "
+            f"transfer_bytes_limit_month={plan_limits.transfer_bytes_limit_month} "
+            f"transfer_bytes_limit_month_gb={plan_limits.transfer_bytes_limit_month / 1_073_741_824:.1f}GB "
             f"expires_at={plan_expires_at}"
         )
         
         result = supabase.table("user_plans").update(update_data).eq("user_id", user_id).execute()
         
         if result.data:
-            logging.info(f"[STRIPE_WEBHOOK] User {user_id} upgraded to {plan_code.upper()}")
+            logging.info(
+                f"[STRIPE_WEBHOOK] ✅ User {user_id} upgraded to {plan_code.upper()} successfully"
+            )
         else:
-            logging.error(f"[STRIPE_WEBHOOK] Failed to update user_plans for user_id={user_id}")
+            logging.error(
+                f"[STRIPE_WEBHOOK] ❌ Failed to update user_plans for user_id={user_id} "
+                f"(Supabase returned empty result)"
+            )
     
     except Exception as e:
-        logging.error(f"[STRIPE_WEBHOOK] Error updating user_plans: {str(e)}")
+        logging.error(
+            f"[STRIPE_WEBHOOK] ❌ Error updating user_plans: {str(e)} "
+            f"(user_id={user_id}, subscription_id={subscription_id})"
+        )
         raise
 
 
@@ -456,6 +490,12 @@ def handle_subscription_deleted(event: dict):
         now = datetime.now(timezone.utc)
         period_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         
+        logging.info(
+            f"[STRIPE_WEBHOOK] customer.subscription.deleted: "
+            f"user_id={user_id}, subscription_id={subscription_id}, "
+            f"downgrading to FREE"
+        )
+        
         downgrade_data = {
             "plan": "free",
             "plan_type": "FREE",  # Required by check_free_plan_no_expiration
@@ -474,20 +514,28 @@ def handle_subscription_deleted(event: dict):
         
         logging.info(
             f"[STRIPE_WEBHOOK] Downgrading to FREE: "
-            f"plan_type=FREE, plan_expires_at=NULL, monthly limits cleared"
+            f"plan_type=FREE, plan_expires_at=NULL, "
+            f"copies_limit_month=NULL, transfer_bytes_limit_month=NULL"
         )
-        
-        logging.info(f"[STRIPE_WEBHOOK] Downgrading user {user_id} to FREE (subscription canceled)")
         
         result = supabase.table("user_plans").update(downgrade_data).eq("user_id", user_id).execute()
         
         if result.data:
-            logging.info(f"[STRIPE_WEBHOOK] User {user_id} downgraded to FREE (subscription deleted)")
+            logging.info(
+                f"[STRIPE_WEBHOOK] ✅ User {user_id} downgraded to FREE successfully "
+                f"(subscription {subscription_id} deleted)"
+            )
         else:
-            logging.error(f"[STRIPE_WEBHOOK] Failed to downgrade user_id={user_id}")
+            logging.error(
+                f"[STRIPE_WEBHOOK] ❌ Failed to downgrade user_id={user_id} "
+                f"(Supabase returned empty result)"
+            )
     
     except Exception as e:
-        logging.error(f"[STRIPE_WEBHOOK] Error handling subscription deletion: {str(e)}")
+        logging.error(
+            f"[STRIPE_WEBHOOK] ❌ Error handling subscription deletion: {str(e)} "
+            f"(subscription_id={subscription_id})"
+        )
 
 
 @app.get("/auth/google/login-url")
