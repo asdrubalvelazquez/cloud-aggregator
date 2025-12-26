@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend.db import supabase
+from backend.crypto import encrypt_token
 from backend.google_drive import (
     get_storage_quota,
     list_drive_files,
@@ -791,7 +792,7 @@ async def google_callback(request: Request):
             # CRITICAL: Solo actualizar refresh_token si viene uno nuevo
             # Google NO devuelve refresh_token en reconexiones subsecuentes
             update_payload = {
-                "access_token": access_token,
+                "access_token": encrypt_token(access_token),
                 "token_expiry": expiry_iso,
                 "is_active": True,
                 "disconnected_at": None,
@@ -799,7 +800,7 @@ async def google_callback(request: Request):
             
             # Solo actualizar refresh_token si viene un valor real (no None)
             if refresh_token:
-                update_payload["refresh_token"] = refresh_token
+                update_payload["refresh_token"] = encrypt_token(refresh_token)
                 logging.info(f"[RECONNECT] Got new refresh_token for account_id={account_id}")
             else:
                 logging.info(f"[RECONNECT] No new refresh_token, keeping existing one for account_id={account_id}")
@@ -836,8 +837,8 @@ async def google_callback(request: Request):
                 "user_id": user_id,
                 "google_account_id": google_account_id,
                 "account_email": account_email,
-                "access_token": access_token,
-                "refresh_token": refresh_token,
+                "access_token": encrypt_token(access_token),
+                "refresh_token": encrypt_token(refresh_token),
                 "token_expiry": expiry_iso,
                 "is_active": True,
                 "slot_log_id": slot_id,
@@ -936,8 +937,8 @@ async def google_callback(request: Request):
     upsert_data = {
         "account_email": account_email,
         "google_account_id": google_account_id,
-        "access_token": access_token,
-        "refresh_token": refresh_token,
+        "access_token": encrypt_token(access_token),
+        "refresh_token": encrypt_token(refresh_token),
         "token_expiry": expiry_iso,
         "user_id": user_id,
         "is_active": True,              # Reactivar cuenta si estaba soft-deleted

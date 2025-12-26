@@ -7,6 +7,7 @@ from dateutil import parser as dateutil_parser
 import httpx
 
 from backend.db import supabase
+from backend.crypto import decrypt_token, encrypt_token
 
 GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 GOOGLE_DRIVE_API_BASE = "https://www.googleapis.com/drive/v3"
@@ -30,7 +31,8 @@ async def get_valid_token(account_id: int) -> str:
     if not account:
         raise ValueError(f"Account {account_id} not found")
 
-    access_token = account.get("access_token")
+    # SECURITY: Decrypt tokens from storage
+    access_token = decrypt_token(account.get("access_token"))
     account_email = account.get("account_email", "unknown")
     
     # CRITICAL: Validate token exists before checking expiry
@@ -67,7 +69,8 @@ async def get_valid_token(account_id: int) -> str:
         return access_token
 
     # Token expired or missing expiry - refresh it
-    refresh_token = account.get("refresh_token")
+    # SECURITY: Decrypt refresh_token from storage
+    refresh_token = decrypt_token(account.get("refresh_token"))
     if not refresh_token:
         logger.error(f"[TOKEN ERROR] account_id={account_id} email={account_email} has no refresh_token")
         # Mark account as needing reconnection
@@ -164,8 +167,9 @@ async def get_valid_token(account_id: int) -> str:
     new_expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
     # Update database with new token and expiry
+    # SECURITY: Encrypt token before storage
     supabase.table("cloud_accounts").update({
-        "access_token": new_access_token,
+        "access_token": encrypt_token(new_access_token),
         "token_expiry": new_expiry.isoformat(),
         "is_active": True,  # Reactivate if was marked inactive
     }).eq("id", account_id).execute()
