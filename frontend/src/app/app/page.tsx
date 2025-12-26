@@ -174,10 +174,10 @@ function DashboardContent() {
           const { data, error } = await supabase.auth.refreshSession();
           if (error) {
             console.error("[OAUTH] Failed to refresh session:", error);
-            setToast({
-              message: "Error al refrescar sesión. Recarga la página.",
-              type: "error",
-            });
+            
+            // FIX 3: Fallback seguro - signOut y redirect a login
+            await supabase.auth.signOut();
+            window.location.href = "/login?reason=session_expired&next=/app";
             return;
           }
           
@@ -223,10 +223,10 @@ function DashboardContent() {
           const { data: sessionData, error: sessionError } = await supabase.auth.refreshSession();
           if (sessionError) {
             console.error("[RECONNECT] Failed to refresh session:", sessionError);
-            setToast({
-              message: "⚠️ Error al refrescar sesión. Recarga la página.",
-              type: "warning",
-            });
+            
+            // FIX 3: Fallback seguro - signOut y redirect a login
+            await supabase.auth.signOut();
+            window.location.href = "/login?reason=session_expired&next=/app";
             return;
           }
           
@@ -434,22 +434,37 @@ function DashboardContent() {
               // FIX: Explicit boolean to avoid TS error (boolean | null not assignable)
               const limitReached = quota ? quota.historical_slots_used >= quota.historical_slots_total : false;
               return (
-                <button
-                  onClick={handleConnectGoogle}
-                  disabled={limitReached}
-                  className={
-                    limitReached
-                      ? "rounded-lg transition px-4 py-2 text-sm font-semibold bg-slate-600 text-slate-400 cursor-not-allowed"
-                      : "rounded-lg transition px-4 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-600"
-                  }
-                  title={
-                    limitReached
-                      ? "Has usado todos tus slots históricos. Puedes reconectar tus cuentas anteriores desde 'Ver mis cuentas'"
-                      : "Conectar una nueva cuenta de Google Drive"
-                  }
-                >
-                  Conectar nueva cuenta
-                </button>
+                <>
+                  <button
+                    onClick={handleConnectGoogle}
+                    disabled={limitReached}
+                    className={
+                      limitReached
+                        ? "rounded-lg transition px-4 py-2 text-sm font-semibold bg-slate-600 text-slate-400 cursor-not-allowed"
+                        : "rounded-lg transition px-4 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-600"
+                    }
+                    title={
+                      limitReached
+                        ? "Has usado todos tus slots históricos. Puedes reconectar tus cuentas anteriores desde 'Ver mis cuentas'"
+                        : "Conectar una nueva cuenta de Google Drive"
+                    }
+                  >
+                    Conectar nueva cuenta
+                  </button>
+                  
+                  {/* CTA upgrade cuando límite alcanzado (solo FREE y PLUS) */}
+                  {limitReached && billingQuota && billingQuota.plan !== "pro" && (
+                    <a
+                      href="/pricing"
+                      className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-purple-600 hover:bg-purple-700 text-white flex items-center gap-2"
+                    >
+                      <span>🚀</span>
+                      <span>
+                        {billingQuota.plan === "free" ? "Actualizar a PLUS o PRO" : "Actualizar a PRO"}
+                      </span>
+                    </a>
+                  )}
+                </>
               );
             })()}
             <button
@@ -495,12 +510,12 @@ function DashboardContent() {
                       {billingQuota.plan}
                     </span>
                   </div>
-                  {billingQuota.plan === "free" && (
+                  {(billingQuota.plan === "free" || billingQuota.plan === "plus") && (
                     <a
                       href="/pricing"
                       className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold transition"
                     >
-                      ⬆️ Actualizar plan
+                      {billingQuota.plan === "free" ? "⬆️ Actualizar plan" : "🚀 Actualizar a PRO"}
                     </a>
                   )}
                 </div>
@@ -572,11 +587,17 @@ function DashboardContent() {
                     <p className="text-2xl font-bold text-white">
                       {billingQuota.max_file_gb.toFixed(1)} GB
                     </p>
-                    <p className="text-xs text-slate-400 mt-2">
-                      {billingQuota.plan === "free" && "Actualiza a PLUS para 10 GB"}
-                      {billingQuota.plan === "plus" && "Actualiza a PRO para 50 GB"}
-                      {billingQuota.plan === "pro" && "Límite máximo 🎉"}
-                    </p>
+                    {billingQuota.plan !== "pro" ? (
+                      <a
+                        href="/pricing"
+                        className="text-xs text-blue-400 hover:text-blue-300 mt-2 inline-block underline cursor-pointer transition"
+                      >
+                        {billingQuota.plan === "free" && "Actualiza a PLUS para 10 GB →"}
+                        {billingQuota.plan === "plus" && "Actualiza a PRO para 50 GB →"}
+                      </a>
+                    ) : (
+                      <p className="text-xs text-slate-400 mt-2">Límite máximo 🎉</p>
+                    )}
                   </div>
                 </div>
               </section>
