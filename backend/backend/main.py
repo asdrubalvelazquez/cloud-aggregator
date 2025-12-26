@@ -609,18 +609,6 @@ def google_login_url(
     if mode == "reconnect" and not reconnect_account_id:
         raise HTTPException(status_code=400, detail="reconnect_account_id required for mode=reconnect")
     
-    # Validation: connect mode requires available slots (reconnect bypasses this)
-    if mode == "connect" or mode is None:
-        try:
-            user_quota = quota.get_user_quota_info(supabase, user_id)
-            if user_quota["clouds_remaining"] <= 0:
-                raise HTTPException(status_code=403, detail="No slots available. Disconnect an account or upgrade your plan.")
-        except Exception as e:
-            if isinstance(e, HTTPException):
-                raise
-            logging.error(f"[QUOTA CHECK ERROR] user_id={user_id} error={str(e)}")
-            raise HTTPException(status_code=500, detail="Failed to check quota")
-    
     # For reconnect: verify slot exists and get email for login_hint + slot_log_id
     reconnect_email = None
     slot_log_id = None
