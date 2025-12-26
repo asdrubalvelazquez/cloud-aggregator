@@ -31,16 +31,15 @@ app = FastAPI()
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 # CORS_ALLOWED_ORIGINS: Comma-separated list of allowed origins
-# If not set, use defaults: FRONTEND_URL + Vercel domain + localhost
+# If not set, use defaults: FRONTEND_URL + localhost
 cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS")
 if cors_origins_env:
     # Use explicitly configured origins (comma-separated)
     allowed_origins = [origin.strip() for origin in cors_origins_env.split(",")]
 else:
-    # Default: Allow canonical domain, legacy Vercel domain, and localhost
+    # Default: Allow canonical domain and localhost for development
     allowed_origins = [
         FRONTEND_URL,
-        "https://cloud-aggregator-umy5.vercel.app",
         "http://localhost:3000",
     ]
 
