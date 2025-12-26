@@ -234,10 +234,10 @@ def create_checkout_session(
         else:
             logging.info(f"[STRIPE] Reusing existing customer: {stripe_customer_id}")
         
-        # Generate success/cancel URLs (consistent routing to /app/pricing)
+        # Generate success/cancel URLs (route to existing /pricing page)
         frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-        success_url = f"{frontend_url}/app/pricing?payment=success"
-        cancel_url = f"{frontend_url}/app/pricing?payment=cancel"
+        success_url = f"{frontend_url}/pricing?payment=success&session_id={{CHECKOUT_SESSION_ID}}"
+        cancel_url = f"{frontend_url}/pricing?payment=cancel"
         
         # Create Stripe Checkout Session
         logging.info(f"[STRIPE] Creating checkout session for plan={plan_code}, customer={stripe_customer_id}")

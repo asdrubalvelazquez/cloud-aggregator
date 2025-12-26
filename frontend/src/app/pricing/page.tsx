@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { authenticatedFetch } from "@/lib/api";
+import PricingPaymentStatus from "@/components/PricingPaymentStatus";
 
 type Plan = {
   name: string;
@@ -56,6 +57,11 @@ export default function PricingPage() {
   const [currentPlan, setCurrentPlan] = useState<string>("free");
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>("");
+
+  // Callback para actualizar plan desde componente de payment status
+  const handlePlanRefresh = (newPlan: string) => {
+    setCurrentPlan(newPlan);
+  };
 
   useEffect(() => {
     const fetchCurrentPlan = async () => {
@@ -120,6 +126,9 @@ export default function PricingPage() {
             Elige el plan que mejor se adapte a tus necesidades
           </p>
         </header>
+
+        {/* Payment Status Banner */}
+        <PricingPaymentStatus onPlanRefresh={handlePlanRefresh} />
 
         {/* Pricing Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
