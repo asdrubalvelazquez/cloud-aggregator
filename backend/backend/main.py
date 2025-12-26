@@ -187,20 +187,21 @@ def create_checkout_session(
         
         user_plan = user_plan_result.data[0]
         
-        # Validation 3: Block if already has active subscription or paid plan
-        # Double defense: status OR plan (webhook not implemented yet in Phase 2A)
-        if user_plan.get("subscription_status") == "active":
-            raise HTTPException(
-                status_code=409,
-                detail="Ya tienes una suscripción activa. Cancela primero para cambiar de plan."
-            )
+        # Validation 3: Allow ONLY upgrades (block downgrades and lateral moves)
+        # Plan hierarchy: free < plus < pro
+        PLAN_HIERARCHY = {"free": 0, "plus": 1, "pro": 2}
         
-        # Additional defensive check: block if user already has paid plan
         current_plan = user_plan.get("plan", "free").lower()
-        if current_plan in ["plus", "pro"]:
+        target_plan = plan_code.lower()
+        
+        current_level = PLAN_HIERARCHY.get(current_plan, 0)
+        target_level = PLAN_HIERARCHY.get(target_plan, 0)
+        
+        # Block if trying to downgrade or stay same
+        if target_level <= current_level:
             raise HTTPException(
                 status_code=409,
-                detail="Ya tienes un plan de pago activo. Cancela primero para cambiar de plan."
+                detail=f"Solo se permiten upgrades. Plan actual: {current_plan.upper()}, plan solicitado: {target_plan.upper()}. Contacta soporte para cambios de plan."
             )
         
         # Query 2: Get user email for Stripe Customer
