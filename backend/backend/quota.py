@@ -503,13 +503,19 @@ def check_cloud_limit_with_slots(supabase: Client, user_id: str, provider: str, 
     # ═══════════════════════════════════════════════════════════════════════════
     # PRIORIDAD 2: VALIDACIÓN DE CUENTA NUEVA (Solo si no existe en historial)
     # ═══════════════════════════════════════════════════════════════════════════
-    # Get user plan and slots configuration from DB (not hardcoded)
+    # Get user plan and derive slots_total from PLAN_LIMITS (SSOT)
     plan = get_or_create_user_plan(supabase, user_id)
-    clouds_slots_total = plan.get("clouds_slots_total", 2)  # Default: 2 for FREE
-    clouds_slots_used = plan.get("clouds_slots_used", 0)
     plan_name = plan.get("plan", "free")
     
-    logging.info(f"[SLOT VALIDATION] Plan={plan_name}, slots_used={clouds_slots_used}, slots_total={clouds_slots_total}")
+    # DERIVE clouds_slots_total from PLAN_LIMITS (DO NOT use DB value)
+    plan_limits = get_plan_limits(plan_name)
+    clouds_slots_total = plan_limits.clouds_slots_total
+    extra_clouds = plan.get("extra_clouds", 0)
+    clouds_slots_total = clouds_slots_total + extra_clouds  # Total allowed slots
+    
+    clouds_slots_used = plan.get("clouds_slots_used", 0)
+    
+    logging.info(f"[SLOT VALIDATION] Plan={plan_name}, slots_used={clouds_slots_used}, slots_total={clouds_slots_total} (derived from PLAN_LIMITS)")
     
     # Nueva cuenta - verificar disponibilidad de slots
     if clouds_slots_used >= clouds_slots_total:
