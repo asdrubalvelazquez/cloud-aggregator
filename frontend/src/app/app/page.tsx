@@ -643,13 +643,16 @@ function DashboardContent() {
               {/* Barra de progreso global */}
               <div className="bg-slate-800 rounded-xl p-5 shadow-lg border border-slate-700">
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold text-slate-300">Uso Global de Almacenamiento</h3>
+                  <h3 className="text-sm font-semibold text-slate-300">Storage Overview</h3>
                   {lastUpdated && (
                     <span className="text-xs text-slate-500">
                       Última actualización: {getRelativeTime(lastUpdated)}
                     </span>
                   )}
                 </div>
+                <p className="text-xs text-slate-400 mb-1">
+                  <span className="text-slate-500">Separate accounts. Consolidated view for management.</span>
+                </p>
                 <p className="text-xs text-slate-400 mb-3">
                   {formatStorageFromGB(data.total_usage / (1024 ** 3))} usados de{" "}
                   {formatStorageFromGB(data.total_limit / (1024 ** 3))} ({formatStorageFromGB((data.total_limit - data.total_usage) / (1024 ** 3))} libre)

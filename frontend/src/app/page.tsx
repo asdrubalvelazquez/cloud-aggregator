@@ -55,17 +55,17 @@ export default function Home() {
 
             {/* Main Heading */}
             <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight leading-tight">
-              Unifica todo tu{" "}
+              Manage multiple{" "}
               <span className="bg-gradient-to-r from-emerald-400 via-blue-500 to-purple-500 bg-clip-text text-transparent animate-gradient">
-                almacenamiento en la nube
+                Google Drive accounts
               </span>
-              {" "}en un solo lugar
+              {" "}from one dashboard
             </h1>
 
             {/* Subheading */}
             <p className="text-xl md:text-2xl text-slate-300 max-w-3xl mx-auto leading-relaxed">
-              Conecta múltiples cuentas de Google Drive, suma tu espacio disponible 
-              y transfiere archivos entre nubes sin límites.
+              Connect multiple Google Drive accounts, view storage usage across all your accounts,
+              and transfer files between them with user-initiated copy operations.
             </p>
 
             {/* CTA Buttons */}
@@ -107,10 +107,10 @@ export default function Home() {
           <div className="max-w-6xl mx-auto">
             <div className="text-center mb-16">
               <h2 className="text-3xl md:text-4xl font-bold mb-4">
-                Todo lo que necesitas en un solo lugar
+                Everything you need in one place
               </h2>
               <p className="text-slate-400 text-lg">
-                Gestiona tu almacenamiento en la nube de forma inteligente
+                Manage your Google Drive accounts efficiently
               </p>
             </div>
 
@@ -122,9 +122,9 @@ export default function Home() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                   </svg>
                 </div>
-                <h3 className="text-xl font-bold mb-3">Unifica tu espacio</h3>
+                <h3 className="text-xl font-bold mb-3">View all accounts</h3>
                 <p className="text-slate-400 leading-relaxed">
-                  Conecta múltiples cuentas de Google Drive y suma todo tu almacenamiento disponible en un solo dashboard.
+                  Connect multiple Google Drive accounts and view storage usage for each account separately in one dashboard.
                 </p>
               </div>
 
@@ -135,9 +135,9 @@ export default function Home() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                   </svg>
                 </div>
-                <h3 className="text-xl font-bold mb-3">Transfiere archivos</h3>
+                <h3 className="text-xl font-bold mb-3">Transfer files</h3>
                 <p className="text-slate-400 leading-relaxed">
-                  Copia archivos y carpetas entre diferentes cuentas de Google Drive de manera rápida y segura.
+                  Copy files between your Google Drive accounts with explicit user confirmation for each operation.
                 </p>
               </div>
 
@@ -148,9 +148,9 @@ export default function Home() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                   </svg>
                 </div>
-                <h3 className="text-xl font-bold mb-3">Acceso instantáneo</h3>
+                <h3 className="text-xl font-bold mb-3">Instant access</h3>
                 <p className="text-slate-400 leading-relaxed">
-                  Visualiza y gestiona todos tus archivos desde una interfaz única, sin cambiar entre cuentas.
+                  Browse and manage files from all your connected accounts in a single interface.
                 </p>
               </div>
             </div>
@@ -223,9 +223,9 @@ export default function Home() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
               <div className="text-center p-8">
                 <div className="text-5xl md:text-6xl font-bold bg-gradient-to-r from-emerald-400 to-emerald-600 bg-clip-text text-transparent mb-2">
-                  2TB+
+                  500+
                 </div>
-                <p className="text-slate-400 text-lg">Espacio agregado</p>
+                <p className="text-slate-400 text-lg">Accounts connected</p>
               </div>
               <div className="text-center p-8">
                 <div className="text-5xl md:text-6xl font-bold bg-gradient-to-r from-blue-400 to-blue-600 bg-clip-text text-transparent mb-2">
@@ -247,10 +247,10 @@ export default function Home() {
         <section className="py-32 px-6">
           <div className="max-w-4xl mx-auto text-center space-y-8">
             <h2 className="text-4xl md:text-5xl font-bold leading-tight">
-              ¿Listo para unificar tu almacenamiento?
+              Ready to manage your Google Drive accounts?
             </h2>
             <p className="text-xl text-slate-300 max-w-2xl mx-auto">
-              Empieza a conectar tus cuentas de Google Drive ahora y gestiona todo tu espacio desde un solo lugar.
+              Start connecting your Google Drive accounts now and manage all your files from one dashboard.
             </p>
             <div className="pt-4">
               <Link
@@ -288,7 +288,7 @@ export default function Home() {
             
             {/* Copyright */}
             <p className="text-slate-400 text-sm">
-              Cloud Aggregator © 2025 - Unifica tu almacenamiento en la nube
+              Cloud Aggregator © 2025 - Multi-account Google Drive manager
             </p>
           </div>
         </footer>

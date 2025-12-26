@@ -326,7 +326,7 @@ export default function ReconnectSlotsModal({
               {summary && summary.total_slots > 0 && (
                 <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mt-6">
                   <p className="text-sm text-blue-200">
-                    💡 <strong>Reconexión sin límites:</strong> Puedes reconectar tus cuentas en cualquier momento sin consumir slots nuevos, incluso con plan FREE lleno.
+                    💡 <strong>Reconnection:</strong> You can reconnect your accounts at any time without consuming new slots, even with a full FREE plan.
                   </p>
                 </div>
               )}

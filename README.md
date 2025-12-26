@@ -1,6 +1,6 @@
 # Cloud Aggregator
 
-Multi-cloud storage aggregator with file copy capabilities between Google Drive accounts.
+Multi-account Google Drive manager with file copy capabilities between your connected accounts.
 
 ## Tech Stack
 - **Backend**: FastAPI (Python) deployed on Fly.io
@@ -13,9 +13,9 @@ Multi-cloud storage aggregator with file copy capabilities between Google Drive 
 
 ## Features
 - Connect multiple Google Drive accounts
-- View aggregated storage statistics
+- View storage statistics for each connected account
 - Browse files from each account
-- Copy files between accounts
+- Copy files between accounts (user-initiated)
 - Automatic OAuth token refresh
 
 ## Local Development
