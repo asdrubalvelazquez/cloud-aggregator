@@ -204,6 +204,13 @@ async def list_drive_files(
     """
     List files in a specific folder in Google Drive with pagination.
     
+    # TODO: GOOGLE OAUTH SCOPE LIMITATION (drive.file)
+    # Con scope drive.file, solo se listan archivos creados/abiertos por esta app.
+    # Para listar todo el Drive del usuario se requeriría scope "drive" o "drive.readonly".
+    # Alternativa recomendada: Implementar file picker (Google Picker API) para que el usuario
+    # seleccione archivos específicos, en lugar de listar todo el Drive.
+    # Ref: Google Picker API documentation
+    
     Args:
         account_id: ID of the cloud account
         folder_id: Google Drive folder ID to list (default "root" for Drive root)
@@ -277,6 +284,13 @@ async def find_duplicate_file(
 ) -> dict | None:
     """
     Search for duplicate file in target account.
+    
+    # TODO: GOOGLE OAUTH SCOPE LIMITATION (drive.file)
+    # Con scope drive.file, solo se busca entre archivos creados/abiertos por esta app.
+    # No se pueden buscar archivos existentes del usuario que no fueron tocados por la app.
+    # Alternativa: Si el usuario selecciona archivos mediante Picker API, esos archivos
+    # quedan accesibles para búsqueda de duplicados.
+    # Ref: Google Picker API documentation
     
     Strategy:
     - For binary files with md5Checksum: match by name AND md5

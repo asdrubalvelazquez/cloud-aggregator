@@ -62,12 +62,12 @@ GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
 
 # Google OAuth Scopes - MÍNIMOS NECESARIOS (Google OAuth Compliance)
-# https://www.googleapis.com/auth/drive: Full Drive access (necesario para copy files between accounts)
+# https://www.googleapis.com/auth/drive.file: Per-file access (archivos creados/abiertos por la app)
 # https://www.googleapis.com/auth/userinfo.email: Email del usuario (identificación)
 # openid: OpenID Connect (autenticación)
-# NOTA: drive.readonly NO es suficiente para copiar archivos entre cuentas
+# NOTA: Reducido a drive.file para Google OAuth approval. La app solo accede a archivos que el usuario seleccione.
 SCOPES = [
-    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/userinfo.email",
     "openid",
 ]
