@@ -60,18 +60,30 @@ export default function ReconnectSlotsModal({
       return;
     }
     
-    // Verificar que hay sesión activa
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.user?.id) {
-      setError("No hay sesión activa");
-      return;
-    }
-    
     try {
+      // Verificar que hay sesión activa y obtener access_token
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session?.access_token) {
+        // No lanzar error - mostrar mensaje en UI
+        setError("Tu sesión expiró. Vuelve a iniciar sesión.");
+        console.warn("[RECONNECT] No access_token available");
+        setReconnecting(null);
+        return;
+      }
+      
+      if (!session.user?.id) {
+        setError("Tu sesión expiró. Vuelve a iniciar sesión.");
+        console.warn("[RECONNECT] No user.id in session");
+        setReconnecting(null);
+        return;
+      }
+      
       setReconnecting(account.slot_log_id);
       setError(null);
       
       console.log("[RECONNECT] Fetching OAuth URL for:", account.provider_email, account.provider_account_id);
+      
       // Fetch OAuth URL with reconnect mode
       const { url } = await fetchGoogleLoginUrl({ 
         mode: "reconnect",
@@ -85,8 +97,13 @@ export default function ReconnectSlotsModal({
         onReconnect(account);
       }
     } catch (err: any) {
-      setError(`Error al obtener URL de reconexión: ${err.message || err}`);
-      console.error("handleReconnect error:", err);
+      // Manejar errores específicos
+      if (err.message?.includes("No authenticated session")) {
+        setError("Tu sesión expiró. Vuelve a iniciar sesión.");
+      } else {
+        setError(`Error al obtener URL de reconexión: ${err.message || err}`);
+      }
+      console.error("[RECONNECT] Error:", err);
       setReconnecting(null);
     }
   };
