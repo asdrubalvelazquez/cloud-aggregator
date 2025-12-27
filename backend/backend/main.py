@@ -618,7 +618,12 @@ def google_login_url(
     reconnect_email = None
     slot_log_id = None
     if mode == "reconnect":
-        slot_check = supabase.table("cloud_slots_log").select("id,provider_email").eq("user_id", user_id).eq("provider_account_id", reconnect_account_id).limit(1).execute()
+        # Normalize reconnect_account_id for consistent comparison
+        reconnect_account_id_normalized = str(reconnect_account_id).strip() if reconnect_account_id else ""
+        
+        # CRITICAL: DO NOT filter by user_id here - Phase 3.3 allows reclaiming slots with different user_id if email matches
+        # Load slot by provider + provider_account_id (order by created_at desc for historical duplicates)
+        slot_check = supabase.table("cloud_slots_log").select("id,provider_email").eq("provider", "google").eq("provider_account_id", reconnect_account_id_normalized).order("created_at", desc=True).limit(1).execute()
         if not slot_check.data:
             raise HTTPException(status_code=404, detail="Slot not found for this account")
         reconnect_email = slot_check.data[0].get("provider_email")
@@ -776,7 +781,7 @@ async def google_callback(request: Request):
             # Obtener email esperado del slot para mejor UX
             expected_email = "unknown"
             try:
-                slot_info = supabase.table("cloud_slots_log").select("provider_email").eq("user_id", user_id).eq("provider_account_id", reconnect_account_id_normalized).limit(1).execute()
+                slot_info = supabase.table("cloud_slots_log").select("provider_email").eq("provider", "google").eq("provider_account_id", reconnect_account_id_normalized).order("created_at", desc=True).limit(1).execute()
                 if slot_info.data:
                     expected_email = slot_info.data[0].get("provider_email", "unknown")
             except Exception:
@@ -794,12 +799,24 @@ async def google_callback(request: Request):
         # CRITICAL: Load target slot/account by reconnect_account_id and verify ownership
         # This prevents malicious users from hijacking other users' slots/accounts
         
-        # Step 1: Load target slot by provider_account_id (reconnect_account_id)
-        target_slot = supabase.table("cloud_slots_log") \
-            .select("id, user_id, provider_account_id, provider_email") \
-            .eq("provider_account_id", reconnect_account_id_normalized) \
-            .limit(1) \
-            .execute()
+        # Step 1: Load target slot - prioritize slot_log_id from state, fallback to provider_account_id
+        if slot_log_id:
+            # Precise lookup by id from state JWT (preferred)
+            target_slot = supabase.table("cloud_slots_log") \
+                .select("id, user_id, provider_account_id, provider_email") \
+                .eq("id", slot_log_id) \
+                .eq("provider", "google") \
+                .limit(1) \
+                .execute()
+        else:
+            # Fallback: lookup by provider + provider_account_id (order by created_at desc)
+            target_slot = supabase.table("cloud_slots_log") \
+                .select("id, user_id, provider_account_id, provider_email") \
+                .eq("provider", "google") \
+                .eq("provider_account_id", reconnect_account_id_normalized) \
+                .order("created_at", desc=True) \
+                .limit(1) \
+                .execute()
         
         if not target_slot.data:
             # Slot doesn't exist => Invalid reconnect attempt
@@ -844,22 +861,28 @@ async def google_callback(request: Request):
                 )
                 
                 # Update slot ownership in cloud_slots_log
-                now_iso = datetime.now(timezone.utc).isoformat()
-                supabase.table("cloud_slots_log").update({
-                    "user_id": user_id,
-                    "updated_at": now_iso
-                }).eq("id", slot_id).execute()
-                
-                # Also update cloud_accounts ownership if exists
-                # This ensures consistency between slots and accounts
-                supabase.table("cloud_accounts").update({
-                    "user_id": user_id
-                }).eq("google_account_id", reconnect_account_id_normalized).execute()
-                
-                logging.info(
-                    f"[SECURITY][RECLAIM] Slot ownership transferred successfully. "
-                    f"slot_id={slot_id} new_user_id={user_id}"
-                )
+                # NOTE: updated_at is handled by database trigger automatically
+                try:
+                    supabase.table("cloud_slots_log").update({
+                        "user_id": user_id
+                    }).eq("id", slot_id).execute()
+                    
+                    # Also update cloud_accounts ownership if exists
+                    # CRITICAL: Use provider + provider_account_id (not google_account_id which doesn't exist)
+                    supabase.table("cloud_accounts").update({
+                        "user_id": user_id
+                    }).eq("provider", "google").eq("provider_account_id", reconnect_account_id_normalized).execute()
+                    
+                    logging.info(
+                        f"[SECURITY][RECLAIM] Slot ownership transferred successfully. "
+                        f"slot_id={slot_id} new_user_id={user_id}"
+                    )
+                except Exception as e:
+                    logging.error(
+                        f"[SECURITY][RECLAIM] Ownership transfer failed: {type(e).__name__} "
+                        f"slot_id={slot_id} user_id={user_id}"
+                    )
+                    return RedirectResponse(f"{FRONTEND_URL}/app?error=reconnect_failed")
                 
                 # Update slot_user_id for subsequent code flow
                 slot_user_id = user_id
