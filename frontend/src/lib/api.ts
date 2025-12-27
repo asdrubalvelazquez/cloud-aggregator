@@ -145,7 +145,11 @@ export async function fetchGoogleLoginUrl(params?: {
   
   const res = await authenticatedFetch(endpoint);
   if (!res.ok) {
-    throw new Error(`Failed to get OAuth URL: ${res.status}`);
+    const errorData = await res.json().catch(() => ({}));
+    const error: any = new Error(`Failed to get OAuth URL: ${res.status}`);
+    error.status = res.status;
+    error.body = errorData;
+    throw error;
   }
   return await res.json();
 }

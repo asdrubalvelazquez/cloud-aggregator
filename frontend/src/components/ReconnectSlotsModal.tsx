@@ -97,6 +97,23 @@ export default function ReconnectSlotsModal({
         onReconnect(account);
       }
     } catch (err: any) {
+      // Manejar error 404: slot_not_found (cuenta histórica no reconectable)
+      if (err.status === 404 || err.body?.error === "slot_not_found") {
+        // Mostrar mensaje y conectar automáticamente como nueva cuenta
+        setError("Esta cuenta histórica no puede reconectarse. La conectaremos como nueva cuenta…");
+        
+        try {
+          // Conectar como nueva cuenta (sin reconnect_account_id)
+          const { url } = await fetchGoogleLoginUrl({ mode: "connect" });
+          window.location.href = url;
+          // No llamar setReconnecting(null) aquí porque vamos a redirect
+        } catch (connectErr: any) {
+          setError(`Error al conectar cuenta: ${connectErr.message || connectErr}`);
+          setReconnecting(null);
+        }
+        return;
+      }
+      
       // Manejar errores específicos
       if (err.message?.includes("No authenticated session")) {
         setError("Tu sesión expiró. Vuelve a iniciar sesión.");
