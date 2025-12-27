@@ -8,7 +8,7 @@ from typing import Optional
 import httpx
 import stripe
 from fastapi import FastAPI, Request, HTTPException, Depends, Header
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -624,10 +624,23 @@ def google_login_url(
         # CRITICAL: DO NOT filter by user_id here - Phase 3.3 allows reclaiming slots with different user_id if email matches
         # Load slot by provider + provider_account_id (order by created_at desc for historical duplicates)
         slot_check = supabase.table("cloud_slots_log").select("id,provider_email").eq("provider", "google").eq("provider_account_id", reconnect_account_id_normalized).order("created_at", desc=True).limit(1).execute()
+        
+        # Defensive check: verify slot exists before accessing data[0]
         if not slot_check.data:
-            raise HTTPException(status_code=404, detail="Slot not found for this account")
-        reconnect_email = slot_check.data[0].get("provider_email")
-        slot_log_id = slot_check.data[0].get("id")
+            # Log security event (mask account ID for privacy)
+            logging.warning(
+                f"[SECURITY][RECONNECT] slot_not_found for reconnect_account_id=***"
+                f"{reconnect_account_id_normalized[-4:] if reconnect_account_id_normalized else 'EMPTY'}"
+            )
+            return JSONResponse(
+                status_code=404,
+                content={"error": "slot_not_found"}
+            )
+        
+        # Safe access to slot data
+        slot_data = slot_check.data[0]
+        reconnect_email = slot_data.get("provider_email")
+        slot_log_id = slot_data.get("id")
     
     # OAuth Prompt Strategy (Google best practices):
     # - Default: "select_account" (mejor UX, no agresivo)
