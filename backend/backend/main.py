@@ -618,29 +618,37 @@ def google_login_url(
     reconnect_email = None
     slot_log_id = None
     if mode == "reconnect":
-        # Normalize reconnect_account_id for consistent comparison
-        reconnect_account_id_normalized = str(reconnect_account_id).strip() if reconnect_account_id else ""
-        
-        # CRITICAL: DO NOT filter by user_id here - Phase 3.3 allows reclaiming slots with different user_id if email matches
-        # Load slot by provider + provider_account_id (order by created_at desc for historical duplicates)
-        slot_check = supabase.table("cloud_slots_log").select("id,provider_email").eq("provider", "google").eq("provider_account_id", reconnect_account_id_normalized).order("created_at", desc=True).limit(1).execute()
-        
-        # Defensive check: verify slot exists before accessing data[0]
-        if not slot_check.data:
-            # Log security event (mask account ID for privacy)
-            logging.warning(
-                f"[SECURITY][RECONNECT] slot_not_found for reconnect_account_id=***"
-                f"{reconnect_account_id_normalized[-4:] if reconnect_account_id_normalized else 'EMPTY'}"
-            )
+        try:
+            # Normalize reconnect_account_id for consistent comparison
+            reconnect_account_id_normalized = str(reconnect_account_id).strip() if reconnect_account_id else ""
+            
+            # CRITICAL: DO NOT filter by user_id here - Phase 3.3 allows reclaiming slots with different user_id if email matches
+            # Load slot by provider + provider_account_id (order by created_at desc for historical duplicates)
+            slot_check = supabase.table("cloud_slots_log").select("id,provider_email").eq("provider", "google").eq("provider_account_id", reconnect_account_id_normalized).order("created_at", desc=True).limit(1).execute()
+            
+            # Defensive check: verify slot exists before accessing data[0]
+            if not slot_check.data:
+                # Log security event (mask account ID for privacy)
+                logging.warning(
+                    f"[SECURITY][RECONNECT] slot_not_found for reconnect_account_id=***"
+                    f"{reconnect_account_id_normalized[-4:] if reconnect_account_id_normalized else 'EMPTY'}"
+                )
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": "slot_not_found"}
+                )
+            
+            # Safe access to slot data
+            slot_data = slot_check.data[0]
+            reconnect_email = slot_data.get("provider_email")
+            slot_log_id = slot_data.get("id")
+        except Exception:
+            # Log full stack trace for debugging (NO tokens/PII)
+            logging.exception("[SECURITY][LOGIN_URL] reconnect_mode_failed")
             return JSONResponse(
-                status_code=404,
-                content={"error": "slot_not_found"}
+                status_code=500,
+                content={"error": "login_url_failed"}
             )
-        
-        # Safe access to slot data
-        slot_data = slot_check.data[0]
-        reconnect_email = slot_data.get("provider_email")
-        slot_log_id = slot_data.get("id")
     
     # OAuth Prompt Strategy (Google best practices):
     # - Default: "select_account" (mejor UX, no agresivo)
