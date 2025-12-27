@@ -782,11 +782,49 @@ async def google_callback(request: Request):
             )
             return RedirectResponse(f"{FRONTEND_URL}/app?error=account_mismatch&expected={expected_email}")
         
-        # UPSERT cloud_account (atomic operation, handles UPDATE or INSERT)
-        # Get slot_id for linking (required for new accounts, ignored for updates)
-        slot_result = supabase.table("cloud_slots_log").select("id").eq("user_id", user_id).eq("provider_account_id", google_account_id).limit(1).execute()
-        slot_id = slot_result.data[0]["id"] if slot_result.data else None
+        # ===== SECURITY CHECK: Verify slot ownership before updating tokens =====
+        # CRITICAL: Load target slot/account by reconnect_account_id and verify ownership
+        # This prevents malicious users from hijacking other users' slots/accounts
         
+        # Step 1: Load target slot by provider_account_id (reconnect_account_id)
+        target_slot = supabase.table("cloud_slots_log") \
+            .select("id, user_id, provider_account_id, provider_email") \
+            .eq("provider_account_id", reconnect_account_id_normalized) \
+            .limit(1) \
+            .execute()
+        
+        if not target_slot.data:
+            # Slot doesn't exist => Invalid reconnect attempt
+            logging.error(
+                f"[SECURITY] Reconnect failed: slot not found. "
+                f"reconnect_account_id={reconnect_account_id_normalized} "
+                f"user_id={user_id}"
+            )
+            return RedirectResponse(f"{FRONTEND_URL}/app?error=slot_not_found")
+        
+        slot_user_id = target_slot.data[0]["user_id"]
+        slot_id = target_slot.data[0]["id"]
+        
+        # Step 2: Verify slot belongs to current user (ownership check)
+        if slot_user_id != user_id:
+            # Slot belongs to ANOTHER user => BLOCK (account takeover attempt)
+            logging.error(
+                f"[SECURITY] Account takeover attempt blocked! "
+                f"Slot reconnect_account_id={reconnect_account_id_normalized} "
+                f"belongs_to_user_id={slot_user_id} but "
+                f"current_user_id={user_id} attempted reconnect"
+            )
+            return RedirectResponse(f"{FRONTEND_URL}/app?error=ownership_violation")
+        
+        # Ownership verified => OK to proceed with token update
+        logging.info(
+            f"[SECURITY] Reconnect ownership verified: "
+            f"slot_id={slot_id} belongs to user_id={user_id}, "
+            f"google_account_id={google_account_id_normalized}"
+        )
+        # ===== END SECURITY CHECK =====
+        
+        # slot_id already retrieved from target_slot above
         if not slot_id:
             logging.error(
                 f"[RECONNECT ERROR] No slot found for reconnection. "
