@@ -7,7 +7,7 @@ from typing import Optional
 
 import httpx
 import stripe
-from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi import FastAPI, Request, HTTPException, Depends, Header
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -21,7 +21,7 @@ from backend.google_drive import (
     rename_file,
     download_file_stream,
 )
-from backend.auth import create_state_token, decode_state_token, verify_supabase_jwt, get_current_user
+from backend.auth import create_state_token, decode_state_token, verify_supabase_jwt, get_current_user, get_jwt_user_info
 from backend import quota
 from backend.stripe_utils import STRIPE_PRICE_PLUS, STRIPE_PRICE_PRO
 
@@ -576,7 +576,7 @@ def handle_subscription_deleted(event: dict):
 def google_login_url(
     mode: Optional[str] = None, 
     reconnect_account_id: Optional[str] = None,
-    user_id: str = Depends(verify_supabase_jwt)
+    user_info: dict = Depends(get_jwt_user_info)
 ):
     """
     Get Google OAuth URL for client-side redirect.
@@ -603,6 +603,10 @@ def google_login_url(
     Returns:
         {"url": "https://accounts.google.com/o/oauth2/v2/auth?..."}
     """
+    # Extract user_id and user_email from JWT
+    user_id = user_info["user_id"]
+    user_email = user_info["email"]
+    
     if not GOOGLE_CLIENT_ID or not GOOGLE_REDIRECT_URI:
         raise HTTPException(status_code=500, detail="Missing GOOGLE_CLIENT_ID or GOOGLE_REDIRECT_URI")
 
@@ -643,12 +647,14 @@ def google_login_url(
     if mode == "reconnect" and reconnect_email:
         params["login_hint"] = reconnect_email
     
-    # Crear state JWT con user_id, mode, reconnect_account_id, slot_log_id (seguro, firmado)
+    # user_email already extracted from JWT claims above (no need for extra query)
+    # Crear state JWT con user_id, mode, reconnect_account_id, slot_log_id, user_email (seguro, firmado)
     state_token = create_state_token(
         user_id, 
         mode=mode or "connect", 
         reconnect_account_id=reconnect_account_id,
-        slot_log_id=slot_log_id
+        slot_log_id=slot_log_id,
+        user_email=user_email
     )
     params["state"] = state_token
 
@@ -700,11 +706,12 @@ async def google_callback(request: Request):
     if not code:
         return RedirectResponse(f"{FRONTEND_URL}?error=no_code")
     
-    # Decodificar el state para obtener user_id, mode, reconnect_account_id, slot_log_id
+    # Decodificar el state para obtener user_id, mode, reconnect_account_id, slot_log_id, user_email
     user_id = None
     mode = "connect"
     reconnect_account_id = None
     slot_log_id = None
+    user_email = None
     if state:
         state_data = decode_state_token(state)
         if state_data:
@@ -712,6 +719,7 @@ async def google_callback(request: Request):
             mode = state_data.get("mode", "connect")
             reconnect_account_id = state_data.get("reconnect_account_id")
             slot_log_id = state_data.get("slot_log_id")
+            user_email = state_data.get("user_email")
 
     # Exchange code for tokens
     data = {
@@ -804,19 +812,69 @@ async def google_callback(request: Request):
         
         slot_user_id = target_slot.data[0]["user_id"]
         slot_id = target_slot.data[0]["id"]
+        slot_email = target_slot.data[0].get("provider_email", "")
         
-        # Step 2: Verify slot belongs to current user (ownership check)
+        # Step 2: Verify slot belongs to current user (ownership check with safe reclaim)
         if slot_user_id != user_id:
-            # Slot belongs to ANOTHER user => BLOCK (account takeover attempt)
-            logging.error(
-                f"[SECURITY] Account takeover attempt blocked! "
-                f"Slot reconnect_account_id={reconnect_account_id_normalized} "
-                f"belongs_to_user_id={slot_user_id} but "
-                f"current_user_id={user_id} attempted reconnect"
-            )
-            return RedirectResponse(f"{FRONTEND_URL}/app?error=ownership_violation")
+            # Ownership mismatch detected
+            # SAFE RECLAIM: Allow reassignment ONLY if provider_email matches current user's auth email
+            
+            # Normalize emails for comparison
+            slot_email_normalized = slot_email.lower().strip() if slot_email else ""
+            current_user_email_normalized = user_email.lower().strip() if user_email else ""
+            
+            # Validate we have both emails to compare
+            if not slot_email_normalized or not current_user_email_normalized:
+                # Missing email data => BLOCK for safety
+                logging.error(
+                    f"[SECURITY] Ownership violation: Missing email for validation. "
+                    f"slot_id={slot_id} slot_email={'PRESENT' if slot_email_normalized else 'MISSING'} "
+                    f"user_email={'PRESENT' if current_user_email_normalized else 'MISSING'}"
+                )
+                return RedirectResponse(f"{FRONTEND_URL}/app?error=ownership_violation")
+            
+            # Compare emails (case-insensitive, trimmed)
+            if slot_email_normalized == current_user_email_normalized:
+                # ✅ Email matches => SAFE RECLAIM
+                logging.warning(
+                    f"[SECURITY][RECLAIM] Slot reassignment authorized: "
+                    f"slot_id={slot_id} provider_account_id={reconnect_account_id_normalized} "
+                    f"from_user_id={slot_user_id} to_user_id={user_id} "
+                    f"email={slot_email_normalized} (verified match)"
+                )
+                
+                # Update slot ownership in cloud_slots_log
+                now_iso = datetime.now(timezone.utc).isoformat()
+                supabase.table("cloud_slots_log").update({
+                    "user_id": user_id,
+                    "updated_at": now_iso
+                }).eq("id", slot_id).execute()
+                
+                # Also update cloud_accounts ownership if exists
+                # This ensures consistency between slots and accounts
+                supabase.table("cloud_accounts").update({
+                    "user_id": user_id
+                }).eq("google_account_id", reconnect_account_id_normalized).execute()
+                
+                logging.info(
+                    f"[SECURITY][RECLAIM] Slot ownership transferred successfully. "
+                    f"slot_id={slot_id} new_user_id={user_id}"
+                )
+                
+                # Update slot_user_id for subsequent code flow
+                slot_user_id = user_id
+            else:
+                # ❌ Email doesn't match => BLOCK (account takeover attempt)
+                logging.error(
+                    f"[SECURITY] Account takeover attempt blocked! "
+                    f"Slot reconnect_account_id={reconnect_account_id_normalized} "
+                    f"belongs_to_user_id={slot_user_id} (slot_email={slot_email_normalized}) but "
+                    f"current_user_id={user_id} (auth_email={current_user_email_normalized}) attempted reconnect. "
+                    f"Email mismatch prevents reclaim."
+                )
+                return RedirectResponse(f"{FRONTEND_URL}/app?error=ownership_violation")
         
-        # Ownership verified => OK to proceed with token update
+        # Ownership verified (either original owner or safely reclaimed) => OK to proceed
         logging.info(
             f"[SECURITY] Reconnect ownership verified: "
             f"slot_id={slot_id} belongs to user_id={user_id}, "

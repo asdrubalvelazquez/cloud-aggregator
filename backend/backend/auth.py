@@ -17,7 +17,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 
 
-def create_state_token(user_id: str, mode: str = "connect", reconnect_account_id: str = None, slot_log_id: str = None) -> str:
+def create_state_token(user_id: str, mode: str = "connect", reconnect_account_id: str = None, slot_log_id: str = None, user_email: str = None) -> str:
     """Crea un JWT firmado con el user_id para usar como state en OAuth
     
     Args:
@@ -25,6 +25,7 @@ def create_state_token(user_id: str, mode: str = "connect", reconnect_account_id
         mode: OAuth mode (connect|reauth|reconnect)
         reconnect_account_id: Google account ID for reconnect mode
         slot_log_id: Slot log ID for precise slot identification (preferred for reconnect)
+        user_email: User's auth email (for safe slot reclaim validation)
     """
     from datetime import datetime, timedelta
     payload = {
@@ -38,15 +39,17 @@ def create_state_token(user_id: str, mode: str = "connect", reconnect_account_id
         payload["reconnect_account_id"] = reconnect_account_id
     if slot_log_id:
         payload["slot_log_id"] = slot_log_id
+    if user_email:
+        payload["user_email"] = user_email
     token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
     return token
 
 
 def decode_state_token(state: str) -> Optional[dict]:
-    """Decodifica el state JWT y retorna payload con user_id, mode, reconnect_account_id, slot_log_id
+    """Decodifica el state JWT y retorna payload con user_id, mode, reconnect_account_id, slot_log_id, user_email
     
     Returns:
-        dict: {user_id, mode, reconnect_account_id?, slot_log_id?} or None if invalid
+        dict: {user_id, mode, reconnect_account_id?, slot_log_id?, user_email?} or None if invalid
     """
     import logging
     try:
@@ -57,7 +60,8 @@ def decode_state_token(state: str) -> Optional[dict]:
             "user_id": payload.get("user_id"),
             "mode": payload.get("mode", "connect"),
             "reconnect_account_id": payload.get("reconnect_account_id"),
-            "slot_log_id": payload.get("slot_log_id")
+            "slot_log_id": payload.get("slot_log_id"),
+            "user_email": payload.get("user_email")
         }
     except jwt.ExpiredSignatureError:
         logging.warning("[SECURITY] Expired state token in OAuth callback (possible replay attack)")
@@ -66,10 +70,15 @@ def decode_state_token(state: str) -> Optional[dict]:
         return None
 
 
-def verify_supabase_jwt(authorization: Optional[str] = Header(None)) -> str:
+def get_jwt_user_info(authorization: Optional[str] = Header(None)) -> dict:
     """
-    Verifica el JWT de Supabase del header Authorization.
-    Retorna el user_id si es válido, sino lanza HTTPException.
+    Verifica el JWT de Supabase y retorna user_id y email.
+    
+    Returns:
+        dict: {"user_id": str, "email": str}
+    
+    Raises:
+        HTTPException(401) if invalid token
     """
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")
@@ -92,13 +101,26 @@ def verify_supabase_jwt(authorization: Optional[str] = Header(None)) -> str:
         if not user_id:
             raise HTTPException(status_code=401, detail="Invalid token: missing sub")
         
-        return user_id
+        email = payload.get("email", "")
+        
+        return {"user_id": user_id, "email": email}
     except ValueError:
         raise HTTPException(status_code=401, detail="Invalid authorization header format")
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+
+def verify_supabase_jwt(authorization: Optional[str] = Header(None)) -> str:
+    """
+    Verifica el JWT de Supabase del header Authorization.
+    Retorna el user_id si es válido, sino lanza HTTPException.
+    
+    Para obtener también el email, usa get_jwt_user_info() en su lugar.
+    """
+    user_info = get_jwt_user_info(authorization)
+    return user_info["user_id"]
 
 
 async def get_current_user(authorization: Optional[str] = Header(None)) -> str:
