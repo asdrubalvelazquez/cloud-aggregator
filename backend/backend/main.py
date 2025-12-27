@@ -782,73 +782,57 @@ async def google_callback(request: Request):
             )
             return RedirectResponse(f"{FRONTEND_URL}/app?error=account_mismatch&expected={expected_email}")
         
-        # Update or create cloud_account
-        existing_account = supabase.table("cloud_accounts").select("id").eq("user_id", user_id).eq("google_account_id", google_account_id).limit(1).execute()
+        # UPSERT cloud_account (atomic operation, handles UPDATE or INSERT)
+        # Get slot_id for linking (required for new accounts, ignored for updates)
+        slot_result = supabase.table("cloud_slots_log").select("id").eq("user_id", user_id).eq("provider_account_id", google_account_id).limit(1).execute()
+        slot_id = slot_result.data[0]["id"] if slot_result.data else None
         
-        if existing_account.data:
-            # UPDATE existing account with new tokens
-            account_id = existing_account.data[0]["id"]
-            
-            # CRITICAL: Solo actualizar refresh_token si viene uno nuevo
-            # Google NO devuelve refresh_token en reconexiones subsecuentes
-            update_payload = {
-                "access_token": encrypt_token(access_token),
-                "token_expiry": expiry_iso,
-                "is_active": True,
-                "disconnected_at": None,
-            }
-            
-            # Solo actualizar refresh_token si viene un valor real (no None)
-            if refresh_token:
-                update_payload["refresh_token"] = encrypt_token(refresh_token)
-                logging.info(f"[RECONNECT] Got new refresh_token for account_id={account_id}")
-            else:
-                logging.info(f"[RECONNECT] No new refresh_token, keeping existing one for account_id={account_id}")
-            
-            update_result = supabase.table("cloud_accounts").update(update_payload).eq("id", account_id).execute()
-            
-            rows_updated = len(update_result.data) if update_result.data else 0
-            if rows_updated == 0:
-                logging.warning(
-                    f"[RECONNECT WARNING] cloud_accounts UPDATE affected 0 rows. "
-                    f"account_id={account_id} user_id={user_id}"
-                )
-            else:
-                logging.info(
-                    f"[RECONNECT SUCCESS - cloud_accounts] "
-                    f"user_id={user_id} account_id={account_id} "
-                    f"google_account_id={google_account_id} email={account_email} "
-                    f"rows_updated={rows_updated} is_active=True disconnected_at=None "
-                    f"refresh_token_updated={bool(refresh_token)}"
-                )
+        if not slot_id:
+            logging.error(
+                f"[RECONNECT ERROR] No slot found for reconnection. "
+                f"user_id={user_id} google_account_id={google_account_id} email={account_email}"
+            )
+            return RedirectResponse(f"{FRONTEND_URL}/app?error=slot_not_found")
+        
+        # Build upsert payload
+        # CRITICAL: Solo incluir refresh_token si viene uno nuevo (Google no siempre lo retorna)
+        upsert_payload = {
+            "google_account_id": google_account_id,
+            "user_id": user_id,
+            "account_email": account_email,
+            "access_token": encrypt_token(access_token),
+            "token_expiry": expiry_iso,
+            "is_active": True,
+            "disconnected_at": None,
+            "slot_log_id": slot_id,
+        }
+        
+        # Solo actualizar refresh_token si viene un valor real (no None)
+        if refresh_token:
+            upsert_payload["refresh_token"] = encrypt_token(refresh_token)
+            logging.info(f"[RECONNECT] Got new refresh_token for google_account_id={google_account_id}")
         else:
-            # CREATE new cloud_account (edge case: account deleted but slot exists)
-            slot_result = supabase.table("cloud_slots_log").select("id").eq("user_id", user_id).eq("provider_account_id", google_account_id).limit(1).execute()
-            slot_id = slot_result.data[0]["id"] if slot_result.data else None
-            
-            if not slot_id:
-                logging.error(
-                    f"[RECONNECT ERROR] No slot found for reconnection. "
-                    f"user_id={user_id} google_account_id={google_account_id} email={account_email}"
-                )
-                return RedirectResponse(f"{FRONTEND_URL}/app?error=slot_not_found")
-            
-            insert_result = supabase.table("cloud_accounts").insert({
-                "user_id": user_id,
-                "google_account_id": google_account_id,
-                "account_email": account_email,
-                "access_token": encrypt_token(access_token),
-                "refresh_token": encrypt_token(refresh_token),
-                "token_expiry": expiry_iso,
-                "is_active": True,
-                "slot_log_id": slot_id,
-            }).execute()
-            
-            new_account_id = insert_result.data[0]["id"] if insert_result.data else "unknown"
+            logging.info(f"[RECONNECT] No new refresh_token, keeping existing one for google_account_id={google_account_id}")
+        
+        # Perform UPSERT (UPDATE if exists, INSERT if not)
+        upsert_result = supabase.table("cloud_accounts").upsert(
+            upsert_payload,
+            on_conflict="google_account_id"
+        ).execute()
+        
+        if upsert_result.data:
+            account_id = upsert_result.data[0].get("id", "unknown")
             logging.info(
-                f"[RECONNECT SUCCESS - cloud_accounts CREATED] "
-                f"user_id={user_id} account_id={new_account_id} slot_id={slot_id} "
-                f"google_account_id={google_account_id} email={account_email}"
+                f"[RECONNECT SUCCESS - cloud_accounts UPSERT] "
+                f"user_id={user_id} account_id={account_id} "
+                f"google_account_id={google_account_id} email={account_email} "
+                f"is_active=True disconnected_at=None "
+                f"refresh_token_updated={bool(refresh_token)}"
+            )
+        else:
+            logging.warning(
+                f"[RECONNECT WARNING] cloud_accounts UPSERT returned no data. "
+                f"user_id={user_id} google_account_id={google_account_id}"
             )
         
         # Ensure slot is active and update provider info
