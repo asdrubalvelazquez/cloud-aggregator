@@ -623,8 +623,8 @@ def google_login_url(
             reconnect_account_id_normalized = str(reconnect_account_id).strip() if reconnect_account_id else ""
             
             # CRITICAL: DO NOT filter by user_id here - Phase 3.3 allows reclaiming slots with different user_id if email matches
-            # Load slot by provider + provider_account_id (order by created_at desc for historical duplicates)
-            slot_check = supabase.table("cloud_slots_log").select("id,provider_email").eq("provider", "google").eq("provider_account_id", reconnect_account_id_normalized).order("created_at", desc=True).limit(1).execute()
+            # Load slot by provider + provider_account_id (order by id desc for historical duplicates)
+            slot_check = supabase.table("cloud_slots_log").select("id,provider_email").eq("provider", "google").eq("provider_account_id", reconnect_account_id_normalized).order("id", desc=True).limit(1).execute()
             
             # Defensive check: verify slot exists before accessing data[0]
             if not slot_check.data:
