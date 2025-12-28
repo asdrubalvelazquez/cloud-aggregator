@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { CopyProvider } from "@/context/CopyContext";
 import { CopyProgressBar } from "@/components/CopyProgressBar";
+import { CanonicalURL } from "@/components/CanonicalURL";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -26,13 +27,15 @@ export const viewport: Viewport = {
 };
 
 // Metadata configuration
+// CANONICAL DOMAIN: https://www.cloudaggregatorapp.com
+// Dual-domain active: vercel.app + www (both functional, www is preferred)
 export const metadata: Metadata = {
-  metadataBase: new URL("https://cloudaggregatorapp.com"),
+  metadataBase: new URL("https://www.cloudaggregatorapp.com"),
   title: {
-    default: "Cloud Aggregator – Manage All Your Cloud Drives in One Place",
+    default: "Cloud Aggregator – Connect Multiple Google Drive Accounts",
     template: "%s | Cloud Aggregator",
   },
-  description: "Cloud Aggregator lets you connect and manage multiple Google Drive accounts in one place. Copy, organize, and control your cloud files easily.",
+  description: "Cloud Aggregator lets you connect multiple Google Drive accounts in one dashboard. View each account separately and manually copy files between them with full user control.",
   keywords: [
     "cloud storage",
     "google drive",
@@ -46,20 +49,20 @@ export const metadata: Metadata = {
   creator: "Cloud Aggregator",
   publisher: "Cloud Aggregator",
   alternates: {
-    canonical: "https://cloudaggregatorapp.com",
+    canonical: "https://www.cloudaggregatorapp.com",
   },
   openGraph: {
     type: "website",
     locale: "en_US",
-    url: "https://cloudaggregatorapp.com",
+    url: "https://www.cloudaggregatorapp.com",
     siteName: "Cloud Aggregator",
-    title: "Cloud Aggregator – Manage All Your Cloud Drives in One Place",
-    description: "Cloud Aggregator lets you connect and manage multiple Google Drive accounts in one place. Copy, organize, and control your cloud files easily.",
+    title: "Cloud Aggregator – Connect Multiple Google Drive Accounts",
+    description: "Connect multiple Google Drive accounts (each remains separate). Select files with Google Picker and manually copy between accounts with explicit user confirmation. User-controlled operations only.",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Cloud Aggregator – Manage All Your Cloud Drives in One Place",
-    description: "Cloud Aggregator lets you connect and manage multiple Google Drive accounts in one place. Copy, organize, and control your cloud files easily.",
+    title: "Cloud Aggregator – Connect Multiple Google Drive Accounts",
+    description: "Connect multiple Google Drive accounts (each remains separate). Select files with Google Picker and manually copy between accounts with explicit user confirmation. User-controlled operations only.",
   },
   robots: {
     index: true,
@@ -95,6 +98,7 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <CopyProvider>
+          <CanonicalURL />
           {children}
           <CopyProgressBar />
         </CopyProvider>

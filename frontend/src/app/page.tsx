@@ -55,22 +55,22 @@ export default function Home() {
 
             {/* Main Heading */}
             <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight leading-tight">
-              Manage multiple{" "}
+              Connect{" "}
               <span className="bg-gradient-to-r from-emerald-400 via-blue-500 to-purple-500 bg-clip-text text-transparent animate-gradient">
-                Google Drive accounts
+                multiple Google Drive
               </span>
-              {" "}from one dashboard
+              {" "}accounts from a single interface
             </h1>
 
             {/* Subheading */}
             <p className="text-xl md:text-2xl text-slate-300 max-w-3xl mx-auto leading-relaxed">
-              Connect multiple Google Drive accounts, view storage usage across all your accounts,
-              and transfer files between them with user-initiated copy operations.
+              Connect multiple Google Drive accounts (each remains separate), select files with Google Picker,
+              and manually copy between accounts with explicit user confirmation.
             </p>
 
             {/* Disclaimer */}
             <p className="text-sm text-slate-500 max-w-2xl mx-auto border-l-2 border-slate-700 pl-4 italic">
-              Separate accounts. Cloud Aggregator helps you manage multiple Google Drives and perform manual transfers. It doesn't change Google Drive storage limits.
+              Each account remains separate. Use Google Picker to select specific files. All copy operations are user-initiated. Storage limits remain unchanged.
             </p>
 
             {/* CTA Buttons */}
@@ -112,10 +112,10 @@ export default function Home() {
           <div className="max-w-6xl mx-auto">
             <div className="text-center mb-16">
               <h2 className="text-3xl md:text-4xl font-bold mb-4">
-                Everything you need in one place
+                User-controlled file operations
               </h2>
               <p className="text-slate-400 text-lg">
-                Manage your Google Drive accounts efficiently
+                Connect accounts and copy files manually
               </p>
             </div>
 
@@ -127,9 +127,9 @@ export default function Home() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                   </svg>
                 </div>
-                <h3 className="text-xl font-bold mb-3">View all accounts</h3>
+                <h3 className="text-xl font-bold mb-3">View connected accounts</h3>
                 <p className="text-slate-400 leading-relaxed">
-                  Connect multiple Google Drive accounts and view storage usage for each account separately in one dashboard.
+                  Connect multiple Google Drive accounts and view storage usage for each account separately. Each account remains independent.
                 </p>
               </div>
 
@@ -140,9 +140,9 @@ export default function Home() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                   </svg>
                 </div>
-                <h3 className="text-xl font-bold mb-3">Transfer files</h3>
+                <h3 className="text-xl font-bold mb-3">Manual file copy</h3>
                 <p className="text-slate-400 leading-relaxed">
-                  Copy files between your Google Drive accounts with explicit user confirmation for each operation.
+                  Copy files between your Google Drive accounts with manual file selection and explicit user confirmation for each operation.
                 </p>
               </div>
 
@@ -153,9 +153,9 @@ export default function Home() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                   </svg>
                 </div>
-                <h3 className="text-xl font-bold mb-3">Instant access</h3>
+                <h3 className="text-xl font-bold mb-3">File selection (Google Picker)</h3>
                 <p className="text-slate-400 leading-relaxed">
-                  Browse and manage files from all your connected accounts in a single interface.
+                  Select files with Google Picker from your connected accounts. Only user-selected files are accessible for copy operations.
                 </p>
               </div>
             </div>
@@ -167,10 +167,10 @@ export default function Home() {
           <div className="max-w-6xl mx-auto">
             <div className="text-center mb-12">
               <h2 className="text-3xl md:text-4xl font-bold mb-4">
-                Dashboard intuitivo y potente
+                Single interface for connected accounts
               </h2>
               <p className="text-slate-400 text-lg">
-                Gestiona todas tus cuentas desde un único panel de control
+                View connected accounts and initiate copy operations
               </p>
             </div>
 
@@ -252,10 +252,10 @@ export default function Home() {
         <section className="py-32 px-6">
           <div className="max-w-4xl mx-auto text-center space-y-8">
             <h2 className="text-4xl md:text-5xl font-bold leading-tight">
-              Ready to manage your Google Drive accounts?
+              Ready to connect your Google Drive accounts?
             </h2>
             <p className="text-xl text-slate-300 max-w-2xl mx-auto">
-              Start connecting your Google Drive accounts now and manage all your files from one dashboard.
+              Connect accounts and work with your user-selected files from a single interface.
             </p>
             <div className="pt-4">
               <Link
