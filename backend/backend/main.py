@@ -1283,6 +1283,64 @@ async def get_drive_files(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/drive/picker-token")
+async def get_picker_token(
+    account_id: int,
+    user_id: str = Depends(verify_supabase_jwt),
+):
+    """
+    Get valid Google OAuth access token for Google Picker API.
+    
+    SECURITY:
+    - Validates that account belongs to authenticated user (RLS via user_id)
+    - Returns valid access_token (refreshed if needed)
+    - Never logs token values
+    
+    This token is needed by frontend to initialize Google Picker for file selection.
+    With drive.file scope, Picker allows user to grant access to specific files.
+    """
+    try:
+        # Verify account ownership (RLS)
+        account_check = (
+            supabase.table("cloud_accounts")
+            .select("id")
+            .eq("id", account_id)
+            .eq("user_id", user_id)
+            .single()
+            .execute()
+        )
+        
+        if not account_check.data:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Account {account_id} not found or doesn't belong to you"
+            )
+        
+        # Get valid token (will refresh if needed)
+        from backend.google_drive import get_valid_token
+        access_token = await get_valid_token(account_id)
+        
+        # Get token expiry from database (after potential refresh)
+        account = (
+            supabase.table("cloud_accounts")
+            .select("token_expiry")
+            .eq("id", account_id)
+            .single()
+            .execute()
+        ).data
+        
+        return {
+            "access_token": access_token,
+            "expires_at": account.get("token_expiry") if account else None
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"[PICKER_TOKEN] Failed to retrieve picker token for account_id={account_id}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve picker token")
+
+
 class CopyFileRequest(BaseModel):
     source_account_id: int
     target_account_id: int
