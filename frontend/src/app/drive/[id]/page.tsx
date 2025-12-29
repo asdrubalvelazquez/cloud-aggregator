@@ -127,13 +127,18 @@ export default function DriveFilesPage() {
   ) => {
     // Guard: Prevent multiple simultaneous fetches (race condition protection)
     if (loadingRef.current) {
-      console.warn("[fetchFiles] Already loading, skipping duplicate request");
+      console.warn("[fetchFiles] Already loading, skipping duplicate request", {
+        requestedFolder: folderId,
+        timestamp: new Date().toISOString()
+      });
       return;
     }
     
+    // Acquire lock and set loading TOGETHER (atomic operation)
+    loadingRef.current = true;
+    setLoading(true);
+    
     try {
-      loadingRef.current = true;
-      setLoading(true);
       const url = new URL(`${API_BASE_URL}/drive/${accountId}/files`);
       url.searchParams.set("folder_id", folderId);
       if (pageToken) {
@@ -410,14 +415,19 @@ export default function DriveFilesPage() {
     let failedCount = 0;
     let skippedCount = 0;
     const fileArray = Array.from(selectedFiles);
+    
+    let requestsStarted = 0;
+    let requestsFinished = 0;
 
     // AUDIT LOG: Total files to copy
-    console.warn("[BATCH_COPY] Starting batch copy", {
+    console.groupCollapsed(`[BATCH_COPY] Starting batch copy (${fileArray.length} files)`);
+    console.warn("[BATCH_COPY] Batch metadata", {
       totalFiles: fileArray.length,
       sourceAccountId: accountId,
       targetAccountId: selectedTarget,
       timestamp: new Date().toISOString()
     });
+    console.groupEnd();
 
     for (let i = 0; i < fileArray.length; i++) {
       const fileId = fileArray[i];
@@ -438,15 +448,18 @@ export default function DriveFilesPage() {
       }
 
       // AUDIT LOG: Current file being copied
-      console.warn("[BATCH_COPY] Copying file", {
+      console.groupCollapsed(`[BATCH_COPY] File ${i + 1}/${fileArray.length}: ${fileName}`);
+      console.warn("[BATCH_COPY] File details", {
         index: i + 1,
         total: fileArray.length,
         fileId,
         fileName: fileName,
-        fileSize: fileSize
+        fileSize: fileSize,
+        hasLocalMetadata: !!file
       });
 
       try {
+        requestsStarted++;
         setBatchProgress({ current: i + 1, total: fileArray.length, currentFileName: fileName });
 
         const res = await authenticatedFetch("/drive/copy-file", {
@@ -461,12 +474,14 @@ export default function DriveFilesPage() {
         });
 
         // AUDIT LOG: Response status
+        requestsFinished++;
         console.warn("[BATCH_COPY] Response received", {
           index: i + 1,
           fileId,
           fileName: fileName,
           status: res.status,
-          ok: res.ok
+          ok: res.ok,
+          requestsProgress: `${requestsFinished}/${requestsStarted}`
         });
 
         if (!res.ok) {
@@ -483,28 +498,40 @@ export default function DriveFilesPage() {
             });
             
             if (detail.error === "target_account_needs_reconnect") {
+              console.error("[BATCH_COPY] CRITICAL: Target account needs reconnection - STOPPING");
+              console.groupEnd();
               alert("⚠️ Cuenta destino necesita reconexión.\n\nVe a 'Mis Cuentas Cloud' (botón arriba) para reconectarla.\n\nProceso de copia detenido.");
               failedCount += (fileArray.length - i);
               break;
             }
             if (detail.error === "source_account_needs_reconnect") {
+              console.error("[BATCH_COPY] CRITICAL: Source account needs reconnection - STOPPING");
+              console.groupEnd();
               alert("⚠️ Cuenta origen necesita reconexión.\n\nVe a 'Mis Cuentas Cloud' para reconectarla.\n\nProceso de copia detenido.");
               failedCount += (fileArray.length - i);
               break;
             }
-            // Generic 409 handling
-            alert(detail.message || "Conflicto en la operación. Proceso detenido.");
-            failedCount += (fileArray.length - i);
-            break;
+            // Generic 409 handling - count as failed but continue with remaining files
+            console.error("[BATCH_COPY] 409 Conflict (non-critical) - CONTINUING", {
+              error: detail.error,
+              message: detail.message,
+              fileId,
+              fileName,
+              willContinue: true
+            });
+            console.groupEnd();
+            failedCount++;
+            continue;
           }
 
           // Handle quota exceeded
           if (res.status === 402) {
             const errorData = await res.json().catch(() => ({}));
-            console.error("[BATCH_COPY] 402 Quota exceeded", {
+            console.error("[BATCH_COPY] CRITICAL: Quota exceeded - STOPPING", {
               stoppingAt: i + 1,
               remaining: fileArray.length - i
             });
+            console.groupEnd();
             alert(errorData.detail?.message || "Límite de copias alcanzado. Proceso detenido.");
             failedCount += (fileArray.length - i);
             break;
@@ -514,22 +541,26 @@ export default function DriveFilesPage() {
           if (res.status === 429) {
             const errorData = await res.json().catch(() => ({}));
             const retryAfter = errorData.detail?.retry_after || 10;
-            console.warn("[BATCH_COPY] 429 Rate limit, retrying", {
+            console.warn("[BATCH_COPY] 429 Rate limit - RETRYING", {
               fileId,
               retryAfter,
               willRetry: true
             });
+            console.groupEnd();
             console.log(`Rate limit hit, waiting ${retryAfter}s...`);
             await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
             i--; // Retry same file
             continue;
           }
 
-          console.error("[BATCH_COPY] Copy failed", {
+          // Generic error - count as failed and continue
+          console.error("[BATCH_COPY] Copy failed (non-critical) - CONTINUING", {
             fileId,
             fileName: fileName,
-            status: res.status
+            status: res.status,
+            willContinue: true
           });
+          console.groupEnd();
           failedCount++;
           continue;
         }
@@ -543,6 +574,7 @@ export default function DriveFilesPage() {
           fileName: fileName,
           duplicate: result.duplicate || false
         });
+        console.groupEnd();
         
         // Check if file is a duplicate
         if (result.duplicate) {
@@ -558,22 +590,29 @@ export default function DriveFilesPage() {
         }
 
       } catch (e: any) {
-        console.error("[BATCH_COPY] Exception during copy", {
+        console.error("[BATCH_COPY] Exception during copy - CONTINUING", {
           fileId,
           fileName: fileName,
           error: e.message,
-          index: i + 1
+          index: i + 1,
+          willContinue: true
         });
+        console.groupEnd();
         failedCount++;
       }
     }
 
-    console.warn("[BATCH_COPY] Batch complete", {
+    console.groupCollapsed("[BATCH_COPY] Batch complete");
+    console.warn("[BATCH_COPY] Final results", {
       success: successCount,
       failed: failedCount,
       skipped: skippedCount,
-      total: fileArray.length
+      total: fileArray.length,
+      requestsStarted,
+      requestsFinished,
+      allRequestsFinished: requestsStarted === requestsFinished
     });
+    console.groupEnd();
 
     setBatchResults({ success: successCount, failed: failedCount, skipped: skippedCount });
     setBatchCopying(false);
