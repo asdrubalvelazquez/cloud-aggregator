@@ -77,7 +77,7 @@ export default function DriveFilesPage() {
   // Multi-select state
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [batchCopying, setBatchCopying] = useState(false);
-  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0, currentFileName: "" });
   const [batchResults, setBatchResults] = useState<{ success: number; failed: number; skipped: number } | null>(null);
 
   // Quota refresh key for re-fetching quota after operations
@@ -96,6 +96,9 @@ export default function DriveFilesPage() {
 
   // Copy lock ref (synchronous guard against double submit)
   const copyLockRef = useRef(false);
+  
+  // Loading ref to prevent race conditions in folder navigation
+  const loadingRef = useRef(false);
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{
@@ -122,7 +125,14 @@ export default function DriveFilesPage() {
     folderId: string = "root",
     pageToken?: string | null
   ) => {
+    // Guard: Prevent multiple simultaneous fetches (race condition protection)
+    if (loadingRef.current) {
+      console.warn("[fetchFiles] Already loading, skipping duplicate request");
+      return;
+    }
+    
     try {
+      loadingRef.current = true;
       setLoading(true);
       const url = new URL(`${API_BASE_URL}/drive/${accountId}/files`);
       url.searchParams.set("folder_id", folderId);
@@ -141,6 +151,8 @@ export default function DriveFilesPage() {
     } catch (e: any) {
       setError(e.message || "Error al cargar archivos");
     } finally {
+      // CRITICAL: Always release lock and stop loading indicator
+      loadingRef.current = false;
       setLoading(false);
     }
   };
@@ -224,8 +236,15 @@ export default function DriveFilesPage() {
           // Handle structured error detail (may be string or object)
           const detail = errorData.detail || errorData;
           
+          // SPECIAL HANDLING: Account needs reconnection (409 Conflict)
+          if (res.status === 409 && detail.error === "target_account_needs_reconnect") {
+            errorMessage = `⚠️ La cuenta destino necesita reconexión. Ve a "Mis Cuentas Cloud" (botón arriba) para reconectarla y vuelve a intentar.`;
+          }
+          else if (res.status === 409 && detail.error === "source_account_needs_reconnect") {
+            errorMessage = `⚠️ La cuenta origen necesita reconexión. Ve a "Mis Cuentas Cloud" para reconectarla.`;
+          }
           // Special handling for 413 FILE_TOO_LARGE
-          if (res.status === 413 && detail.code === "FILE_TOO_LARGE") {
+          else if (res.status === 413 && detail.code === "FILE_TOO_LARGE") {
             const fileSizeGB = detail.file?.size_gb || 0;
             const limitGB = detail.limits?.max_file_gb || 0;
             const excessGB = (fileSizeGB - limitGB).toFixed(2);
@@ -241,9 +260,11 @@ export default function DriveFilesPage() {
             errorMessage = detail;
           } else if (detail.message) {
             errorMessage = detail.message;
-          } else if (typeof detail === "object") {
-            // Fallback: stringify object if no message field
-            errorMessage = JSON.stringify(detail);
+          } else if (typeof detail === "object" && Object.keys(detail).length > 0) {
+            // Fallback: extract first useful property (avoid [object Object])
+            const keys = Object.keys(detail);
+            const firstKey = keys.find(k => typeof detail[k] === "string" && detail[k].length > 0) || keys[0];
+            errorMessage = detail[firstKey] || "Error en el servidor. Verifica logs.";
           } else {
             errorMessage = errorData.message || "Error desconocido";
           }
@@ -382,7 +403,7 @@ export default function DriveFilesPage() {
     }
 
     setBatchCopying(true);
-    setBatchProgress({ current: 0, total: selectedFiles.size });
+    setBatchProgress({ current: 0, total: selectedFiles.size, currentFileName: "" });
     setBatchResults(null);
 
     let successCount = 0;
@@ -390,13 +411,43 @@ export default function DriveFilesPage() {
     let skippedCount = 0;
     const fileArray = Array.from(selectedFiles);
 
+    // AUDIT LOG: Total files to copy
+    console.warn("[BATCH_COPY] Starting batch copy", {
+      totalFiles: fileArray.length,
+      sourceAccountId: accountId,
+      targetAccountId: selectedTarget,
+      timestamp: new Date().toISOString()
+    });
+
     for (let i = 0; i < fileArray.length; i++) {
       const fileId = fileArray[i];
       const file = files.find(f => f.id === fileId);
-      if (!file) continue;
+      
+      // Use fallback if file not found in local state (pagination/refresh)
+      // Ensure fileId is string for slice operation
+      const fileIdStr = String(fileId);
+      const fileName = file?.name ?? `file_${fileIdStr.slice(-6)}`;
+      const fileSize = file?.size ?? 0;
+      
+      if (!file) {
+        console.warn("[BATCH_COPY] File not found in local state, using fallback metadata", { 
+          fileId, 
+          index: i, 
+          fallbackName: fileName 
+        });
+      }
+
+      // AUDIT LOG: Current file being copied
+      console.warn("[BATCH_COPY] Copying file", {
+        index: i + 1,
+        total: fileArray.length,
+        fileId,
+        fileName: fileName,
+        fileSize: fileSize
+      });
 
       try {
-        setBatchProgress({ current: i + 1, total: fileArray.length });
+        setBatchProgress({ current: i + 1, total: fileArray.length, currentFileName: fileName });
 
         const res = await authenticatedFetch("/drive/copy-file", {
           method: "POST",
@@ -409,10 +460,51 @@ export default function DriveFilesPage() {
           signal: AbortSignal.timeout(180000),
         });
 
+        // AUDIT LOG: Response status
+        console.warn("[BATCH_COPY] Response received", {
+          index: i + 1,
+          fileId,
+          fileName: fileName,
+          status: res.status,
+          ok: res.ok
+        });
+
         if (!res.ok) {
+          // Handle account needs reconnection (409)
+          if (res.status === 409) {
+            const errorData = await res.json().catch(() => ({}));
+            const detail = errorData.detail || {};
+            
+            console.error("[BATCH_COPY] 409 Conflict detected", {
+              error: detail.error,
+              message: detail.message,
+              stoppingAt: i + 1,
+              remaining: fileArray.length - i
+            });
+            
+            if (detail.error === "target_account_needs_reconnect") {
+              alert("⚠️ Cuenta destino necesita reconexión.\n\nVe a 'Mis Cuentas Cloud' (botón arriba) para reconectarla.\n\nProceso de copia detenido.");
+              failedCount += (fileArray.length - i);
+              break;
+            }
+            if (detail.error === "source_account_needs_reconnect") {
+              alert("⚠️ Cuenta origen necesita reconexión.\n\nVe a 'Mis Cuentas Cloud' para reconectarla.\n\nProceso de copia detenido.");
+              failedCount += (fileArray.length - i);
+              break;
+            }
+            // Generic 409 handling
+            alert(detail.message || "Conflicto en la operación. Proceso detenido.");
+            failedCount += (fileArray.length - i);
+            break;
+          }
+
           // Handle quota exceeded
           if (res.status === 402) {
             const errorData = await res.json().catch(() => ({}));
+            console.error("[BATCH_COPY] 402 Quota exceeded", {
+              stoppingAt: i + 1,
+              remaining: fileArray.length - i
+            });
             alert(errorData.detail?.message || "Límite de copias alcanzado. Proceso detenido.");
             failedCount += (fileArray.length - i);
             break;
@@ -422,17 +514,35 @@ export default function DriveFilesPage() {
           if (res.status === 429) {
             const errorData = await res.json().catch(() => ({}));
             const retryAfter = errorData.detail?.retry_after || 10;
+            console.warn("[BATCH_COPY] 429 Rate limit, retrying", {
+              fileId,
+              retryAfter,
+              willRetry: true
+            });
             console.log(`Rate limit hit, waiting ${retryAfter}s...`);
             await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
             i--; // Retry same file
             continue;
           }
 
+          console.error("[BATCH_COPY] Copy failed", {
+            fileId,
+            fileName: file.name,
+            status: res.status
+          });
           failedCount++;
           continue;
         }
 
         const result = await res.json();
+        
+        // AUDIT LOG: Success result
+        console.warn("[BATCH_COPY] File copied successfully", {
+          index: i + 1,
+          fileId,
+          fileName: fileName,
+          duplicate: result.duplicate || false
+        });
         
         // Check if file is a duplicate
         if (result.duplicate) {
@@ -443,14 +553,27 @@ export default function DriveFilesPage() {
 
         // Wait 11 seconds between requests to respect rate limiting
         if (i < fileArray.length - 1) {
+          console.warn("[BATCH_COPY] Waiting 11s before next file...");
           await new Promise(resolve => setTimeout(resolve, 11000));
         }
 
       } catch (e: any) {
-        console.error("Batch copy error:", e);
+        console.error("[BATCH_COPY] Exception during copy", {
+          fileId,
+          fileName: fileName,
+          error: e.message,
+          index: i + 1
+        });
         failedCount++;
       }
     }
+
+    console.warn("[BATCH_COPY] Batch complete", {
+      success: successCount,
+      failed: failedCount,
+      skipped: skippedCount,
+      total: fileArray.length
+    });
 
     setBatchResults({ success: successCount, failed: failedCount, skipped: skippedCount });
     setBatchCopying(false);
@@ -815,45 +938,63 @@ export default function DriveFilesPage() {
 
         {/* Batch Copy Toolbar */}
         {!loading && !error && files.length > 0 && (
-          <div className="bg-slate-800 rounded-lg p-4 border border-slate-700 flex items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <button
-                type="button"
-                onClick={selectAllFiles}
-                className="text-sm text-emerald-400 hover:text-emerald-300 transition"
-              >
-                {selectedFiles.size === files.filter(f => f.mimeType !== "application/vnd.google-apps.folder").length && selectedFiles.size > 0
-                  ? "Deseleccionar todos"
-                  : "Seleccionar todos"}
-              </button>
-              {selectedFiles.size > 0 && (
-                <span className="text-sm text-slate-400">
-                  {selectedFiles.size} archivo{selectedFiles.size > 1 ? "s" : ""} seleccionado{selectedFiles.size > 1 ? "s" : ""}
-                </span>
-              )}
-            </div>
-            {selectedFiles.size > 0 && copyOptions && (
-              <div className="flex items-center gap-3">
-                <select
-                  value={selectedTarget || ""}
-                  onChange={(e) => setSelectedTarget(parseInt(e.target.value))}
-                  className="px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                >
-                  <option value="">Seleccionar cuenta destino...</option>
-                  {copyOptions.target_accounts.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.email}
-                    </option>
-                  ))}
-                </select>
+          <div className="bg-slate-800 rounded-lg p-4 border border-slate-700 space-y-3">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
                 <button
                   type="button"
-                  onClick={handleBatchCopy}
-                  disabled={!selectedTarget || batchCopying}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition"
+                  onClick={selectAllFiles}
+                  className="text-sm text-emerald-400 hover:text-emerald-300 transition"
                 >
-                  {batchCopying ? `Copiando ${batchProgress.current}/${batchProgress.total}...` : "Copiar seleccionados"}
+                  {selectedFiles.size === files.filter(f => f.mimeType !== "application/vnd.google-apps.folder").length && selectedFiles.size > 0
+                    ? "Deseleccionar todos"
+                    : "Seleccionar todos"}
                 </button>
+                {selectedFiles.size > 0 && (
+                  <span className="text-sm text-slate-400">
+                    {selectedFiles.size} archivo{selectedFiles.size > 1 ? "s" : ""} seleccionado{selectedFiles.size > 1 ? "s" : ""}
+                  </span>
+                )}
+              </div>
+              {selectedFiles.size > 0 && copyOptions && (
+                <div className="flex items-center gap-3">
+                  <select
+                    value={selectedTarget || ""}
+                    onChange={(e) => setSelectedTarget(parseInt(e.target.value))}
+                    className="px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    <option value="">Seleccionar cuenta destino...</option>
+                    {copyOptions.target_accounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.email}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleBatchCopy}
+                    disabled={!selectedTarget || batchCopying}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition"
+                    title={batchCopying && batchProgress.currentFileName ? `Procesando: ${batchProgress.currentFileName}` : ""}
+                  >
+                    {batchCopying ? (
+                      <div className="flex flex-col items-center">
+                        <span>Copiando {batchProgress.current}/{batchProgress.total}</span>
+                        {batchProgress.currentFileName && (
+                          <span className="text-xs opacity-75 truncate max-w-[200px]">{batchProgress.currentFileName}</span>
+                        )}
+                      </div>
+                    ) : "Copiar seleccionados"}
+                  </button>
+                </div>
+              )}
+            </div>
+            
+            {/* Rate limit warning */}
+            {selectedFiles.size > 0 && (
+              <div className="text-xs text-slate-400 flex items-center gap-1.5">
+                <span>⏱️</span>
+                <span>La copia puede tardar ~11s por archivo debido a límites de Google API</span>
               </div>
             )}
           </div>
