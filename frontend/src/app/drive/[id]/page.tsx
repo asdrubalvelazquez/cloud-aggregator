@@ -527,7 +527,7 @@ export default function DriveFilesPage() {
 
           console.error("[BATCH_COPY] Copy failed", {
             fileId,
-            fileName: file.name,
+            fileName: fileName,
             status: res.status
           });
           failedCount++;
