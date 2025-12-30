@@ -85,10 +85,10 @@ function DashboardContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const fetchSummary = async () => {
+  const fetchSummary = async (signal?: AbortSignal) => {
     try {
       setLoading(true);
-      const res = await authenticatedFetch("/storage/summary");
+      const res = await authenticatedFetch("/storage/summary", { signal });
       if (!res.ok) {
         throw new Error(`Error API: ${res.status}`);
       }
@@ -97,34 +97,42 @@ function DashboardContent() {
       setError(null);
       setLastUpdated(Date.now());
     } catch (e: any) {
-      setError(e.message || "Error al cargar datos");
+      if (e.name === "AbortError") {
+        setError("La carga tardó demasiado. Intenta recargar la página.");
+      } else {
+        setError(e.message || "Error al cargar datos");
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchQuota = async () => {
+  const fetchQuota = async (signal?: AbortSignal) => {
     try {
-      const res = await authenticatedFetch("/me/plan");
+      const res = await authenticatedFetch("/me/plan", { signal });
       if (res.ok) {
         const quotaData = await res.json();
         setQuota(quotaData);
       }
-    } catch (e) {
+    } catch (e: any) {
       // Silently fail - quota display is optional
-      console.error("Failed to fetch quota:", e);
+      if (e.name !== "AbortError") {
+        console.error("Failed to fetch quota:", e);
+      }
     }
   };
 
-  const fetchBillingQuota = async () => {
+  const fetchBillingQuota = async (signal?: AbortSignal) => {
     try {
-      const res = await authenticatedFetch("/billing/quota");
+      const res = await authenticatedFetch("/billing/quota", { signal });
       if (res.ok) {
         const billingData = await res.json();
         setBillingQuota(billingData);
       }
-    } catch (e) {
-      console.error("Failed to fetch billing quota:", e);
+    } catch (e: any) {
+      if (e.name !== "AbortError") {
+        console.error("Failed to fetch billing quota:", e);
+      }
     }
   };
 
@@ -150,12 +158,22 @@ function DashboardContent() {
   };
 
   useEffect(() => {
+    // AbortController con timeout de 10s para evitar fetch colgados
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => {
+      abortController.abort();
+    }, 10000);
+
     // Verificar sesión de usuario
     const checkSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user?.email) {
-        setUserEmail(session.user.email);
-        setUserId(session.user.id);
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user?.email) {
+          setUserEmail(session.user.email);
+          setUserId(session.user.id);
+        }
+      } catch (error) {
+        console.error("Error checking session:", error);
       }
     };
     checkSession();
@@ -195,9 +213,9 @@ function DashboardContent() {
           window.history.replaceState({}, "", window.location.pathname);
           
           // Load dashboard data with fresh session
-          fetchSummary();
-          fetchQuota();
-          fetchBillingQuota();
+          fetchSummary(abortController.signal);
+          fetchQuota(abortController.signal);
+          fetchBillingQuota(abortController.signal);
           fetchCloudStatusData();
         } catch (err) {
           console.error("[OAUTH] Exception refreshing session:", err);
@@ -265,9 +283,9 @@ function DashboardContent() {
           
           // Update all data
           setCloudStatus(data);
-          fetchSummary();
-          fetchQuota();
-          fetchBillingQuota();
+          fetchSummary(abortController.signal);
+          fetchQuota(abortController.signal);
+          fetchBillingQuota(abortController.signal);
         } catch (error) {
           console.error("Failed to validate reconnect:", error);
           setToast({
@@ -285,8 +303,8 @@ function DashboardContent() {
         type: "warning",
       });
       window.history.replaceState({}, "", window.location.pathname);
-      fetchSummary();
-      fetchBillingQuota();
+      fetchSummary(abortController.signal);
+      fetchBillingQuota(abortController.signal);
       fetchCloudStatusData();
     } else if (authError) {
       setToast({
@@ -294,16 +312,22 @@ function DashboardContent() {
         type: "error",
       });
       window.history.replaceState({}, "", window.location.pathname);
-      fetchSummary();
-      fetchQuota();
-      fetchBillingQuota();
+      fetchSummary(abortController.signal);
+      fetchQuota(abortController.signal);
+      fetchBillingQuota(abortController.signal);
       fetchCloudStatusData();
     } else {
-      fetchSummary();
-      fetchQuota();
-      fetchBillingQuota();
+      fetchSummary(abortController.signal);
+      fetchQuota(abortController.signal);
+      fetchBillingQuota(abortController.signal);
       fetchCloudStatusData();
     }
+
+    // Cleanup: clear timeout and abort requests on unmount
+    return () => {
+      clearTimeout(timeoutId);
+      abortController.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
@@ -487,6 +511,18 @@ function DashboardContent() {
           <div className="bg-red-500/20 border border-red-500 rounded-lg p-4 text-red-100">
             <p className="font-semibold">Error al cargar datos</p>
             <p className="text-sm mt-1">{error}</p>
+            <button
+              onClick={() => {
+                setError(null);
+                fetchSummary();
+                fetchQuota();
+                fetchBillingQuota();
+                fetchCloudStatusData();
+              }}
+              className="mt-3 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-semibold transition"
+            >
+              Reintentar
+            </button>
           </div>
         )}
 
@@ -832,10 +868,7 @@ export default function AppDashboard() {
   return (
     <Suspense fallback={
       <main className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center">
-        <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500 mb-4"></div>
-          <p className="text-slate-300">Cargando...</p>
-        </div>
+        <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500"></div>
       </main>
     }>
       <DashboardContent />
