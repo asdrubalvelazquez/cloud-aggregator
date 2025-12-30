@@ -100,6 +100,9 @@ export default function DriveFilesPage() {
   
   // Loading ref to prevent race conditions in folder navigation
   const loadingRef = useRef(false);
+  
+  // Abort controller for cancelling in-flight fetch requests
+  const fetchAbortRef = useRef<AbortController | null>(null);
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{
@@ -126,17 +129,25 @@ export default function DriveFilesPage() {
     folderId: string = "root",
     pageToken?: string | null
   ) => {
-    // Guard: Prevent multiple simultaneous fetches (race condition protection)
-    if (loadingRef.current) {
-      console.warn("[fetchFiles] Already loading, skipping duplicate request", {
-        requestedFolder: folderId,
-        timestamp: new Date().toISOString()
-      });
-      // Early return still shows loading UI correctly (no need to reset)
-      return;
+    // Abort any in-flight fetch request
+    if (fetchAbortRef.current) {
+      try {
+        fetchAbortRef.current.abort();
+      } catch (e) {
+        // Ignore abort errors
+      }
     }
     
-    // Acquire lock and set loading TOGETHER (atomic operation)
+    // Create new AbortController for this request
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
+    
+    // Setup timeout (20 seconds)
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 20000);
+    
+    // Acquire lock and set loading
     loadingRef.current = true;
     setLoading(true);
     
@@ -147,7 +158,9 @@ export default function DriveFilesPage() {
         url.searchParams.set("page_token", pageToken);
       }
 
-      const res = await authenticatedFetch(url.pathname + url.search);
+      const res = await authenticatedFetch(url.pathname + url.search, {
+        signal: controller.signal
+      });
       if (!res.ok) throw new Error(`Error API archivos: ${res.status}`);
 
       const json = await res.json();
@@ -156,11 +169,22 @@ export default function DriveFilesPage() {
       setNextPageToken(json.nextPageToken ?? null);
       setError(null);
     } catch (e: any) {
-      setError(e.message || "Error al cargar archivos");
+      // Handle abort (user navigated away or timeout)
+      if (e.name === 'AbortError') {
+        console.warn("[fetchFiles] Request aborted", { folderId });
+        setError("Carga cancelada o tiempo de espera agotado");
+      } else {
+        setError(e.message || "Error al cargar archivos");
+      }
     } finally {
-      // CRITICAL: Always release lock and stop loading indicator
+      // CRITICAL: Always cleanup
+      clearTimeout(timeoutId);
       loadingRef.current = false;
       setLoading(false);
+      // Clear abort ref if this was the active controller
+      if (fetchAbortRef.current === controller) {
+        fetchAbortRef.current = null;
+      }
     }
   };
 
