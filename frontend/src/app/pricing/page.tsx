@@ -2,6 +2,7 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { authenticatedFetch } from "@/lib/api";
 import PricingPaymentStatus from "@/components/PricingPaymentStatus";
 
@@ -115,12 +116,12 @@ export default function PricingPage() {
       <div className="w-full max-w-6xl space-y-8">
         {/* Header */}
         <header className="text-center space-y-4">
-          <button
-            onClick={() => router.push("/app")}
-            className="text-sm text-slate-400 hover:text-slate-200 transition"
+          <Link
+            href="/app"
+            className="inline-block text-sm text-slate-400 hover:text-slate-200 transition"
           >
             ← Volver al Dashboard
-          </button>
+          </Link>
           <h1 className="text-4xl font-bold">Planes y Precios</h1>
           <p className="text-slate-400">
             Elige el plan que mejor se adapte a tus necesidades
