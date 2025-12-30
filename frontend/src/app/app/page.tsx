@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useCallback, useEffect, useState, Suspense } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { authenticatedFetch, fetchCloudStatus } from "@/lib/api";
 import type { CloudStatusResponse } from "@/lib/api";
@@ -68,7 +68,42 @@ type BillingQuota = {
   max_file_gb: number;
 } | null;
 
-function DashboardContent() {
+type DashboardRouteParams = {
+  authStatus: string | null;
+  authError: string | null;
+  reconnectStatus: string | null;
+  allowedParam: string | null;
+  slotId: string | null;
+};
+
+function SearchParamsBridge({
+  onChange,
+}: {
+  onChange: (key: string, params: DashboardRouteParams) => void;
+}) {
+  const searchParams = useSearchParams();
+  const key = searchParams.toString();
+
+  useEffect(() => {
+    onChange(key, {
+      authStatus: searchParams.get("auth"),
+      authError: searchParams.get("error"),
+      reconnectStatus: searchParams.get("reconnect"),
+      allowedParam: searchParams.get("allowed"),
+      slotId: searchParams.get("slot_id"),
+    });
+  }, [key, searchParams, onChange]);
+
+  return null;
+}
+
+function DashboardContent({
+  routeParams,
+  routeParamsKey,
+}: {
+  routeParams: DashboardRouteParams;
+  routeParamsKey: string | null;
+}) {
   const [data, setData] = useState<StorageSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -83,7 +118,6 @@ function DashboardContent() {
   const [cloudStatus, setCloudStatus] = useState<CloudStatusResponse | null>(null);
   const [showReconnectModal, setShowReconnectModal] = useState(false);
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   const fetchSummary = async (signal?: AbortSignal) => {
     try {
@@ -178,11 +212,12 @@ function DashboardContent() {
     };
     checkSession();
 
-    // Verificar si el usuario acaba de autenticarse (usando searchParams)
-    const authStatus = searchParams?.get("auth");
-    const authError = searchParams?.get("error");
-    const reconnectStatus = searchParams?.get("reconnect");
-    const allowedParam = searchParams?.get("allowed");
+    if (routeParamsKey === null) {
+      return;
+    }
+
+    // Verificar si el usuario acaba de autenticarse (usando search params)
+    const { authStatus, authError, reconnectStatus } = routeParams;
       
     if (authStatus === "success") {
       // CRITICAL: Refresh Supabase session after OAuth redirect
@@ -229,7 +264,7 @@ function DashboardContent() {
       // Execute refresh after 500ms delay (allow cookies to settle)
       setTimeout(refreshAndLoad, 500);
     } else if (reconnectStatus === "success") {
-      const slotId = searchParams?.get("slot_id");
+      const slotId = routeParams.slotId;
       
       // Clear URL immediately
       window.history.replaceState({}, "", window.location.pathname);
@@ -329,7 +364,7 @@ function DashboardContent() {
       abortController.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  }, [routeParamsKey]);
 
   const handleConnectGoogle = async () => {
     if (!userId) {
@@ -865,13 +900,33 @@ function DashboardContent() {
 }
 
 export default function AppDashboard() {
+  const [routeParamsKey, setRouteParamsKey] = useState<string | null>(null);
+  const [routeParams, setRouteParams] = useState<DashboardRouteParams>({
+    authStatus: null,
+    authError: null,
+    reconnectStatus: null,
+    allowedParam: null,
+    slotId: null,
+  });
+
+  const handleParamsChange = useCallback(
+    (key: string, params: DashboardRouteParams) => {
+      setRouteParamsKey(key);
+      setRouteParams(params);
+    },
+    []
+  );
+
   return (
-    <Suspense fallback={
-      <main className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center">
-        <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500"></div>
-      </main>
-    }>
-      <DashboardContent />
-    </Suspense>
+    <>
+      <Suspense
+        fallback={
+          <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-emerald-500" />
+        }
+      >
+        <SearchParamsBridge onChange={handleParamsChange} />
+      </Suspense>
+      <DashboardContent routeParams={routeParams} routeParamsKey={routeParamsKey} />
+    </>
   );
 }
