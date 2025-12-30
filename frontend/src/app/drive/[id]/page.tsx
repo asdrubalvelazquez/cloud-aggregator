@@ -103,6 +103,12 @@ export default function DriveFilesPage() {
   
   // Abort controller for cancelling in-flight fetch requests
   const fetchAbortRef = useRef<AbortController | null>(null);
+  
+  // Request sequence for anti-race conditions
+  const fetchSeqRef = useRef(0);
+  
+  // Failsafe timeout to prevent infinite loading
+  const failsafeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{
@@ -129,17 +135,8 @@ export default function DriveFilesPage() {
     folderId: string = "root",
     pageToken?: string | null
   ) => {
-    console.debug("[fetchFiles] START", { 
-      folderId, 
-      pageToken, 
-      loadingRef: loadingRef.current, 
-      loadingState: loading,
-      hasAbortRef: !!fetchAbortRef.current 
-    });
-    
     // Abort any in-flight fetch request
     if (fetchAbortRef.current) {
-      console.debug("[fetchFiles] Aborting previous request");
       try {
         fetchAbortRef.current.abort();
       } catch (e) {
@@ -147,20 +144,33 @@ export default function DriveFilesPage() {
       }
     }
     
+    // Increment sequence number (anti-race)
+    const seq = ++fetchSeqRef.current;
+    
     // Create new AbortController for this request
     const controller = new AbortController();
     fetchAbortRef.current = controller;
     
     // Setup timeout (20 seconds)
     const timeoutId = setTimeout(() => {
-      console.debug("[fetchFiles] TIMEOUT triggered, aborting");
       controller.abort();
     }, 20000);
     
     // Acquire lock and set loading
     loadingRef.current = true;
     setLoading(true);
-    console.debug("[fetchFiles] Loading set to TRUE");
+    
+    // Failsafe: Force loading off after 8s if still stuck
+    if (failsafeTimeoutRef.current) {
+      clearTimeout(failsafeTimeoutRef.current);
+    }
+    failsafeTimeoutRef.current = setTimeout(() => {
+      if (loadingRef.current && seq === fetchSeqRef.current) {
+        loadingRef.current = false;
+        setLoading(false);
+        setError("La carga tardó demasiado. Intenta de nuevo.");
+      }
+    }, 8000);
     
     try {
       const url = new URL(`${API_BASE_URL}/drive/${accountId}/files`);
@@ -169,49 +179,50 @@ export default function DriveFilesPage() {
         url.searchParams.set("page_token", pageToken);
       }
 
-      console.debug("[fetchFiles] Fetching", { url: url.toString() });
       const res = await authenticatedFetch(url.pathname + url.search, {
         signal: controller.signal
       });
+      
+      // Only update UI if this is still the latest request
+      if (seq !== fetchSeqRef.current) return;
+      
       if (!res.ok) throw new Error(`Error API archivos: ${res.status}`);
 
       const json = await res.json();
-      console.debug("[fetchFiles] SUCCESS", { filesCount: json.files?.length });
-      setFiles(json.files || []);
-      setCurrentFolderId(folderId);
-      setNextPageToken(json.nextPageToken ?? null);
-      setError(null);
+      
+      // Double-check sequence before updating state
+      if (seq === fetchSeqRef.current) {
+        setFiles(json.files || []);
+        setCurrentFolderId(folderId);
+        setNextPageToken(json.nextPageToken ?? null);
+        setError(null);
+      }
     } catch (e: any) {
+      // Only update error if this is still the latest request
+      if (seq !== fetchSeqRef.current) return;
+      
       // Handle abort (user navigated away or timeout)
       if (e.name === 'AbortError') {
-        console.debug("[fetchFiles] ABORTED", { folderId, wasTimeout: controller.signal.aborted });
-        // Don't set error for user-initiated navigation aborts
-        // Only set error if timeout (which means user is still waiting)
-        if (controller.signal.aborted) {
-          setError(null); // Clear any previous error, don't show abort message
-        }
+        // Don't show error for aborted requests (user navigated away)
+        return;
       } else {
-        console.error("[fetchFiles] ERROR", { error: e.message, folderId });
         setError(e.message || "Error al cargar archivos");
       }
     } finally {
-      // CRITICAL: Always cleanup
-      console.debug("[fetchFiles] FINALLY - cleaning up", { 
-        clearingTimeout: true,
-        settingLoadingFalse: true,
-        currentLoadingRef: loadingRef.current 
-      });
-      clearTimeout(timeoutId);
-      loadingRef.current = false;
-      setLoading(false);
-      // Clear abort ref if this was the active controller
-      if (fetchAbortRef.current === controller) {
-        fetchAbortRef.current = null;
+      // Only cleanup if this is still the latest request
+      if (seq === fetchSeqRef.current) {
+        clearTimeout(timeoutId);
+        if (failsafeTimeoutRef.current) {
+          clearTimeout(failsafeTimeoutRef.current);
+          failsafeTimeoutRef.current = null;
+        }
+        loadingRef.current = false;
+        setLoading(false);
+        // Clear abort ref if this was the active controller
+        if (fetchAbortRef.current === controller) {
+          fetchAbortRef.current = null;
+        }
       }
-      console.debug("[fetchFiles] END", { 
-        loadingRef: loadingRef.current,
-        abortRefCleared: fetchAbortRef.current === null 
-      });
     }
   };
 
@@ -240,13 +251,11 @@ export default function DriveFilesPage() {
   };
 
   const handleOpenFolder = async (folderId: string, folderName: string) => {
-    console.debug("[handleOpenFolder] Opening", { folderId, folderName });
     // Actualizar breadcrumb
     setBreadcrumb((prev) => [...prev, { id: folderId, name: folderName }]);
     // Cargar contenido de esa carpeta
     try {
       await fetchFiles(folderId, null);
-      console.debug("[handleOpenFolder] fetchFiles completed successfully");
     } catch (e: any) {
       console.error("[handleOpenFolder] Error:", e);
       // fetchFiles ya maneja setError y libera loading
@@ -254,20 +263,11 @@ export default function DriveFilesPage() {
   };
 
   const handleBreadcrumbClick = async (index: number) => {
-    console.debug("[handleBreadcrumbClick] CLICKED", { 
-      index, 
-      currentBreadcrumb: breadcrumb.map(b => b.name),
-      targetFolder: breadcrumb[index]?.name 
-    });
     const target = breadcrumb[index];
     const newTrail = breadcrumb.slice(0, index + 1);
     setBreadcrumb(newTrail);
-    console.debug("[handleBreadcrumbClick] Breadcrumb updated", { 
-      newBreadcrumb: newTrail.map(b => b.name) 
-    });
     try {
       await fetchFiles(target.id, null);
-      console.debug("[handleBreadcrumbClick] fetchFiles completed successfully");
     } catch (e: any) {
       console.error("[handleBreadcrumbClick] Error:", e);
       // fetchFiles ya maneja setError y libera loading
