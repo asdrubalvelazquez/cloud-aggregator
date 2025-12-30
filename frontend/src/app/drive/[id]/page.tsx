@@ -132,6 +132,7 @@ export default function DriveFilesPage() {
         requestedFolder: folderId,
         timestamp: new Date().toISOString()
       });
+      // Early return still shows loading UI correctly (no need to reset)
       return;
     }
     
@@ -187,18 +188,28 @@ export default function DriveFilesPage() {
     }
   };
 
-  const handleOpenFolder = (folderId: string, folderName: string) => {
+  const handleOpenFolder = async (folderId: string, folderName: string) => {
     // Actualizar breadcrumb
     setBreadcrumb((prev) => [...prev, { id: folderId, name: folderName }]);
     // Cargar contenido de esa carpeta
-    fetchFiles(folderId, null);
+    try {
+      await fetchFiles(folderId, null);
+    } catch (e: any) {
+      console.error("[handleOpenFolder] Error:", e);
+      // fetchFiles ya maneja setError y libera loading
+    }
   };
 
-  const handleBreadcrumbClick = (index: number) => {
+  const handleBreadcrumbClick = async (index: number) => {
     const target = breadcrumb[index];
     const newTrail = breadcrumb.slice(0, index + 1);
     setBreadcrumb(newTrail);
-    fetchFiles(target.id, null);
+    try {
+      await fetchFiles(target.id, null);
+    } catch (e: any) {
+      console.error("[handleBreadcrumbClick] Error:", e);
+      // fetchFiles ya maneja setError y libera loading
+    }
   };
 
   const handleCopyFile = async (fileId: string, targetId: number, fileName: string) => {
