@@ -390,7 +390,7 @@ export default function DriveFilesPage() {
       if (!selectedTarget || batchCopying) {
         return;
       }
-      executeBatchCopy(selectedTarget);
+      executeBatchCopy(Array.from(selectedFiles), selectedTarget);
       return;
     }
     
@@ -433,14 +433,14 @@ export default function DriveFilesPage() {
   };
 
   // Función unificada para ejecutar batch copy (desde botón o menú)
-  const executeBatchCopy = async (targetId: number) => {
-    if (selectedFiles.size === 0) {
+  const executeBatchCopy = async (fileIds: string[], targetId: number) => {
+    if (fileIds.length === 0) {
       alert("Selecciona archivos para copiar");
       return;
     }
 
     setBatchCopying(true);
-    setBatchProgress({ current: 0, total: selectedFiles.size, currentFileName: "" });
+    setBatchProgress({ current: 0, total: fileIds.length, currentFileName: "" });
     setBatchResults(null);
 
     let successCount = 0;
@@ -661,7 +661,7 @@ export default function DriveFilesPage() {
       alert("Selecciona archivos y una cuenta destino");
       return;
     }
-    await executeBatchCopy(selectedTarget);
+    await executeBatchCopy(Array.from(selectedFiles), selectedTarget);
   };
 
   const openRenameModal = (fileId: string, fileName: string) => {
