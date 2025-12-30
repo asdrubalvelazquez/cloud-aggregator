@@ -77,6 +77,7 @@ export default function DriveFilesPage() {
   // Multi-select state
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [batchCopying, setBatchCopying] = useState(false);
+  const [batchCopyingFromMenu, setBatchCopyingFromMenu] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0, currentFileName: "" });
   const [batchResults, setBatchResults] = useState<{ success: number; failed: number; skipped: number } | null>(null);
 
@@ -350,20 +351,50 @@ export default function DriveFilesPage() {
   };
 
   const openCopyModal = (fileId: string, fileName: string) => {
-    setModalFileId(fileId);
-    setModalFileName(fileName);
+    // Detectar si hay múltiples archivos seleccionados
+    if (selectedFiles.size > 1) {
+      // Si el archivo clickeado no está en la selección, agregarlo
+      if (!selectedFiles.has(fileId)) {
+        setSelectedFiles(prev => new Set([...prev, fileId]));
+      }
+      // Abrir modal en modo batch
+      setModalFileId(null);
+      setModalFileName(`${selectedFiles.size} archivos seleccionados`);
+      setBatchCopyingFromMenu(true);
+    } else {
+      // Modo individual (1 archivo o ninguno seleccionado)
+      setModalFileId(fileId);
+      setModalFileName(fileName);
+      setBatchCopyingFromMenu(false);
+    }
     setSelectedTarget(null);
     setShowCopyModal(true);
   };
 
   const closeCopyModal = () => {
+    // No permitir cerrar si está copiando en modo batch
+    if (batchCopyingFromMenu && batchCopying) {
+      return;
+    }
     setShowCopyModal(false);
     setModalFileId(null);
     setModalFileName(null);
     setSelectedTarget(null);
+    setBatchCopyingFromMenu(false);
+    setBatchResults(null);
   };
 
   const confirmCopy = () => {
+    // Si es modo batch desde el menú, ejecutar batch copy
+    if (batchCopyingFromMenu && selectedFiles.size > 1) {
+      if (!selectedTarget || batchCopying) {
+        return;
+      }
+      executeBatchCopy(selectedTarget);
+      return;
+    }
+    
+    // Modo individual
     // Synchronous lock check (prevents race conditions with React state)
     if (copyLockRef.current || !selectedTarget || !modalFileId || !modalFileName || copying) {
       return;
@@ -401,9 +432,10 @@ export default function DriveFilesPage() {
     }
   };
 
-  const handleBatchCopy = async () => {
-    if (selectedFiles.size === 0 || !selectedTarget) {
-      alert("Selecciona archivos y una cuenta destino");
+  // Función unificada para ejecutar batch copy (desde botón o menú)
+  const executeBatchCopy = async (targetId: number) => {
+    if (selectedFiles.size === 0) {
+      alert("Selecciona archivos para copiar");
       return;
     }
 
@@ -414,7 +446,7 @@ export default function DriveFilesPage() {
     let successCount = 0;
     let failedCount = 0;
     let skippedCount = 0;
-    const fileArray = Array.from(selectedFiles);
+    const fileArray = fileIds;
     
     let requestsStarted = 0;
     let requestsFinished = 0;
@@ -467,7 +499,7 @@ export default function DriveFilesPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             source_account_id: parseInt(accountId),
-            target_account_id: selectedTarget,
+            target_account_id: targetId,
             file_id: fileId,
           }),
           signal: AbortSignal.timeout(180000),
@@ -616,10 +648,20 @@ export default function DriveFilesPage() {
 
     setBatchResults({ success: successCount, failed: failedCount, skipped: skippedCount });
     setBatchCopying(false);
+    // Limpia selectedFiles después de batch copy (ambos modos: botón y menú)
     setSelectedFiles(new Set());
 
     // Refresh quota badge
     setQuotaRefreshKey(prev => prev + 1);
+  };
+
+  // Wrapper para handleBatchCopy desde el botón (mantiene compatibilidad)
+  const handleBatchCopy = async () => {
+    if (selectedFiles.size === 0 || !selectedTarget) {
+      alert("Selecciona archivos y una cuenta destino");
+      return;
+    }
+    await executeBatchCopy(selectedTarget);
   };
 
   const openRenameModal = (fileId: string, fileName: string) => {
@@ -1267,11 +1309,13 @@ export default function DriveFilesPage() {
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-slate-800 rounded-lg shadow-xl w-full max-w-md p-6 border border-slate-700">
               <h2 className="text-xl font-bold text-white mb-4">
-                Copiar: {modalFileName}
+                {batchCopyingFromMenu ? "Copiar archivos seleccionados" : `Copiar: ${modalFileName}`}
               </h2>
               
               <p className="text-slate-300 mb-4">
-                Selecciona la cuenta destino donde deseas copiar este archivo:
+                {batchCopyingFromMenu 
+                  ? `Copiar ${selectedFiles.size} archivo${selectedFiles.size > 1 ? 's' : ''} a:` 
+                  : "Selecciona la cuenta destino donde deseas copiar este archivo:"}
               </p>
 
               {/* Disclaimer */}
@@ -1284,7 +1328,8 @@ export default function DriveFilesPage() {
                 <select
                   value={selectedTarget || ""}
                   onChange={(e) => setSelectedTarget(e.target.value ? parseInt(e.target.value) : null)}
-                  className="w-full bg-slate-700 text-slate-100 border border-slate-600 rounded-lg px-4 py-3 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 transition"
+                  disabled={batchCopying}
+                  className="w-full bg-slate-700 text-slate-100 border border-slate-600 rounded-lg px-4 py-3 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <option value="">-- Selecciona una nube --</option>
                   {copyOptions?.target_accounts && copyOptions.target_accounts.length > 0 ? (
@@ -1299,8 +1344,37 @@ export default function DriveFilesPage() {
                 </select>
               </div>
 
-              {/* Progress Bar (shown during copy) */}
-              {copying && (
+              {/* Batch Progress (for multi-file copy from menu) */}
+              {batchCopyingFromMenu && batchCopying && (
+                <div className="mb-6 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-slate-300 font-semibold">
+                      Copiando {batchProgress.current} / {batchProgress.total}
+                    </p>
+                    <span className="text-sm text-emerald-400">
+                      {Math.round((batchProgress.current / batchProgress.total) * 100)}%
+                    </span>
+                  </div>
+                  {batchProgress.currentFileName && (
+                    <p className="text-xs text-slate-400 truncate">
+                      Archivo actual: <span className="text-slate-300">{batchProgress.currentFileName}</span>
+                    </p>
+                  )}
+                  <div className="w-full h-3 bg-slate-700 rounded-full overflow-hidden border border-slate-600">
+                    <div
+                      className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300"
+                      style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-slate-400 flex items-center gap-1.5">
+                    <span>⏱️</span>
+                    <span>En cola: {batchProgress.total - batchProgress.current} archivo(s)</span>
+                  </p>
+                </div>
+              )}
+
+              {/* Progress Bar (shown during single file copy) */}
+              {!batchCopyingFromMenu && copying && (
                 <div className="mb-6">
                   <div className="flex items-center justify-between mb-2">
                     <p className="text-sm text-slate-300">{copyStatus}</p>
@@ -1315,8 +1389,8 @@ export default function DriveFilesPage() {
                 </div>
               )}
 
-              {/* Status Message */}
-              {copyStatus && !copying && (
+              {/* Status Message (single file) */}
+              {!batchCopyingFromMenu && copyStatus && !copying && (
                 <div className={`mb-6 p-3 rounded-lg text-sm font-medium ${
                   copyStatus.includes("✅")
                     ? "bg-emerald-500/20 border border-emerald-500 text-emerald-100"
@@ -1328,28 +1402,52 @@ export default function DriveFilesPage() {
                 </div>
               )}
 
+              {/* Batch Results (shown after batch completion) */}
+              {batchCopyingFromMenu && !batchCopying && batchResults && (
+                <div className="mb-6 p-4 bg-slate-700/50 rounded-lg border border-slate-600">
+                  <h3 className="font-semibold text-white mb-2">Resultado:</h3>
+                  <div className="space-y-1 text-sm">
+                    <div className="flex items-center gap-2">
+                      <span className="text-emerald-400">✅ Éxito:</span>
+                      <span className="text-white font-semibold">{batchResults.success}</span>
+                    </div>
+                    {batchResults.skipped > 0 && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-blue-400">ℹ️ Omitidos (ya existían):</span>
+                        <span className="text-white font-semibold">{batchResults.skipped}</span>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <span className="text-red-400">❌ Fallidos:</span>
+                      <span className="text-white font-semibold">{batchResults.failed}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Action Buttons */}
               <div className="flex gap-3 justify-end">
                 <button
                   type="button"
                   onClick={() => {
-                    if (copying) {
+                    if (copying || batchCopying) {
                       cancelCopy();
                     } else {
                       closeCopyModal();
                     }
                   }}
-                  className="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-sm font-semibold transition"
+                  disabled={batchCopyingFromMenu && batchCopying}
+                  className="px-4 py-2 bg-slate-600 hover:bg-slate-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition"
                 >
-                  {copying ? "Cancelar Copia" : "Cerrar"}
+                  {(copying || batchCopying) ? "Cancelar" : "Cerrar"}
                 </button>
                 <button
                   type="button"
                   onClick={confirmCopy}
-                  disabled={!selectedTarget || copying}
+                  disabled={!selectedTarget || copying || batchCopying}
                   className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition"
                 >
-                  {copying ? "Copiando..." : "Copiar"}
+                  {batchCopying ? `Copiando... (${batchProgress.current}/${batchProgress.total})` : copying ? "Copiando..." : "Copiar"}
                 </button>
               </div>
             </div>
