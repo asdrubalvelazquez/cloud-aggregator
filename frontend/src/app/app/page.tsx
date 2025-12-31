@@ -395,7 +395,7 @@ function DashboardContent({
 
   const handleConnectGoogle = async () => {
     if (!userId) {
-      setError("No hay sesión de usuario activa. Recarga la página.");
+      setHardError("No hay sesión de usuario activa. Recarga la página.");
       return;
     }
     
@@ -407,7 +407,7 @@ function DashboardContent({
       const { url } = await fetchGoogleLoginUrl({ mode: "connect" });
       window.location.href = url;
     } catch (err) {
-      setError(`Error al obtener URL de Google: ${err}`);
+      setHardError(`Error al obtener URL de Google: ${err}`);
       console.error("handleConnectGoogle error:", err);
     }
   };
