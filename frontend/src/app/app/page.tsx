@@ -451,7 +451,8 @@ function DashboardContent({
   const handleLogout = async () => {
     // Ensure no lingering loading/error UI survives after sign-out
     setLoading(false);
-    setError(null);
+    setHardError(null);
+    setSoftTimeout(false);
     setToast(null);
 
     try {
