@@ -25,6 +25,9 @@ export default function PrivacyPolicy() {
             <li><strong>Google Drive Data:</strong> File names, folder structures, file metadata, and storage usage from the Google Drive accounts you choose to connect.</li>
             <li><strong>Usage Data:</strong> Information about your interactions with our service, including copy operations, file management actions, and quota usage.</li>
           </ul>
+          <p className="text-gray-700 mt-4">
+            <strong>Important:</strong> We use the <code className="bg-gray-100 px-2 py-1 rounded text-sm">drive.file</code> OAuth scope, which means we <strong>only access files you explicitly select</strong> via Google Picker or files that you create through our service. We cannot see or access your entire Google Drive—only the specific files you choose to work with.
+          </p>
         </section>
 
         <section className="mb-8">
@@ -119,7 +122,14 @@ export default function PrivacyPolicy() {
           <ul className="list-disc list-inside text-gray-700 space-y-2 ml-4">
             <li><strong>Access:</strong> Request a copy of your personal data</li>
             <li><strong>Correction:</strong> Update or correct your information</li>
-            <li><strong>Deletion:</strong> Request deletion of your account and associated data</li>
+            <li><strong>Deletion:</strong> Request deletion of your account and associated data (see our{' '}
+              <a 
+                href="/data-deletion" 
+                className="text-blue-600 hover:underline"
+              >
+                Data Deletion Instructions
+              </a>)
+            </li>
             <li><strong>Revoke Access:</strong> Disconnect your Google account at any time through your{' '}
               <a 
                 href="https://myaccount.google.com/permissions" 
