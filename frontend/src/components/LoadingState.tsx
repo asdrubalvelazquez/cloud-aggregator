@@ -29,12 +29,10 @@ export function DashboardLoadingState() {
     <>
       <TopProgressBar />
       
-      <div className="text-center py-8 mb-6">
-        <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-emerald-500 mb-3" />
-        <p className="text-slate-300 text-sm">Cargando resumen de almacenamiento…</p>
-      </div>
-
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <SkeletonCard />
+        <SkeletonCard />
+        <SkeletonCard />
         <SkeletonCard />
         <SkeletonCard />
         <SkeletonCard />

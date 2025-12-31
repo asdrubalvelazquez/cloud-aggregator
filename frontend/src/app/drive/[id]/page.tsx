@@ -1044,6 +1044,16 @@ export default function DriveFilesPage() {
             </h1>
           </div>
           <div className="flex items-center gap-4">
+            <GooglePickerButton
+              accountId={parseInt(accountId)}
+              onFilesPicked={(files) => setPickerFiles(files)}
+              disabled={copying || batchCopying}
+            />
+            {pickerFiles.length > 0 && (
+              <span className="text-xs text-slate-400">
+                Picker: {pickerFiles.length}
+              </span>
+            )}
             <QuotaBadge refreshKey={quotaRefreshKey} />
             {copyOptions && (
               <div className="text-sm text-slate-400">
@@ -1179,47 +1189,6 @@ export default function DriveFilesPage() {
               <div className="text-xs text-slate-400 flex items-center gap-1.5">
                 <span>⏱️</span>
                 <span>La copia puede tardar ~11s por archivo debido a límites de Google API</span>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Google Picker Section - Allow user to select files explicitly */}
-        {!loading && !error && (
-          <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h3 className="font-semibold text-slate-100">Selección de archivos (Google Picker)</h3>
-                <p className="text-xs text-slate-400 mt-1">
-                  Con scope drive.file, usa Google Picker para seleccionar archivos específicos.
-                  Los archivos seleccionados quedan accesibles para copia.
-                </p>
-              </div>
-              <GooglePickerButton
-                accountId={parseInt(accountId)}
-                onFilesPicked={(files) => setPickerFiles(files)}
-                disabled={copying || batchCopying}
-              />
-            </div>
-            
-            {pickerFiles.length > 0 && (
-              <div className="mt-3 pt-3 border-t border-slate-700">
-                <p className="text-xs text-slate-400 mb-2">
-                  Archivos seleccionados mediante Picker ({pickerFiles.length}):
-                </p>
-                <div className="space-y-1 max-h-32 overflow-y-auto">
-                  {pickerFiles.map((file) => (
-                    <div key={file.id} className="flex items-center gap-2 text-xs text-slate-300 bg-slate-700/50 px-2 py-1 rounded">
-                      <span>📄</span>
-                      <span className="flex-1 truncate">{file.name}</span>
-                      {file.sizeBytes && (
-                        <span className="text-slate-500">
-                          {(file.sizeBytes / 1024 / 1024).toFixed(2)} MB
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
               </div>
             )}
           </div>
