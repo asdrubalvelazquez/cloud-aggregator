@@ -209,9 +209,11 @@ export default function DriveFilesPage() {
         setError(e.message || "Error al cargar archivos");
       }
     } finally {
+      // Always clear per-request timeout (even for out-of-date requests)
+      clearTimeout(timeoutId);
+
       // Only cleanup if this is still the latest request
       if (seq === fetchSeqRef.current) {
-        clearTimeout(timeoutId);
         if (failsafeTimeoutRef.current) {
           clearTimeout(failsafeTimeoutRef.current);
           failsafeTimeoutRef.current = null;
@@ -225,6 +227,30 @@ export default function DriveFilesPage() {
       }
     }
   };
+
+  // Cleanup on unmount: abort in-flight requests and clear timers to avoid stuck loading on back/forward navigation
+  useEffect(() => {
+    return () => {
+      // Invalidate any pending work so stale completions don't win
+      fetchSeqRef.current += 1;
+
+      if (fetchAbortRef.current) {
+        try {
+          fetchAbortRef.current.abort();
+        } catch (e) {
+          // ignore
+        }
+        fetchAbortRef.current = null;
+      }
+
+      if (failsafeTimeoutRef.current) {
+        clearTimeout(failsafeTimeoutRef.current);
+        failsafeTimeoutRef.current = null;
+      }
+
+      loadingRef.current = false;
+    };
+  }, []);
 
   // Initial load
   useEffect(() => {

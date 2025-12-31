@@ -212,10 +212,6 @@ function DashboardContent({
     };
     checkSession();
 
-    if (routeParamsKey === null) {
-      return;
-    }
-
     // Verificar si el usuario acaba de autenticarse (usando search params)
     const { authStatus, authError, reconnectStatus } = routeParams;
       
@@ -900,7 +896,7 @@ function DashboardContent({
 }
 
 export default function AppDashboard() {
-  const [routeParamsKey, setRouteParamsKey] = useState<string | null>(null);
+  const [routeParamsKey, setRouteParamsKey] = useState<string | null>("init");
   const [routeParams, setRouteParams] = useState<DashboardRouteParams>({
     authStatus: null,
     authError: null,
