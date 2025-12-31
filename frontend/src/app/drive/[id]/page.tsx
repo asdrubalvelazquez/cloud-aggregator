@@ -249,6 +249,8 @@ export default function DriveFilesPage() {
       }
 
       loadingRef.current = false;
+      // Ensure we don't restore this route with a cached "loading=true" state
+      setLoading(false);
     };
   }, []);
 
@@ -258,6 +260,7 @@ export default function DriveFilesPage() {
       fetchFiles("root", null);
       fetchCopyOptions();
     }
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountId]);
 

@@ -119,6 +119,23 @@ function DashboardContent({
   const [showReconnectModal, setShowReconnectModal] = useState(false);
   const router = useRouter();
 
+  const withTimeout = async <T,>(promise: Promise<T>, ms: number): Promise<T> => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error("timeout")), ms);
+        }),
+      ]);
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  };
+
   const fetchSummary = async (signal?: AbortSignal) => {
     try {
       setLoading(true);
@@ -220,7 +237,7 @@ function DashboardContent({
       // Ensures auth token is fresh before calling /me/* endpoints
       const refreshAndLoad = async () => {
         try {
-          const { data, error } = await supabase.auth.refreshSession();
+          const { data, error } = await withTimeout(supabase.auth.refreshSession(), 10000);
           if (error) {
             console.error("[OAUTH] Failed to refresh session:", error);
             
@@ -269,7 +286,10 @@ function DashboardContent({
       const validateReconnect = async () => {
         try {
           // Refresh Supabase session first (OAuth redirect may have stale token)
-          const { data: sessionData, error: sessionError } = await supabase.auth.refreshSession();
+          const { data: sessionData, error: sessionError } = await withTimeout(
+            supabase.auth.refreshSession(),
+            10000
+          );
           if (sessionError) {
             console.error("[RECONNECT] Failed to refresh session:", sessionError);
             
@@ -319,8 +339,12 @@ function DashboardContent({
           fetchBillingQuota(abortController.signal);
         } catch (error) {
           console.error("Failed to validate reconnect:", error);
+          const message =
+            (error as any)?.message === "timeout"
+              ? "⚠️ La validación tardó demasiado. Recarga la página."
+              : "⚠️ Error al validar reconexión. Actualiza la página.";
           setToast({
-            message: "⚠️ Error al validar reconexión. Actualiza la página.",
+            message,
             type: "warning",
           });
         }
@@ -418,8 +442,17 @@ function DashboardContent({
   };
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.push("/");
+    // Ensure no lingering loading/error UI survives after sign-out
+    setLoading(false);
+    setError(null);
+    setToast(null);
+
+    try {
+      await supabase.auth.signOut();
+    } finally {
+      // Use replace so back button doesn't land on /app with stale state
+      router.replace("/");
+    }
   };
 
   const getRelativeTime = (timestamp: number): string => {

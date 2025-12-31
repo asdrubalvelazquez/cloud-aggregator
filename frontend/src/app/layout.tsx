@@ -4,6 +4,7 @@ import "./globals.css";
 import { CopyProvider } from "@/context/CopyContext";
 import { CopyProgressBar } from "@/components/CopyProgressBar";
 import { CanonicalURL } from "@/components/CanonicalURL";
+import { CanonicalHostGuard } from "@/components/CanonicalHostGuard";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -28,7 +29,7 @@ export const viewport: Viewport = {
 
 // Metadata configuration
 // CANONICAL DOMAIN: https://www.cloudaggregatorapp.com
-// Dual-domain active: vercel.app + www (both functional, www is preferred)
+// Dual-domain possible (preview host + www); www is preferred
 export const metadata: Metadata = {
   metadataBase: new URL("https://www.cloudaggregatorapp.com"),
   title: {
@@ -98,6 +99,7 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <CopyProvider>
+          <CanonicalHostGuard />
           <CanonicalURL />
           {children}
           <CopyProgressBar />

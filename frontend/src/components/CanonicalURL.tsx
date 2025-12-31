@@ -10,7 +10,7 @@ import { useEffect } from "react";
  * This ensures SEO points to www.cloudaggregatorapp.com regardless of the domain used to access the site.
  * 
  * Supports dual-domain:
- * - https://cloud-aggregator-umy5.vercel.app/app → canonical: https://www.cloudaggregatorapp.com/app
+ * - https://<deployment-host>/app → canonical: https://www.cloudaggregatorapp.com/app
  * - https://www.cloudaggregatorapp.com/app → canonical: https://www.cloudaggregatorapp.com/app
  * 
  * Safe: Does NOT force redirects, only signals preferred domain to search engines.

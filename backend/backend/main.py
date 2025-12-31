@@ -31,6 +31,44 @@ app = FastAPI()
 # FRONTEND_URL: Canonical domain for redirects (OAuth, Stripe, etc.)
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
+# Canonical frontend domain enforcement
+CANONICAL_FRONTEND_HOST = "www.cloudaggregatorapp.com"
+CANONICAL_FRONTEND_ORIGIN = f"https://{CANONICAL_FRONTEND_HOST}"
+
+
+def safe_frontend_origin_from_request(request: Request) -> str:
+    """Return a safe frontend origin for redirects.
+
+    Rules:
+    - Never redirect to *.vercel.app
+    - Only trust the request host when it is the canonical www domain
+    - Otherwise fall back to FRONTEND_URL only if it matches canonical origin
+    - Final fallback is the canonical origin
+    """
+
+    # Prefer forwarded headers (common behind proxies/CDNs)
+    raw_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    raw_proto = request.headers.get("x-forwarded-proto") or "https"
+
+    # If multiple values are present (comma-separated), take the first hop.
+    host = raw_host.split(",", 1)[0].strip()
+    proto = raw_proto.split(",", 1)[0].strip().lower()
+
+    # Strip port if present.
+    host_no_port = host.split(":", 1)[0].lower()
+
+    if host_no_port == CANONICAL_FRONTEND_HOST:
+        if proto not in ("http", "https"):
+            proto = "https"
+        return f"{proto}://{CANONICAL_FRONTEND_HOST}"
+
+    # Fallback to configured FRONTEND_URL only if it is canonical.
+    configured = (os.getenv("FRONTEND_URL") or "").strip().rstrip("/")
+    if configured == CANONICAL_FRONTEND_ORIGIN:
+        return CANONICAL_FRONTEND_ORIGIN
+
+    return CANONICAL_FRONTEND_ORIGIN
+
 # CORS_ALLOWED_ORIGINS: Comma-separated list of allowed origins
 # If not set, use defaults: FRONTEND_URL + localhost
 cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS")
@@ -726,11 +764,13 @@ async def google_callback(request: Request):
     error = qs.get("error", [None])[0]
     state = qs.get("state", [None])[0]
 
+    frontend_origin = safe_frontend_origin_from_request(request)
+
     if error:
-        return RedirectResponse(f"{FRONTEND_URL}?error={error}")
+        return RedirectResponse(f"{frontend_origin}?error={error}")
 
     if not code:
-        return RedirectResponse(f"{FRONTEND_URL}?error=no_code")
+        return RedirectResponse(f"{frontend_origin}?error=no_code")
     
     # Decodificar el state para obtener user_id, mode, reconnect_account_id, slot_log_id, user_email
     user_id = None
@@ -765,7 +805,7 @@ async def google_callback(request: Request):
     expires_in = token_json.get("expires_in", 3600)
 
     if not access_token:
-        return RedirectResponse(f"{FRONTEND_URL}?error=no_access_token")
+        return RedirectResponse(f"{frontend_origin}?error=no_access_token")
 
     # Get user info
     async with httpx.AsyncClient() as client:
@@ -790,7 +830,7 @@ async def google_callback(request: Request):
 
     # Prevent orphan cloud_accounts without user_id
     if not user_id:
-        return RedirectResponse(f"{FRONTEND_URL}/app?error=missing_user_id")
+        return RedirectResponse(f"{frontend_origin}/app?error=missing_user_id")
     
     # Handle reconnect mode: verify account match and skip slot consumption
     if mode == "reconnect":
@@ -814,7 +854,7 @@ async def google_callback(request: Request):
                 f"expected_email={expected_email} got_email={account_email} "
                 f"user_id={user_id}"
             )
-            return RedirectResponse(f"{FRONTEND_URL}/app?error=account_mismatch&expected={expected_email}")
+            return RedirectResponse(f"{frontend_origin}/app?error=account_mismatch&expected={expected_email}")
         
         # ===== SECURITY CHECK: Verify slot ownership before updating tokens =====
         # CRITICAL: Load target slot/account by reconnect_account_id and verify ownership
@@ -846,7 +886,7 @@ async def google_callback(request: Request):
                 f"reconnect_account_id={reconnect_account_id_normalized} "
                 f"user_id={user_id}"
             )
-            return RedirectResponse(f"{FRONTEND_URL}/app?error=slot_not_found")
+            return RedirectResponse(f"{frontend_origin}/app?error=slot_not_found")
         
         slot_user_id = target_slot.data[0]["user_id"]
         slot_id = target_slot.data[0]["id"]
@@ -869,7 +909,7 @@ async def google_callback(request: Request):
                     f"slot_id={slot_id} slot_email={'PRESENT' if slot_email_normalized else 'MISSING'} "
                     f"user_email={'PRESENT' if current_user_email_normalized else 'MISSING'}"
                 )
-                return RedirectResponse(f"{FRONTEND_URL}/app?error=ownership_violation")
+                return RedirectResponse(f"{frontend_origin}/app?error=ownership_violation")
             
             # Compare emails (case-insensitive, trimmed)
             if slot_email_normalized == current_user_email_normalized:
@@ -903,7 +943,7 @@ async def google_callback(request: Request):
                         f"[SECURITY][RECLAIM] Ownership transfer failed: {type(e).__name__} "
                         f"slot_id={slot_id} user_id={user_id}"
                     )
-                    return RedirectResponse(f"{FRONTEND_URL}/app?error=reconnect_failed")
+                    return RedirectResponse(f"{frontend_origin}/app?error=reconnect_failed")
                 
                 # Update slot_user_id for subsequent code flow
                 slot_user_id = user_id
@@ -916,7 +956,7 @@ async def google_callback(request: Request):
                     f"current_user_id={user_id} (auth_email={current_user_email_normalized}) attempted reconnect. "
                     f"Email mismatch prevents reclaim."
                 )
-                return RedirectResponse(f"{FRONTEND_URL}/app?error=ownership_violation")
+                return RedirectResponse(f"{frontend_origin}/app?error=ownership_violation")
         
         # Ownership verified (either original owner or safely reclaimed) => OK to proceed
         logging.info(
@@ -932,7 +972,7 @@ async def google_callback(request: Request):
                 f"[RECONNECT ERROR] No slot found for reconnection. "
                 f"user_id={user_id} google_account_id={google_account_id} email={account_email}"
             )
-            return RedirectResponse(f"{FRONTEND_URL}/app?error=slot_not_found")
+            return RedirectResponse(f"{frontend_origin}/app?error=slot_not_found")
         
         # Build upsert payload
         # CRITICAL: Solo incluir refresh_token si viene uno nuevo (Google no siempre lo retorna)
@@ -999,7 +1039,7 @@ async def google_callback(request: Request):
                 f"user_id={user_id} provider_account_id={google_account_id} "
                 f"This indicates slot was deleted, provider_account_id mismatch, or database error."
             )
-            return RedirectResponse(f"{FRONTEND_URL}/app?error=reconnect_failed&reason=slot_not_updated")
+            return RedirectResponse(f"{frontend_origin}/app?error=reconnect_failed&reason=slot_not_updated")
         
         # Get slot_log_id for frontend validation (prefer from state JWT, fallback to database)
         validated_slot_id = slot_log_id if slot_log_id else slot_update.data[0].get("id")
@@ -1011,7 +1051,7 @@ async def google_callback(request: Request):
             f"slot_id={validated_slot_id} is_active=True disconnected_at=None"
         )
         
-        return RedirectResponse(f"{FRONTEND_URL}/app?reconnect=success&slot_id={validated_slot_id}")
+        return RedirectResponse(f"{frontend_origin}/app?reconnect=success&slot_id={validated_slot_id}")
     
     # Check cloud account limit with slot-based validation (only for connect mode)
     try:
@@ -1026,16 +1066,16 @@ async def google_callback(request: Request):
             # Log interno con detalles, redirect con error genérico sin PII
             error_detail = e.detail if isinstance(e.detail, dict) else {"error": "unknown"}
             logging.error(f"[CALLBACK VALIDATION ERROR] HTTP 400 - {error_detail.get('error', 'unknown')} para user_id={user_id}, provider=google_drive")
-            return RedirectResponse(f"{FRONTEND_URL}/app?error=oauth_invalid_account")
+            return RedirectResponse(f"{frontend_origin}/app?error=oauth_invalid_account")
         elif e.status_code == 402:
             # QUOTA ERROR: Límite de slots alcanzado
             # NO exponer PII (emails) en URL - frontend llamará a /me/slots para obtener detalles
             logging.info(f"[CALLBACK QUOTA] Usuario {user_id} alcanzó límite de slots")
-            return RedirectResponse(f"{FRONTEND_URL}/app?error=cloud_limit_reached")
+            return RedirectResponse(f"{frontend_origin}/app?error=cloud_limit_reached")
         else:
             # Otros errores HTTP inesperados
             logging.error(f"[CALLBACK ERROR] Unexpected HTTPException {e.status_code} para user_id={user_id}")
-            return RedirectResponse(f"{FRONTEND_URL}/app?error=connection_failed")
+            return RedirectResponse(f"{frontend_origin}/app?error=connection_failed")
     
     # CRITICAL FIX: Get/create slot BEFORE upserting cloud_account
     # This prevents creating orphan accounts with slot_log_id = NULL
@@ -1055,7 +1095,7 @@ async def google_callback(request: Request):
         import logging
         logging.error(f"[CRITICAL] Failed to get/create slot for user {user_id}, account {account_email}: {slot_err}")
         # ABORT: Do NOT create cloud_account without slot_id (prevents orphan accounts)
-        return RedirectResponse(f"{FRONTEND_URL}/app?error=slot_creation_failed")
+        return RedirectResponse(f"{frontend_origin}/app?error=slot_creation_failed")
     
     # Preparar datos para guardar (incluye reactivación si es reconexión)
     upsert_data = {
@@ -1077,7 +1117,7 @@ async def google_callback(request: Request):
     ).execute()
 
     # Redirect to frontend dashboard
-    return RedirectResponse(f"{FRONTEND_URL}/app?auth=success")
+    return RedirectResponse(f"{frontend_origin}/app?auth=success")
 
 
 @app.get("/accounts")

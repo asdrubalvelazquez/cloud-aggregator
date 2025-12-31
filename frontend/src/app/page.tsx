@@ -8,21 +8,68 @@ import { supabase } from "@/lib/supabaseClient";
 export default function Home() {
   const router = useRouter();
   const [checkingSession, setCheckingSession] = useState(true);
+  const [sessionError, setSessionError] = useState<string | null>(null);
 
   useEffect(() => {
+    let mounted = true;
+
     const checkAuth = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (session) {
-        // Usuario autenticado -> redirigir a dashboard
-        router.replace("/app");
-      } else {
+      setSessionError(null);
+
+      // Failsafe timeout (10s) so we never stick on an infinite "Cargando..."
+      const timeoutMs = 10000;
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error("timeout"));
+        }, timeoutMs);
+      });
+
+      try {
+        const result = await Promise.race([
+          supabase.auth.getSession(),
+          timeoutPromise,
+        ]);
+
+        // Promise.race returns the getSession result if it wins
+        const {
+          data: { session },
+        } = result as Awaited<ReturnType<typeof supabase.auth.getSession>>;
+
+        if (!mounted) return;
+
+        if (session) {
+          // Usuario autenticado -> redirigir a dashboard
+          router.replace("/app");
+          return;
+        }
+
         // No hay sesión -> mostrar landing
         setCheckingSession(false);
+      } catch (err: any) {
+        if (!mounted) return;
+
+        if (err?.message === "timeout") {
+          setSessionError("La verificación de sesión tardó demasiado.");
+        } else {
+          setSessionError("Error verificando sesión.");
+          console.error("[Home] Error checking session:", err);
+        }
+
+        setCheckingSession(false);
+      } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
       }
     };
 
     checkAuth();
+
+    return () => {
+      mounted = false;
+    };
   }, [router]);
 
   // Mientras verifica sesión, mostrar spinner
@@ -32,6 +79,24 @@ export default function Home() {
         <div className="text-center">
           <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500 mb-4"></div>
           <p className="text-slate-300">Cargando...</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (sessionError) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center">
+        <div className="text-center max-w-md px-6">
+          <p className="text-slate-200 font-semibold">{sessionError}</p>
+          <p className="text-slate-400 text-sm mt-2">Puedes recargar para reintentar.</p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-6 rounded-lg bg-emerald-600 hover:bg-emerald-700 transition px-4 py-2 text-sm font-semibold"
+          >
+            Recargar
+          </button>
         </div>
       </main>
     );

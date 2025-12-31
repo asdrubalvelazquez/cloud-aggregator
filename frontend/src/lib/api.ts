@@ -22,14 +22,27 @@ export async function authenticatedFetch(
   const headers = new Headers(options.headers);
   headers.set("Authorization", `Bearer ${session.access_token}`);
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+  // Default timeout to prevent infinite pending requests.
+  // If the caller already provides a signal (with its own timeout/abort), respect it.
+  const timeoutMs = 15000;
+  const controller = options.signal ? null : new AbortController();
+  const timeoutId: ReturnType<typeof setTimeout> | null = controller
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+
+  const requestInit: RequestInit = {
     ...options,
     headers,
+    signal: options.signal ?? controller?.signal,
     // Permitir cache: 'no-store' para forzar refetch
-    cache: options.cache || 'default',
-  });
+    cache: options.cache || "default",
+  };
 
-  return response;
+  try {
+    return await fetch(`${API_BASE_URL}${endpoint}`, requestInit);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 }
 
 /**

@@ -11,7 +11,7 @@ export default function PrivacyPolicy() {
         <section className="mb-8">
           <h2 className="text-2xl font-semibold text-gray-900 mb-4">1. Introduction</h2>
           <p className="text-gray-700 mb-4">
-            Cloud Aggregator ("we", "our", or "us"), accessible at cloud-aggregator-iota.vercel.app, is committed to protecting your privacy. This Privacy Policy explains how we collect, use, and safeguard your information when you use our service to manage and interact with your Google Drive accounts.
+            Cloud Aggregator ("we", "our", or "us"), accessible at www.cloudaggregatorapp.com, is committed to protecting your privacy. This Privacy Policy explains how we collect, use, and safeguard your information when you use our service to manage and interact with your Google Drive accounts.
           </p>
         </section>
 

@@ -8,6 +8,14 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
+  const getOAuthRedirectOrigin = () => {
+    const { hostname, origin } = window.location;
+    const isVercelHost = hostname.endsWith(".vercel.app");
+    const isNonWwwCanonical = hostname === "cloudaggregatorapp.com";
+    if (isVercelHost || isNonWwwCanonical) return "https://www.cloudaggregatorapp.com";
+    return origin;
+  };
+
   useEffect(() => {
     let mounted = true;
 
@@ -52,7 +60,7 @@ export default function LoginPage() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: { 
-        redirectTo: `${window.location.origin}/login`,
+        redirectTo: `${getOAuthRedirectOrigin()}/login`,
         queryParams: {
           access_type: 'offline',
           prompt: 'consent',
