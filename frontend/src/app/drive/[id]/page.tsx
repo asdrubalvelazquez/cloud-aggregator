@@ -1033,10 +1033,10 @@ export default function DriveFilesPage() {
         <header className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <Link
-              href="/"
-              className="text-emerald-400 hover:text-emerald-300 transition"
+              href="/app"
+              className="text-emerald-400 hover:text-emerald-300 transition font-medium"
             >
-              ← Volver
+              Dashboard
             </Link>
             <h1 className="text-2xl md:text-3xl font-bold">
               Archivos de Google Drive
