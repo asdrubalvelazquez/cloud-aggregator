@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, Suspense } from "react";
+import { DashboardLoadingState, SlowLoadingNotice } from "@/components/LoadingState";
 import { supabase } from "@/lib/supabaseClient";
 import { authenticatedFetch, fetchCloudStatus } from "@/lib/api";
 import type { CloudStatusResponse } from "@/lib/api";
@@ -106,7 +107,8 @@ function DashboardContent({
 }) {
   const [data, setData] = useState<StorageSummary | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [softTimeout, setSoftTimeout] = useState(false);
+  const [hardError, setHardError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastMessage>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
@@ -137,6 +139,7 @@ function DashboardContent({
   };
 
   const fetchSummary = async (signal?: AbortSignal) => {
+    let didSoftTimeout = false;
     try {
       setLoading(true);
       const res = await authenticatedFetch("/storage/summary", { signal });
@@ -145,16 +148,20 @@ function DashboardContent({
       }
       const json = await res.json();
       setData(json);
-      setError(null);
+      setHardError(null);
+      setSoftTimeout(false);
       setLastUpdated(Date.now());
     } catch (e: any) {
       if (e.name === "AbortError") {
-        setError("La carga tardó demasiado. Intenta recargar la página.");
+        setSoftTimeout(true);
+        didSoftTimeout = true;
       } else {
-        setError(e.message || "Error al cargar datos");
+        setHardError(e.message || "Error al cargar datos");
       }
     } finally {
-      setLoading(false);
+      if (!didSoftTimeout) {
+        setLoading(false);
+      }
     }
   };
 
@@ -565,19 +572,28 @@ function DashboardContent({
         </header>
 
         {loading && (
-          <div className="text-center py-12">
-            <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500"></div>
-            <p className="mt-4 text-slate-300">Cargando resumen de almacenamiento…</p>
-          </div>
+          <DashboardLoadingState />
         )}
 
-        {error && !loading && (
+        {softTimeout && !hardError && (
+          <SlowLoadingNotice
+            onReload={() => {
+              setSoftTimeout(false);
+              setLoading(true);
+              fetchSummary();
+            }}
+          />
+        )}
+
+        {hardError && !loading && (
           <div className="bg-red-500/20 border border-red-500 rounded-lg p-4 text-red-100">
             <p className="font-semibold">Error al cargar datos</p>
-            <p className="text-sm mt-1">{error}</p>
+            <p className="text-sm mt-1">{hardError}</p>
             <button
               onClick={() => {
-                setError(null);
+                setHardError(null);
+                setSoftTimeout(false);
+                setLoading(true);
                 fetchSummary();
                 fetchQuota();
                 fetchBillingQuota();
@@ -590,7 +606,7 @@ function DashboardContent({
           </div>
         )}
 
-        {data && (
+        {!loading && !hardError && data && (
           <>
             {/* Plan & Límites de Billing */}
             {billingQuota && (
