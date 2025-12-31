@@ -10,6 +10,7 @@ import RowActionsMenu from "@/components/RowActionsMenu";
 import RenameModal from "@/components/RenameModal";
 import ContextMenu from "@/components/ContextMenu";
 import GooglePickerButton from "@/components/GooglePickerButton";
+import { DriveLoadingState } from "@/components/DriveLoadingState";
 
 type File = {
   id: string;
@@ -1105,7 +1106,7 @@ export default function DriveFilesPage() {
         )}
 
         {/* Loading State */}
-        {loading && <p className="text-center text-slate-300">Cargando archivos…</p>}
+        {loading && <DriveLoadingState />}
 
         {/* Error State */}
         {error && !loading && (

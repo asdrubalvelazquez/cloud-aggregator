@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, Suspense } from "react";
-import { DashboardLoadingState, SlowLoadingNotice } from "@/components/LoadingState";
+import { DashboardLoadingState } from "@/components/LoadingState";
 import { supabase } from "@/lib/supabaseClient";
 import { authenticatedFetch, fetchCloudStatus } from "@/lib/api";
 import type { CloudStatusResponse } from "@/lib/api";
@@ -572,18 +572,8 @@ function DashboardContent({
           </div>
         </header>
 
-        {loading && (
+        {(loading || softTimeout) && (
           <DashboardLoadingState />
-        )}
-
-        {softTimeout && !hardError && (
-          <SlowLoadingNotice
-            onReload={() => {
-              setSoftTimeout(false);
-              setLoading(true);
-              fetchSummary();
-            }}
-          />
         )}
 
         {hardError && !loading && (
