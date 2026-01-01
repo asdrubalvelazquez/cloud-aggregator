@@ -1,109 +1,21 @@
-"use client";
-
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { supabase } from "@/lib/supabaseClient";
+import SilentAuthRedirect from "@/components/SilentAuthRedirect";
 
+/**
+ * Landing page - Server Component for better SEO and Google OAuth Brand Verification.
+ * The content (including "Cloud Aggregator" name) is rendered in the initial HTML
+ * so that Google's crawler can see it without executing JavaScript.
+ * 
+ * SilentAuthRedirect is a client component that handles the redirect logic
+ * without blocking the initial render.
+ */
 export default function Home() {
-  const router = useRouter();
-  const [checkingSession, setCheckingSession] = useState(true);
-  const [sessionError, setSessionError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let mounted = true;
-
-    const checkAuth = async () => {
-      setSessionError(null);
-
-      // Failsafe timeout (10s) so we never stick on an infinite "Cargando..."
-      const timeoutMs = 10000;
-      let timeoutId: ReturnType<typeof setTimeout> | null = null;
-
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          reject(new Error("timeout"));
-        }, timeoutMs);
-      });
-
-      try {
-        const result = await Promise.race([
-          supabase.auth.getSession(),
-          timeoutPromise,
-        ]);
-
-        // Promise.race returns the getSession result if it wins
-        const {
-          data: { session },
-        } = result as Awaited<ReturnType<typeof supabase.auth.getSession>>;
-
-        if (!mounted) return;
-
-        if (session) {
-          // Usuario autenticado -> redirigir a dashboard
-          router.replace("/app");
-          return;
-        }
-
-        // No hay sesión -> mostrar landing
-        setCheckingSession(false);
-      } catch (err: any) {
-        if (!mounted) return;
-
-        if (err?.message === "timeout") {
-          setSessionError("La verificación de sesión tardó demasiado.");
-        } else {
-          setSessionError("Error verificando sesión.");
-          console.error("[Home] Error checking session:", err);
-        }
-
-        setCheckingSession(false);
-      } finally {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
-      }
-    };
-
-    checkAuth();
-
-    return () => {
-      mounted = false;
-    };
-  }, [router]);
-
-  // Mientras verifica sesión, mostrar spinner
-  if (checkingSession) {
-    return (
-      <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500 mb-4"></div>
-          <p className="text-slate-300">Loading...</p>
-        </div>
-      </main>
-    );
-  }
-
-  if (sessionError) {
-    return (
-      <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center">
-        <div className="text-center max-w-md px-6">
-          <p className="text-slate-200 font-semibold">{sessionError}</p>
-          <p className="text-slate-400 text-sm mt-2">You can reload to try again.</p>
-          <button
-            type="button"
-            onClick={() => window.location.reload()}
-            className="mt-6 rounded-lg bg-emerald-600 hover:bg-emerald-700 transition px-4 py-2 text-sm font-semibold"
-          >
-            Reload
-          </button>
-        </div>
-      </main>
-    );
-  }
-
   return (
-    <main className="min-h-screen bg-slate-950 text-white overflow-hidden">
+    <>
+      {/* Silent auth check - client component that doesn't block SSR */}
+      <SilentAuthRedirect />
+      
+      <main className="min-h-screen bg-slate-950 text-white overflow-hidden">
       {/* Animated gradient background */}
       <div className="fixed inset-0 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 animate-gradient-slow" />
       <div className="fixed inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-emerald-900/20 via-transparent to-transparent" />
@@ -119,9 +31,14 @@ export default function Home() {
             </div>
 
             {/* App Name */}
-            <h1 className="text-4xl md:text-5xl font-bold text-white mb-4">
+            <h1 className="text-4xl md:text-5xl font-bold text-white mb-2">
               Cloud Aggregator
             </h1>
+
+            {/* App Description - Critical for Google OAuth Brand Verification */}
+            <p className="text-lg text-slate-300 mt-2 mb-6">
+              Cloud Aggregator is a multi-account Google Drive management app.
+            </p>
 
             {/* Main Heading */}
             <h2 className="text-5xl md:text-7xl font-extrabold tracking-tight leading-tight">
@@ -366,5 +283,6 @@ export default function Home() {
         </footer>
       </div>
     </main>
+    </>
   );
 }
