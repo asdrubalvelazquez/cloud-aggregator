@@ -23,7 +23,7 @@ from backend.google_drive import (
 )
 from backend.auth import create_state_token, decode_state_token, verify_supabase_jwt, get_current_user, get_jwt_user_info
 from backend import quota
-from backend.stripe_utils import STRIPE_PRICE_PLUS, STRIPE_PRICE_PRO
+from backend.stripe_utils import STRIPE_PRICE_PLUS, STRIPE_PRICE_PRO, map_price_to_plan
 
 app = FastAPI()
 
@@ -197,10 +197,14 @@ def create_checkout_session(
         409: User already has active subscription
         500: Stripe API error or configuration issue
     """
-    # Validation 1: Stripe configured
+    # Validation 1: Stripe configured (secret key + price IDs)
     if not STRIPE_SECRET_KEY:
         logging.error("[STRIPE] STRIPE_SECRET_KEY not configured")
         raise HTTPException(status_code=500, detail="Payment system not configured")
+    
+    if not STRIPE_PRICE_PLUS or not STRIPE_PRICE_PRO:
+        logging.error("[STRIPE] Missing STRIPE_PRICE_PLUS or STRIPE_PRICE_PRO environment variables")
+        raise HTTPException(status_code=500, detail="Stripe not configured - missing price IDs")
     
     # Validation 2: plan_code allowlist
     plan_code = request.plan_code.upper()
@@ -274,7 +278,8 @@ def create_checkout_session(
             logging.info(f"[STRIPE] Reusing existing customer: {stripe_customer_id}")
         
         # Generate success/cancel URLs (route to existing /pricing page)
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        # Use canonical production domain or FRONTEND_URL fallback
+        frontend_url = os.getenv("FRONTEND_URL", "https://www.cloudaggregatorapp.com")
         success_url = f"{frontend_url}/pricing?payment=success&session_id={{CHECKOUT_SESSION_ID}}"
         cancel_url = f"{frontend_url}/pricing?payment=cancel"
         
@@ -364,12 +369,22 @@ async def stripe_webhooks(request: Request):
     # Handle events
     event_type = event["type"]
     
-    if event_type == "checkout.session.completed":
-        handle_checkout_completed(event)
-    elif event_type == "customer.subscription.deleted":
-        handle_subscription_deleted(event)
-    else:
-        logging.info(f"[STRIPE_WEBHOOK] Unhandled event type: {event_type}")
+    try:
+        if event_type == "checkout.session.completed":
+            handle_checkout_completed(event)
+        elif event_type == "customer.subscription.deleted":
+            handle_subscription_deleted(event)
+        elif event_type == "customer.subscription.updated":
+            handle_subscription_updated(event)
+        elif event_type == "invoice.paid":
+            handle_invoice_paid(event)
+        elif event_type == "invoice.payment_failed":
+            handle_invoice_payment_failed(event)
+        else:
+            logging.info(f"[STRIPE_WEBHOOK] Unhandled event type: {event_type}")
+    except Exception as e:
+        logging.error(f"[STRIPE_WEBHOOK] ❌ Error processing {event_type}: {str(e)}")
+        # Don't raise - return 200 to avoid Stripe retry spam on permanent errors
     
     return {"received": True}
 
@@ -383,8 +398,11 @@ def handle_checkout_completed(event: dict):
     - Set stripe_customer_id, stripe_subscription_id
     - Set subscription_status = 'active'
     - Update period_start to first day of current month
+    
+    Idempotency: Checks if subscription_id already exists to avoid duplicate processing.
     """
     session = event["data"]["object"]
+    session_id = session.get("id")
     
     # Extract metadata (required)
     metadata = session.get("metadata", {})
@@ -402,8 +420,23 @@ def handle_checkout_completed(event: dict):
     
     # Validation: subscription_id required
     if not subscription_id:
-        logging.error(f"[STRIPE_WEBHOOK] Missing subscription_id: session_id={session.get('id')}")
+        logging.error(f"[STRIPE_WEBHOOK] Missing subscription_id: session_id={session_id}")
         raise HTTPException(status_code=400, detail="Missing subscription_id")
+    
+    # Idempotency check: Skip if already processed this subscription
+    try:
+        existing = supabase.table("user_plans").select(
+            "subscription_status"
+        ).eq("stripe_subscription_id", subscription_id).execute()
+        
+        if existing.data:
+            logging.info(
+                f"[STRIPE_WEBHOOK] ⚠️ checkout.session.completed already processed: "
+                f"session_id={session_id}, subscription_id={subscription_id}. Skipping."
+            )
+            return
+    except Exception as e:
+        logging.warning(f"[STRIPE_WEBHOOK] Could not check idempotency: {str(e)}. Continuing...")
     
     # Validation: plan_code required
     if not plan_code:
@@ -606,6 +639,183 @@ def handle_subscription_deleted(event: dict):
     except Exception as e:
         logging.error(
             f"[STRIPE_WEBHOOK] ❌ Error handling subscription deletion: {str(e)} "
+            f"(subscription_id={subscription_id})"
+        )
+
+
+def handle_subscription_updated(event: dict):
+    """
+    Handle customer.subscription.updated event.
+    
+    Updates subscription_status when it changes (e.g., active → past_due).
+    This keeps the app in sync with Stripe's subscription state.
+    """
+    subscription = event["data"]["object"]
+    subscription_id = subscription.get("id")
+    status = subscription.get("status")  # active, past_due, canceled, unpaid, etc.
+    
+    if not subscription_id:
+        logging.error("[STRIPE_WEBHOOK] Missing subscription_id in customer.subscription.updated")
+        return
+    
+    try:
+        # Find user by subscription_id
+        user_result = supabase.table("user_plans").select(
+            "user_id, subscription_status"
+        ).eq("stripe_subscription_id", subscription_id).execute()
+        
+        if not user_result.data:
+            logging.warning(f"[STRIPE_WEBHOOK] No user found for subscription_id={subscription_id}")
+            return
+        
+        user_id = user_result.data[0]["user_id"]
+        current_status = user_result.data[0].get("subscription_status")
+        
+        # Only update if status changed
+        if current_status == status:
+            logging.info(
+                f"[STRIPE_WEBHOOK] customer.subscription.updated: No change. "
+                f"user_id={user_id}, status={status}"
+            )
+            return
+        
+        logging.info(
+            f"[STRIPE_WEBHOOK] customer.subscription.updated: "
+            f"user_id={user_id}, subscription_id={subscription_id}, "
+            f"status: {current_status} → {status}"
+        )
+        
+        # Update subscription status
+        now = datetime.now(timezone.utc)
+        result = supabase.table("user_plans").update({
+            "subscription_status": status,
+            "updated_at": now.isoformat()
+        }).eq("user_id", user_id).execute()
+        
+        if result.data:
+            logging.info(
+                f"[STRIPE_WEBHOOK] ✅ Subscription status updated: "
+                f"user_id={user_id}, new_status={status}"
+            )
+        else:
+            logging.error(
+                f"[STRIPE_WEBHOOK] ❌ Failed to update subscription status for user_id={user_id}"
+            )
+    
+    except Exception as e:
+        logging.error(
+            f"[STRIPE_WEBHOOK] ❌ Error handling subscription update: {str(e)} "
+            f"(subscription_id={subscription_id})"
+        )
+
+
+def handle_invoice_paid(event: dict):
+    """
+    Handle invoice.paid event.
+    
+    Ensures subscription remains active after successful payment.
+    Updates subscription_status to 'active' if it was 'past_due'.
+    """
+    invoice = event["data"]["object"]
+    subscription_id = invoice.get("subscription")
+    
+    if not subscription_id:
+        logging.info("[STRIPE_WEBHOOK] invoice.paid without subscription (one-time payment). Ignoring.")
+        return
+    
+    try:
+        # Find user by subscription_id
+        user_result = supabase.table("user_plans").select(
+            "user_id, subscription_status"
+        ).eq("stripe_subscription_id", subscription_id).execute()
+        
+        if not user_result.data:
+            logging.warning(f"[STRIPE_WEBHOOK] No user found for subscription_id={subscription_id}")
+            return
+        
+        user_id = user_result.data[0]["user_id"]
+        current_status = user_result.data[0].get("subscription_status")
+        
+        logging.info(
+            f"[STRIPE_WEBHOOK] invoice.paid: "
+            f"user_id={user_id}, subscription_id={subscription_id}, "
+            f"current_status={current_status}"
+        )
+        
+        # If status is past_due, update to active
+        if current_status == "past_due":
+            now = datetime.now(timezone.utc)
+            result = supabase.table("user_plans").update({
+                "subscription_status": "active",
+                "updated_at": now.isoformat()
+            }).eq("user_id", user_id).execute()
+            
+            if result.data:
+                logging.info(
+                    f"[STRIPE_WEBHOOK] ✅ Subscription reactivated after payment: user_id={user_id}"
+                )
+        else:
+            logging.info(
+                f"[STRIPE_WEBHOOK] invoice.paid: Subscription already active for user_id={user_id}"
+            )
+    
+    except Exception as e:
+        logging.error(
+            f"[STRIPE_WEBHOOK] ❌ Error handling invoice.paid: {str(e)} "
+            f"(subscription_id={subscription_id})"
+        )
+
+
+def handle_invoice_payment_failed(event: dict):
+    """
+    Handle invoice.payment_failed event.
+    
+    Updates subscription_status to 'past_due' when payment fails.
+    This allows the app to show warnings or restrict features.
+    """
+    invoice = event["data"]["object"]
+    subscription_id = invoice.get("subscription")
+    
+    if not subscription_id:
+        logging.info("[STRIPE_WEBHOOK] invoice.payment_failed without subscription. Ignoring.")
+        return
+    
+    try:
+        # Find user by subscription_id
+        user_result = supabase.table("user_plans").select(
+            "user_id"
+        ).eq("stripe_subscription_id", subscription_id).execute()
+        
+        if not user_result.data:
+            logging.warning(f"[STRIPE_WEBHOOK] No user found for subscription_id={subscription_id}")
+            return
+        
+        user_id = user_result.data[0]["user_id"]
+        
+        logging.warning(
+            f"[STRIPE_WEBHOOK] ⚠️ invoice.payment_failed: "
+            f"user_id={user_id}, subscription_id={subscription_id}"
+        )
+        
+        # Update status to past_due
+        now = datetime.now(timezone.utc)
+        result = supabase.table("user_plans").update({
+            "subscription_status": "past_due",
+            "updated_at": now.isoformat()
+        }).eq("user_id", user_id).execute()
+        
+        if result.data:
+            logging.warning(
+                f"[STRIPE_WEBHOOK] ⚠️ Subscription marked as past_due: user_id={user_id}"
+            )
+        else:
+            logging.error(
+                f"[STRIPE_WEBHOOK] ❌ Failed to update status to past_due for user_id={user_id}"
+            )
+    
+    except Exception as e:
+        logging.error(
+            f"[STRIPE_WEBHOOK] ❌ Error handling invoice.payment_failed: {str(e)} "
             f"(subscription_id={subscription_id})"
         )
 
