@@ -78,7 +78,7 @@ export default function Home() {
       <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center">
         <div className="text-center">
           <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500 mb-4"></div>
-          <p className="text-slate-300">Cargando...</p>
+          <p className="text-slate-300">Loading...</p>
         </div>
       </main>
     );
@@ -89,13 +89,13 @@ export default function Home() {
       <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center">
         <div className="text-center max-w-md px-6">
           <p className="text-slate-200 font-semibold">{sessionError}</p>
-          <p className="text-slate-400 text-sm mt-2">Puedes recargar para reintentar.</p>
+          <p className="text-slate-400 text-sm mt-2">You can reload to try again.</p>
           <button
             type="button"
             onClick={() => window.location.reload()}
             className="mt-6 rounded-lg bg-emerald-600 hover:bg-emerald-700 transition px-4 py-2 text-sm font-semibold"
           >
-            Recargar
+            Reload
           </button>
         </div>
       </main>
@@ -115,17 +115,22 @@ export default function Home() {
             {/* Badge */}
             <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 backdrop-blur-sm border border-white/10 text-sm text-slate-300">
               <span className="text-emerald-400">●</span>
-              Conecta múltiples cuentas en la nube
+              Connect multiple cloud accounts
             </div>
 
+            {/* App Name */}
+            <h1 className="text-4xl md:text-5xl font-bold text-white mb-4">
+              Cloud Aggregator
+            </h1>
+
             {/* Main Heading */}
-            <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight leading-tight">
+            <h2 className="text-5xl md:text-7xl font-extrabold tracking-tight leading-tight">
               Connect{" "}
               <span className="bg-gradient-to-r from-emerald-400 via-blue-500 to-purple-500 bg-clip-text text-transparent animate-gradient">
                 multiple Google Drive
               </span>
               {" "}accounts from a single interface
-            </h1>
+            </h2>
 
             {/* Subheading */}
             <p className="text-xl md:text-2xl text-slate-300 max-w-3xl mx-auto leading-relaxed">
@@ -144,14 +149,11 @@ export default function Home() {
                 href="/login"
                 className="group relative inline-flex items-center gap-2 px-8 py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white font-semibold text-lg shadow-lg shadow-emerald-500/30 transition-all duration-300 hover:scale-105 hover:shadow-2xl hover:shadow-emerald-500/40"
               >
-                Empezar ahora
+                Get Started
                 <svg className="w-5 h-5 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                 </svg>
               </Link>
-              <button className="px-8 py-4 rounded-xl bg-white/5 backdrop-blur-sm border border-white/10 hover:bg-white/10 text-white font-semibold text-lg transition-all duration-300">
-                Ver demo
-              </button>
             </div>
 
             {/* Trust Indicators */}
@@ -160,13 +162,13 @@ export default function Home() {
                 <svg className="w-5 h-5 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </svg>
-                Sin tarjeta requerida
+                No credit card required
               </div>
               <div className="flex items-center gap-2">
                 <svg className="w-5 h-5 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </svg>
-                Plan gratuito disponible
+                Free plan available
               </div>
             </div>
           </div>
@@ -301,13 +303,13 @@ export default function Home() {
                 <div className="text-5xl md:text-6xl font-bold bg-gradient-to-r from-blue-400 to-blue-600 bg-clip-text text-transparent mb-2">
                   Multi
                 </div>
-                <p className="text-slate-400 text-lg">Múltiples cuentas</p>
+                <p className="text-slate-400 text-lg">Multiple accounts</p>
               </div>
               <div className="text-center p-8">
                 <div className="text-5xl md:text-6xl font-bold bg-gradient-to-r from-purple-400 to-purple-600 bg-clip-text text-transparent mb-2">
-                  Gratis
+                  Free
                 </div>
-                <p className="text-slate-400 text-lg">Para empezar</p>
+                <p className="text-slate-400 text-lg">To get started</p>
               </div>
             </div>
           </div>
@@ -327,7 +329,7 @@ export default function Home() {
                 href="/login"
                 className="group inline-flex items-center gap-3 px-10 py-5 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white font-bold text-xl shadow-2xl shadow-emerald-500/40 transition-all duration-300 hover:scale-105 hover:shadow-emerald-500/50"
               >
-                Empezar ahora
+                Get Started
                 <svg className="w-6 h-6 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                 </svg>
