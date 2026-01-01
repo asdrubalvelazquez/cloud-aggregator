@@ -101,11 +101,34 @@ export default function PricingPage() {
         window.location.href = data.url;
       } else {
         const errorData = await res.json().catch(() => ({}));
-        const message = errorData.detail || `Error al procesar el pago (${res.status})`;
+        
+        // Manejar errores estructurados del backend
+        let message = "Error al procesar el pago";
+        
+        if (typeof errorData.detail === 'object' && errorData.detail.message) {
+          // Error estructurado con JSON
+          message = errorData.detail.message;
+          
+          // Agregar detalles técnicos si están disponibles (para debugging)
+          if (errorData.detail.error === 'stripe_not_configured' && errorData.detail.missing) {
+            console.error('[PRICING] Missing Stripe env vars:', errorData.detail.missing);
+            message += ' (Sistema de pagos no configurado)';
+          } else if (errorData.detail.code) {
+            console.error('[PRICING] Stripe error code:', errorData.detail.code);
+          }
+        } else if (typeof errorData.detail === 'string') {
+          // Error simple con string
+          message = errorData.detail;
+        } else {
+          // Fallback genérico
+          message = `Error al procesar el pago (${res.status})`;
+        }
+        
         setErrorMessage(message);
         setLoadingPlan(null);
       }
     } catch (error) {
+      console.error('[PRICING] Network error:', error);
       setErrorMessage("Error de conexión. Intenta nuevamente.");
       setLoadingPlan(null);
     }

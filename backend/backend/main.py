@@ -198,13 +198,26 @@ def create_checkout_session(
         500: Stripe API error or configuration issue
     """
     # Validation 1: Stripe configured (secret key + price IDs)
+    missing_vars = []
     if not STRIPE_SECRET_KEY:
-        logging.error("[STRIPE] STRIPE_SECRET_KEY not configured")
-        raise HTTPException(status_code=500, detail="Payment system not configured")
+        missing_vars.append("STRIPE_SECRET_KEY")
+    if not STRIPE_PRICE_PLUS:
+        missing_vars.append("STRIPE_PRICE_PLUS")
+    if not STRIPE_PRICE_PRO:
+        missing_vars.append("STRIPE_PRICE_PRO")
+    if not os.getenv("FRONTEND_URL"):
+        missing_vars.append("FRONTEND_URL")
     
-    if not STRIPE_PRICE_PLUS or not STRIPE_PRICE_PRO:
-        logging.error("[STRIPE] Missing STRIPE_PRICE_PLUS or STRIPE_PRICE_PRO environment variables")
-        raise HTTPException(status_code=500, detail="Stripe not configured - missing price IDs")
+    if missing_vars:
+        logging.error(f"[STRIPE] Missing environment variables: {', '.join(missing_vars)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "stripe_not_configured",
+                "message": "Sistema de pagos no configurado. Contacta al administrador.",
+                "missing": missing_vars
+            }
+        )
     
     # Validation 2: plan_code allowlist
     plan_code = request.plan_code.upper()
@@ -255,12 +268,52 @@ def create_checkout_session(
             logging.error(f"[STRIPE] Could not retrieve email for user_id={user_id}")
             raise HTTPException(status_code=500, detail="Could not retrieve user information")
         
-        # Query 3: Get or Create Stripe Customer
+        # Detect Stripe mode (live vs test) from API key prefix
+        stripe_mode = "live" if STRIPE_SECRET_KEY and STRIPE_SECRET_KEY.startswith("sk_live_") else "test"
+        logging.info(f"[STRIPE] Operating in {stripe_mode.upper()} mode")
+        
+        # Query 3: Get or Create Stripe Customer (with mode compatibility)
         stripe_customer_id = user_plan.get("stripe_customer_id")
         
-        if not stripe_customer_id:
-            # Create new Stripe Customer
-            logging.info(f"[STRIPE] Creating new customer for user_id={user_id}")
+        if stripe_customer_id:
+            # Validate existing customer_id works in current mode
+            try:
+                logging.info(f"[STRIPE] Validating existing customer: {stripe_customer_id}")
+                customer = stripe.Customer.retrieve(stripe_customer_id)
+                logging.info(f"[STRIPE] Customer validated successfully in {stripe_mode} mode")
+            except stripe.error.InvalidRequestError as e:
+                # Customer doesn't exist in current mode (e.g., test ID used with live key)
+                error_message = str(e)
+                if "No such customer" in error_message or "similar object exists in test mode" in error_message:
+                    logging.warning(
+                        f"[STRIPE] Customer {stripe_customer_id} invalid in {stripe_mode} mode "
+                        f"(likely from different mode). Creating new customer. Error: {error_message}"
+                    )
+                    
+                    # Create new customer in current mode
+                    customer = stripe.Customer.create(
+                        email=user_email,
+                        metadata={"supabase_user_id": user_id}
+                    )
+                    old_customer_id = stripe_customer_id
+                    stripe_customer_id = customer.id
+                    
+                    # Update DB with new customer_id
+                    supabase.table("user_plans").update({
+                        "stripe_customer_id": stripe_customer_id,
+                        "updated_at": datetime.utcnow().isoformat()
+                    }).eq("user_id", user_id).execute()
+                    
+                    logging.info(
+                        f"[STRIPE] Customer recreated for {stripe_mode} mode: "
+                        f"old={old_customer_id}, new={stripe_customer_id}"
+                    )
+                else:
+                    # Other InvalidRequestError - re-raise
+                    raise
+        else:
+            # No customer_id saved - create new one
+            logging.info(f"[STRIPE] Creating new customer for user_id={user_id} in {stripe_mode} mode")
             customer = stripe.Customer.create(
                 email=user_email,
                 metadata={"supabase_user_id": user_id}
@@ -274,8 +327,6 @@ def create_checkout_session(
             }).eq("user_id", user_id).execute()
             
             logging.info(f"[STRIPE] Customer created: {stripe_customer_id}")
-        else:
-            logging.info(f"[STRIPE] Reusing existing customer: {stripe_customer_id}")
         
         # Generate success/cancel URLs (route to existing /pricing page)
         # Use canonical production domain or FRONTEND_URL fallback
@@ -309,20 +360,40 @@ def create_checkout_session(
     
     except stripe.error.StripeError as e:
         # Stripe API errors (card declined, network issues, etc.)
-        logging.error(f"[STRIPE] Stripe API error: {str(e)}")
+        error_code = getattr(e, 'code', 'unknown')
+        error_param = getattr(e, 'param', None)
+        user_message = getattr(e, 'user_message', str(e))
+        
+        logging.error(
+            f"[STRIPE] Stripe API error: plan={plan_code}, "
+            f"code={error_code}, param={error_param}, message={user_message}"
+        )
+        
         raise HTTPException(
             status_code=500,
-            detail="Payment system error. Please try again later."
+            detail={
+                "error": "stripe_api_error",
+                "message": "Error al procesar el pago. Por favor intenta nuevamente.",
+                "code": error_code,
+                "technical_details": str(e) if error_code != 'unknown' else None
+            }
         )
     except HTTPException:
         # Re-raise HTTPExceptions (validation errors)
         raise
     except Exception as e:
         # Unexpected errors
-        logging.error(f"[STRIPE] Unexpected error: {str(e)}")
+        logging.error(
+            f"[STRIPE] Unexpected error: plan={plan_code}, "
+            f"error_type={type(e).__name__}, message={str(e)}"
+        )
         raise HTTPException(
             status_code=500,
-            detail="Failed to create checkout session"
+            detail={
+                "error": "checkout_creation_failed",
+                "message": "No se pudo crear la sesión de pago. Intenta nuevamente en unos momentos.",
+                "technical_details": str(e)
+            }
         )
 
 
