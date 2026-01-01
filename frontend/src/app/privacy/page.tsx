@@ -55,25 +55,14 @@ export default function PrivacyPolicy() {
         <section className="mb-8">
           <h2 className="text-2xl font-semibold text-gray-900 mb-4">4. Google API Services User Data Policy</h2>
           <p className="text-gray-700 mb-4">
-            Cloud Aggregator's use and transfer to any other app of information received from Google APIs adheres to the{' '}
-            <a 
-              href="https://developers.google.com/terms/api-services-user-data-policy" 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="text-blue-600 hover:underline"
-            >
-              Google API Services User Data Policy
-            </a>, including the Limited Use requirements.
+            Cloud Aggregator's use of information received from Google APIs complies with the Google API Services User Data Policy (https://developers.google.com/terms/api-services-user-data-policy), including the Limited Use requirements.
           </p>
           <p className="text-gray-700 mb-4">
-            We only request access to the Google Drive scopes necessary to perform the specific operations you request. Your Google Drive data is:
+            We access Google user data only to provide the user-facing features explicitly requested by the user (such as selecting files via Google Picker and performing requested copy/rename actions). We do not use Google user data to develop, improve, or train generalized artificial intelligence (AI) or machine learning (ML) models.
           </p>
-          <ul className="list-disc list-inside text-gray-700 space-y-2 ml-4">
-            <li>Only accessed when you explicitly initiate an action</li>
-            <li>Used exclusively to provide the service functionality you request</li>
-            <li>Not used to develop, improve, or train generalized AI/ML models</li>
-            <li>Not retained longer than necessary to complete your requested operations</li>
-          </ul>
+          <p className="text-gray-700 mb-4">
+            We do not transfer Google user data to third parties except as necessary to provide the service or as required by law. Google user data is accessed only when you explicitly initiate an action in the app and is not retained longer than necessary to complete the requested operation.
+          </p>
         </section>
 
         <section className="mb-8">
@@ -122,7 +111,14 @@ export default function PrivacyPolicy() {
           <ul className="list-disc list-inside text-gray-700 space-y-2 ml-4">
             <li><strong>Access:</strong> Request a copy of your personal data</li>
             <li><strong>Correction:</strong> Update or correct your information</li>
-            <li><strong>Deletion:</strong> Request deletion of your account and associated data (see our{' '}
+            <li><strong>Deletion:</strong> Request deletion of your account and associated data at{' '}
+              <a 
+                href="https://www.cloudaggregatorapp.com/data-deletion" 
+                className="text-blue-600 hover:underline"
+              >
+                https://www.cloudaggregatorapp.com/data-deletion
+              </a>
+              {' '}(see our{' '}
               <a 
                 href="/data-deletion" 
                 className="text-blue-600 hover:underline"

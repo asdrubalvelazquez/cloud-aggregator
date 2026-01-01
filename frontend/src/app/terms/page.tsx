@@ -25,7 +25,7 @@ export default function TermsOfService() {
           </p>
           <ul className="list-disc list-inside text-gray-700 space-y-2 ml-4">
             <li>Connect multiple Google Drive accounts through OAuth authentication</li>
-            <li>View and navigate files across connected accounts</li>
+            <li>View and navigate only the files and folders that you explicitly select or authorize through Google Picker</li>
             <li>Copy files between your connected Google Drive accounts</li>
             <li>Rename files in your connected accounts</li>
             <li>Download files from your connected accounts</li>
@@ -105,7 +105,7 @@ export default function TermsOfService() {
             <strong>7.1 Uptime:</strong> While we strive to provide reliable service, we do not guarantee uninterrupted or error-free operation. The Service may be unavailable due to maintenance, updates, or circumstances beyond our control.
           </p>
           <p className="text-gray-700 mb-4">
-            <strong>7.2 Modifications:</strong> We reserve the right to modify, suspend, or discontinue any aspect of the Service at any time, with or without notice.
+            <strong>7.2 Modifications:</strong> We reserve the right to modify, suspend, or discontinue any aspect of the Service at any time, with or without notice. This does not affect your ownership or access to your Google Drive data, which remains fully under your control through Google.
           </p>
           <p className="text-gray-700 mb-4">
             <strong>7.3 Third-Party Dependencies:</strong> The Service relies on Google Drive API and other third-party services. Changes or disruptions to these services may affect Service availability or functionality.
@@ -193,7 +193,7 @@ export default function TermsOfService() {
         <section className="mb-8">
           <h2 className="text-2xl font-semibold text-gray-900 mb-4">13. Termination</h2>
           <p className="text-gray-700 mb-4">
-            <strong>13.1 By You:</strong> You may terminate your use of the Service at any time by revoking Cloud Aggregator's access through your Google Account permissions.
+            <strong>13.1 By You:</strong> You may terminate your use of the Service at any time by revoking Cloud Aggregator's access through your Google Account permissions or requesting account deletion as described in our Privacy Policy.
           </p>
           <p className="text-gray-700 mb-4">
             <strong>13.2 By Us:</strong> We may suspend or terminate your access to the Service at any time, with or without cause, with or without notice, for any reason including violation of these Terms.
@@ -209,7 +209,7 @@ export default function TermsOfService() {
             <strong>14.1 Governing Law:</strong> These Terms shall be governed by and construed in accordance with the laws of the jurisdiction in which Cloud Aggregator operates, without regard to its conflict of law provisions.
           </p>
           <p className="text-gray-700 mb-4">
-            <strong>14.2 Dispute Resolution:</strong> Any disputes arising from these Terms or the Service shall be resolved through binding arbitration in accordance with the rules of the American Arbitration Association, except where prohibited by law.
+            <strong>14.2 Dispute Resolution:</strong> Any disputes arising from these Terms or the Service shall be resolved through binding arbitration in accordance with the rules of the American Arbitration Association, except where prohibited by law. This arbitration provision does not limit any rights you may have under applicable consumer protection laws.
           </p>
           <p className="text-gray-700 mb-4">
             <strong>14.3 Class Action Waiver:</strong> You agree to bring claims against us only in your individual capacity and not as part of any class or representative action.
