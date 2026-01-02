@@ -166,3 +166,40 @@ export async function fetchGoogleLoginUrl(params?: {
   }
   return await res.json();
 }
+
+/**
+ * Fetch OneDrive OAuth URL (authenticated endpoint)
+ * 
+ * CRITICAL: window.location.href does NOT send Authorization headers.
+ * This endpoint is protected with JWT, so we fetch it first,
+ * then redirect manually to the returned OAuth URL.
+ * 
+ * @param params - mode: "connect"|"reauth"|"reconnect", reconnect_account_id: OneDrive account ID for reconnect
+ * @returns OAuth URL to redirect user to Microsoft OneDrive
+ */
+export async function fetchOneDriveLoginUrl(params?: {
+  mode?: "connect" | "reauth" | "reconnect" | "consent";
+  reconnect_account_id?: string;
+}): Promise<GoogleLoginUrlResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.mode) {
+    queryParams.set("mode", params.mode);
+  }
+  if (params?.reconnect_account_id) {
+    queryParams.set("reconnect_account_id", params.reconnect_account_id);
+  }
+  
+  const endpoint = `/auth/onedrive/login-url${
+    queryParams.toString() ? `?${queryParams.toString()}` : ""
+  }`;
+  
+  const res = await authenticatedFetch(endpoint);
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    const error: any = new Error(`Failed to get OAuth URL: ${res.status}`);
+    error.status = res.status;
+    error.body = errorData;
+    throw error;
+  }
+  return await res.json();
+}

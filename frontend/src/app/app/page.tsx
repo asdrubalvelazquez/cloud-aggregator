@@ -412,6 +412,26 @@ function DashboardContent({
     }
   };
 
+  const handleConnectOneDrive = async () => {
+    if (!userId) {
+      setHardError("No hay sesión de usuario activa. Recarga la página.");
+      return;
+    }
+    
+    try {
+      // CRITICAL FIX: window.location.href NO envía Authorization headers → 401
+      // SOLUCIÓN: Fetch autenticado a /auth/onedrive/login-url → recibe URL → redirect manual
+      // SEGURIDAD: user_id derivado de JWT en backend, NO en querystring
+      const { fetchOneDriveLoginUrl } = await import("@/lib/api");
+      const { url } = await fetchOneDriveLoginUrl({ mode: "connect" });
+      window.location.href = url;
+    } catch (err) {
+      const msg = err?.body?.detail || err?.body?.error || err?.message || "Error desconocido";
+      setHardError(`Error al conectar OneDrive: ${msg}`);
+      console.error("handleConnectOneDrive error:", err);
+    }
+  };
+
   const handleDisconnectAccount = async (accountId: number, accountEmail: string) => {
     if (!confirm(`¿Desconectar la cuenta ${accountEmail}? Esta acción no se puede deshacer.`)) {
       return;
@@ -545,7 +565,23 @@ function DashboardContent({
                         : "Conectar una nueva cuenta de Google Drive"
                     }
                   >
-                    Conectar nueva cuenta
+                    Conectar Google Drive
+                  </button>
+                  <button
+                    onClick={handleConnectOneDrive}
+                    disabled={limitReached}
+                    className={
+                      limitReached
+                        ? "rounded-lg transition px-4 py-2 text-sm font-semibold bg-slate-600 text-slate-400 cursor-not-allowed"
+                        : "rounded-lg transition px-4 py-2 text-sm font-semibold bg-blue-500 hover:bg-blue-600"
+                    }
+                    title={
+                      limitReached
+                        ? "Has usado todos tus slots históricos. Puedes reconectar tus cuentas anteriores desde 'Ver mis cuentas'"
+                        : "Conectar una nueva cuenta de OneDrive"
+                    }
+                  >
+                    Conectar OneDrive
                   </button>
                   
                   {/* CTA upgrade cuando límite alcanzado (solo FREE y PLUS) */}
