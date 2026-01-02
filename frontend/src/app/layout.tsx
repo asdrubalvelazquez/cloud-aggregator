@@ -5,6 +5,8 @@ import { CopyProvider } from "@/context/CopyContext";
 import { CopyProgressBar } from "@/components/CopyProgressBar";
 import { CanonicalURL } from "@/components/CanonicalURL";
 import { CanonicalHostGuard } from "@/components/CanonicalHostGuard";
+import GoogleAnalytics from "@/components/GoogleAnalytics";
+import PageViewTracker from "@/components/PageViewTracker";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -98,7 +100,9 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <GoogleAnalytics />
         <CopyProvider>
+          <PageViewTracker />
           <CanonicalHostGuard />
           <CanonicalURL />
           {children}
