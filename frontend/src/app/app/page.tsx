@@ -425,8 +425,13 @@ function DashboardContent({
       const { fetchOneDriveLoginUrl } = await import("@/lib/api");
       const { url } = await fetchOneDriveLoginUrl({ mode: "connect" });
       window.location.href = url;
-    } catch (err) {
-      const msg = err?.body?.detail || err?.body?.error || err?.message || "Error desconocido";
+    } catch (err: unknown) {
+      const e = err as any;
+      const msg =
+        e?.body?.detail ||
+        e?.body?.error ||
+        e?.message ||
+        "Error desconocido";
       setHardError(`Error al conectar OneDrive: ${msg}`);
       console.error("handleConnectOneDrive error:", err);
     }
