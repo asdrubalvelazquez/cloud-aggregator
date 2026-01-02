@@ -2567,10 +2567,10 @@ async def onedrive_callback(request: Request):
     frontend_origin = safe_frontend_origin_from_request(request)
 
     if error:
-        return RedirectResponse(f"{frontend_origin}?error={error}")
+        return RedirectResponse(f"{frontend_origin}/app?error={error}")
 
     if not code:
-        return RedirectResponse(f"{frontend_origin}?error=no_code")
+        return RedirectResponse(f"{frontend_origin}/app?error=no_code")
     
     # Decode state to get user_id, mode, reconnect_account_id, slot_log_id, user_email
     user_id = None
@@ -2616,7 +2616,7 @@ async def onedrive_callback(request: Request):
 
     if not access_token:
         logging.error("[ONEDRIVE][TOKEN_EXCHANGE] No access_token in response")
-        return RedirectResponse(f"{frontend_origin}?error=no_access_token")
+        return RedirectResponse(f"{frontend_origin}/app?error=no_access_token")
 
     # Get user info from Microsoft Graph API
     async with httpx.AsyncClient() as client:
