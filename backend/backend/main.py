@@ -110,6 +110,27 @@ SCOPES = [
     "openid",
 ]
 
+# Microsoft OneDrive OAuth Configuration
+MICROSOFT_CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID")
+MICROSOFT_CLIENT_SECRET = os.getenv("MICROSOFT_CLIENT_SECRET")
+MICROSOFT_TENANT_ID = os.getenv("MICROSOFT_TENANT_ID", "common")
+MICROSOFT_REDIRECT_URI = os.getenv("MICROSOFT_REDIRECT_URI")
+
+# Construct tenant-specific endpoints
+MICROSOFT_AUTH_ENDPOINT = f"https://login.microsoftonline.com/{MICROSOFT_TENANT_ID}/oauth2/v2.0/authorize"
+MICROSOFT_TOKEN_ENDPOINT = f"https://login.microsoftonline.com/{MICROSOFT_TENANT_ID}/oauth2/v2.0/token"
+MICROSOFT_USERINFO_ENDPOINT = "https://graph.microsoft.com/v1.0/me"
+
+# OneDrive OAuth Scopes
+ONEDRIVE_SCOPES = [
+    "openid",
+    "profile",
+    "email",
+    "offline_access",
+    "User.Read",
+    "Files.ReadWrite",
+]
+
 # Stripe Configuration
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
@@ -2416,6 +2437,450 @@ async def revoke_account(
             status_code=500,
             detail=f"Failed to revoke account: {str(e)}"
         )
+
+
+# ========================================================================
+# OneDrive OAuth Endpoints
+# ========================================================================
+
+@app.get("/auth/onedrive/login-url")
+def onedrive_login_url(
+    mode: Optional[str] = None,
+    reconnect_account_id: Optional[str] = None,
+    user_info: dict = Depends(get_jwt_user_info)
+):
+    """
+    Get Microsoft OneDrive OAuth URL for client-side redirect.
+    
+    Mirrors Google OAuth flow but for OneDrive integration.
+    Reuses existing JWT state token system, slot validation, and encryption.
+    
+    OAuth Modes:
+    - "connect": New account connection (checks slot availability)
+    - "reauth": Re-authorize existing account
+    - "reconnect": Restore slot without consuming new slot (requires reconnect_account_id)
+    
+    Args:
+        mode: "connect"|"reauth"|"reconnect"
+        reconnect_account_id: Microsoft account ID (required for mode=reconnect)
+        user_info: Derived from JWT (verify_supabase_jwt)
+        
+    Returns:
+        {"url": "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize?..."}
+    """
+    user_id = user_info["user_id"]
+    user_email = user_info["email"]
+    
+    if not MICROSOFT_CLIENT_ID or not MICROSOFT_REDIRECT_URI:
+        raise HTTPException(status_code=500, detail="Missing MICROSOFT_CLIENT_ID or MICROSOFT_REDIRECT_URI")
+
+    # Validation: reconnect requires account_id
+    if mode == "reconnect" and not reconnect_account_id:
+        raise HTTPException(status_code=400, detail="reconnect_account_id required for mode=reconnect")
+    
+    # For reconnect: verify slot exists and get email for login_hint + slot_log_id
+    reconnect_email = None
+    slot_log_id = None
+    if mode == "reconnect":
+        try:
+            reconnect_account_id_normalized = str(reconnect_account_id).strip() if reconnect_account_id else ""
+            
+            slot_check = supabase.table("cloud_slots_log").select("id,provider_email").eq("provider", "onedrive").eq("provider_account_id", reconnect_account_id_normalized).order("id", desc=True).limit(1).execute()
+            
+            if not slot_check.data:
+                # Secure logging: hash account_id suffix only
+                account_suffix = reconnect_account_id_normalized[-4:] if reconnect_account_id_normalized else 'EMPTY'
+                logging.warning(
+                    f"[SECURITY][RECONNECT][ONEDRIVE] slot_not_found account_suffix=***{account_suffix}"
+                )
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": "slot_not_found"}
+                )
+            
+            slot_data = slot_check.data[0]
+            reconnect_email = slot_data.get("provider_email")
+            slot_log_id = slot_data.get("id")
+        except Exception:
+            logging.exception("[SECURITY][LOGIN_URL][ONEDRIVE] reconnect_mode_failed")
+            return JSONResponse(
+                status_code=500,
+                content={"error": "login_url_failed"}
+            )
+    
+    # OAuth prompt strategy (Microsoft recommends "select_account" for better UX)
+    oauth_prompt = "select_account"
+    
+    params = {
+        "client_id": MICROSOFT_CLIENT_ID,
+        "redirect_uri": MICROSOFT_REDIRECT_URI,
+        "response_type": "code",
+        "scope": " ".join(ONEDRIVE_SCOPES),
+        "prompt": oauth_prompt,
+    }
+    
+    # Add login_hint for reconnect (improves UX)
+    if mode == "reconnect" and reconnect_email:
+        params["login_hint"] = reconnect_email
+    
+    # Create state JWT with user_id, mode, reconnect_account_id, slot_log_id, user_email
+    state_token = create_state_token(
+        user_id,
+        mode=mode or "connect",
+        reconnect_account_id=reconnect_account_id,
+        slot_log_id=slot_log_id,
+        user_email=user_email
+    )
+    params["state"] = state_token
+
+    from urllib.parse import urlencode
+    url = f"{MICROSOFT_AUTH_ENDPOINT}?{urlencode(params)}"
+    
+    # Secure logging: hash user_id
+    user_hash = hashlib.sha256(user_id.encode()).hexdigest()[:8]
+    logging.info(
+        f"[OAUTH_URL_GENERATED][ONEDRIVE] user_hash={user_hash} mode={mode or 'connect'} "
+        f"prompt={oauth_prompt} reconnect_mode={bool(reconnect_account_id)}"
+    )
+    
+    return {"url": url}
+
+
+@app.get("/auth/onedrive/callback")
+async def onedrive_callback(request: Request):
+    """Handle Microsoft OneDrive OAuth callback"""
+    from urllib.parse import parse_qs
+    import httpx
+
+    # Validate required environment variables
+    if not MICROSOFT_CLIENT_ID or not MICROSOFT_CLIENT_SECRET or not MICROSOFT_REDIRECT_URI:
+        logging.error("[ONEDRIVE][CALLBACK] Missing required env vars (MICROSOFT_CLIENT_ID, CLIENT_SECRET, or REDIRECT_URI)")
+        frontend_origin = safe_frontend_origin_from_request(request)
+        return RedirectResponse(f"{frontend_origin}/app?error=onedrive_not_configured")
+
+    query = request.url.query
+    qs = parse_qs(query)
+    code = qs.get("code", [None])[0]
+    error = qs.get("error", [None])[0]
+    state = qs.get("state", [None])[0]
+
+    frontend_origin = safe_frontend_origin_from_request(request)
+
+    if error:
+        return RedirectResponse(f"{frontend_origin}?error={error}")
+
+    if not code:
+        return RedirectResponse(f"{frontend_origin}?error=no_code")
+    
+    # Decode state to get user_id, mode, reconnect_account_id, slot_log_id, user_email
+    user_id = None
+    mode = "connect"
+    reconnect_account_id = None
+    slot_log_id = None
+    user_email = None
+    if state:
+        state_data = decode_state_token(state)
+        if state_data:
+            user_id = state_data.get("user_id")
+            mode = state_data.get("mode", "connect")
+            reconnect_account_id = state_data.get("reconnect_account_id")
+            slot_log_id = state_data.get("slot_log_id")
+            user_email = state_data.get("user_email")
+
+    # Exchange code for tokens
+    data = {
+        "code": code,
+        "client_id": MICROSOFT_CLIENT_ID,
+        "client_secret": MICROSOFT_CLIENT_SECRET,
+        "redirect_uri": MICROSOFT_REDIRECT_URI,
+        "grant_type": "authorization_code",
+    }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            token_res = await client.post(MICROSOFT_TOKEN_ENDPOINT, data=data)
+            token_res.raise_for_status()
+            token_json = token_res.json()
+        except httpx.HTTPStatusError as e:
+            logging.error(
+                f"[ONEDRIVE][TOKEN_EXCHANGE] HTTP {e.response.status_code} from Microsoft token endpoint"
+            )
+            return RedirectResponse(f"{frontend_origin}/app?error=onedrive_token_exchange_failed")
+        except Exception as e:
+            logging.error(f"[ONEDRIVE][TOKEN_EXCHANGE] Unexpected error: {type(e).__name__}")
+            return RedirectResponse(f"{frontend_origin}/app?error=onedrive_token_exchange_failed")
+
+    access_token = token_json.get("access_token")
+    refresh_token = token_json.get("refresh_token")  # May be None
+    expires_in = token_json.get("expires_in", 3600)
+
+    if not access_token:
+        logging.error("[ONEDRIVE][TOKEN_EXCHANGE] No access_token in response")
+        return RedirectResponse(f"{frontend_origin}?error=no_access_token")
+
+    # Get user info from Microsoft Graph API
+    async with httpx.AsyncClient() as client:
+        try:
+            userinfo_res = await client.get(
+                MICROSOFT_USERINFO_ENDPOINT,
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            userinfo_res.raise_for_status()
+            userinfo = userinfo_res.json()
+        except httpx.HTTPStatusError as e:
+            logging.error(
+                f"[ONEDRIVE][USERINFO] HTTP {e.response.status_code} from Microsoft Graph API"
+            )
+            return RedirectResponse(f"{frontend_origin}/app?error=onedrive_userinfo_failed")
+        except Exception as e:
+            logging.error(f"[ONEDRIVE][USERINFO] Unexpected error: {type(e).__name__}")
+            return RedirectResponse(f"{frontend_origin}/app?error=onedrive_userinfo_failed")
+
+    account_email = userinfo.get("userPrincipalName") or userinfo.get("mail")
+    microsoft_account_id = userinfo.get("id")
+    
+    # Normalize Microsoft account ID for consistent comparison
+    if microsoft_account_id:
+        microsoft_account_id = str(microsoft_account_id).strip()
+        # Secure logging: hash account_id, mask email domain
+        account_hash = hashlib.sha256(microsoft_account_id.encode()).hexdigest()[:8]
+        email_domain = account_email.split("@")[1] if account_email and "@" in account_email else "unknown"
+        logging.info(f"[OAUTH CALLBACK][ONEDRIVE] account_hash={account_hash}, email_domain={email_domain}")
+
+    # Calculate expiry
+    expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+    expiry_iso = expiry.isoformat()
+
+    # Prevent orphan cloud_provider_accounts without user_id
+    if not user_id:
+        return RedirectResponse(f"{frontend_origin}/app?error=missing_user_id")
+    
+    # Handle reconnect mode
+    if mode == "reconnect":
+        reconnect_account_id_normalized = str(reconnect_account_id).strip() if reconnect_account_id else ""
+        microsoft_account_id_normalized = str(microsoft_account_id).strip() if microsoft_account_id else ""
+        
+        if microsoft_account_id_normalized != reconnect_account_id_normalized:
+            # Secure logging: mask emails
+            expected_email = "unknown"
+            try:
+                slot_info = supabase.table("cloud_slots_log").select("provider_email").eq("provider", "onedrive").eq("provider_account_id", reconnect_account_id_normalized).order("created_at", desc=True).limit(1).execute()
+                if slot_info.data:
+                    expected_email = slot_info.data[0].get("provider_email", "unknown")
+            except Exception:
+                pass
+            
+            expected_domain = expected_email.split("@")[1] if expected_email and "@" in expected_email else "unknown"
+            got_domain = account_email.split("@")[1] if account_email and "@" in account_email else "unknown"
+            logging.error(
+                f"[RECONNECT ERROR][ONEDRIVE] Account mismatch: "
+                f"expected_domain={expected_domain} got_domain={got_domain}"
+            )
+            # PRIVACY: Do NOT include email in redirect URL
+            return RedirectResponse(f"{frontend_origin}/app?error=account_mismatch")
+        
+        # Security check: verify slot ownership
+        if slot_log_id:
+            target_slot = supabase.table("cloud_slots_log") \
+                .select("id, user_id, provider_account_id, provider_email") \
+                .eq("id", slot_log_id) \
+                .eq("provider", "onedrive") \
+                .limit(1) \
+                .execute()
+        else:
+            target_slot = supabase.table("cloud_slots_log") \
+                .select("id, user_id, provider_account_id, provider_email") \
+                .eq("provider", "onedrive") \
+                .eq("provider_account_id", reconnect_account_id_normalized) \
+                .order("created_at", desc=True) \
+                .limit(1) \
+                .execute()
+        
+        if not target_slot.data:
+            user_hash = hashlib.sha256(user_id.encode()).hexdigest()[:8]
+            logging.error(
+                f"[SECURITY][ONEDRIVE] Reconnect failed: slot not found. user_hash={user_hash}"
+            )
+            return RedirectResponse(f"{frontend_origin}/app?error=slot_not_found")
+        
+        slot_user_id = target_slot.data[0]["user_id"]
+        slot_id = target_slot.data[0]["id"]
+        slot_email = target_slot.data[0].get("provider_email", "")
+        
+        # Verify ownership or allow safe reclaim
+        if slot_user_id != user_id:
+            slot_email_normalized = slot_email.lower().strip() if slot_email else ""
+            current_user_email_normalized = user_email.lower().strip() if user_email else ""
+            
+            if not slot_email_normalized or not current_user_email_normalized:
+                logging.error(
+                    f"[SECURITY][ONEDRIVE] Ownership violation: Missing email. slot_id={slot_id}"
+                )
+                return RedirectResponse(f"{frontend_origin}/app?error=ownership_violation")
+            
+            if slot_email_normalized == current_user_email_normalized:
+                # Safe reclaim: emails match
+                slot_domain = slot_email.split("@")[1] if "@" in slot_email else "unknown"
+                logging.warning(
+                    f"[SECURITY][RECLAIM][ONEDRIVE] Slot reassignment authorized: "
+                    f"slot_id={slot_id} email_domain={slot_domain}"
+                )
+                
+                try:
+                    supabase.table("cloud_slots_log").update({
+                        "user_id": user_id
+                    }).eq("id", slot_id).execute()
+                    
+                    supabase.table("cloud_provider_accounts").update({
+                        "user_id": user_id
+                    }).eq("provider", "onedrive").eq("provider_account_id", reconnect_account_id_normalized).execute()
+                    
+                    logging.info(f"[SECURITY][RECLAIM][ONEDRIVE] Ownership transferred. slot_id={slot_id}")
+                except Exception as e:
+                    logging.error(f"[SECURITY][RECLAIM][ONEDRIVE] Transfer failed: {type(e).__name__}")
+                    return RedirectResponse(f"{frontend_origin}/app?error=reconnect_failed")
+                
+                slot_user_id = user_id
+            else:
+                # Email mismatch - block takeover attempt
+                logging.error(
+                    f"[SECURITY][ONEDRIVE] Account takeover blocked! "
+                    f"Email mismatch for slot_id={slot_id}"
+                )
+                return RedirectResponse(f"{frontend_origin}/app?error=ownership_violation")
+        
+        user_hash = hashlib.sha256(user_id.encode()).hexdigest()[:8]
+        logging.info(
+            f"[SECURITY][ONEDRIVE] Reconnect ownership verified: slot_id={slot_id} user_hash={user_hash}"
+        )
+        
+        if not slot_id:
+            logging.error(f"[RECONNECT ERROR][ONEDRIVE] No slot found")
+            return RedirectResponse(f"{frontend_origin}/app?error=slot_not_found")
+        
+        # Build upsert payload for cloud_provider_accounts
+        upsert_payload = {
+            "user_id": user_id,
+            "provider": "onedrive",
+            "provider_account_id": microsoft_account_id,
+            "account_email": account_email,
+            "access_token": encrypt_token(access_token),
+            "token_expiry": expiry_iso,
+            "is_active": True,
+            "disconnected_at": None,
+            "slot_log_id": slot_id,
+        }
+        
+        # CRITICAL: Only update refresh_token if a new one is provided
+        # If refresh_token is None, omitting it from upsert preserves the existing value in database
+        if refresh_token:
+            upsert_payload["refresh_token"] = encrypt_token(refresh_token)
+            logging.info(f"[RECONNECT][ONEDRIVE] Got new refresh_token for slot_id={slot_id}")
+        else:
+            # Do NOT set refresh_token field - this preserves existing refresh_token in database
+            logging.info(f"[RECONNECT][ONEDRIVE] No new refresh_token, preserving existing for slot_id={slot_id}")
+        
+        # Upsert into cloud_provider_accounts
+        upsert_result = supabase.table("cloud_provider_accounts").upsert(
+            upsert_payload,
+            on_conflict="user_id,provider,provider_account_id"
+        ).execute()
+        
+        if upsert_result.data:
+            account_id = upsert_result.data[0].get("id", "unknown")
+            logging.info(
+                f"[RECONNECT SUCCESS][ONEDRIVE] cloud_provider_accounts UPSERT account_id={account_id}"
+            )
+        
+        # Ensure slot is active
+        if slot_log_id:
+            slot_update = supabase.table("cloud_slots_log").update({
+                "is_active": True,
+                "disconnected_at": None,
+                "provider_email": account_email,
+            }).eq("id", slot_log_id).eq("user_id", user_id).execute()
+        else:
+            slot_update = supabase.table("cloud_slots_log").update({
+                "is_active": True,
+                "disconnected_at": None,
+                "provider_email": account_email,
+            }).eq("user_id", user_id).eq("provider_account_id", microsoft_account_id).execute()
+        
+        slots_updated = len(slot_update.data) if slot_update.data else 0
+        
+        if slots_updated == 0:
+            logging.error(f"[RECONNECT ERROR][ONEDRIVE] cloud_slots_log UPDATE affected 0 rows")
+            return RedirectResponse(f"{frontend_origin}/app?error=reconnect_failed&reason=slot_not_updated")
+        
+        validated_slot_id = slot_log_id if slot_log_id else slot_update.data[0].get("id")
+        
+        logging.info(f"[RECONNECT SUCCESS][ONEDRIVE] cloud_slots_log updated. slot_id={validated_slot_id}")
+        
+        return RedirectResponse(f"{frontend_origin}/app?reconnect=success&slot_id={validated_slot_id}")
+    
+    # Check cloud account limit with slot-based validation (only for connect mode)
+    try:
+        user_hash = hashlib.sha256(user_id.encode()).hexdigest()[:8]
+        account_hash = hashlib.sha256(microsoft_account_id.encode()).hexdigest()[:8]
+        logging.info(f"[OAUTH_SLOT_VALIDATION][ONEDRIVE] user_hash={user_hash} account_hash={account_hash}")
+        quota.check_cloud_limit_with_slots(supabase, user_id, "onedrive", microsoft_account_id)
+        logging.info(f"[OAUTH_SLOT_VALIDATION_PASSED][ONEDRIVE] user_hash={user_hash}")
+    except HTTPException as e:
+        if e.status_code == 400:
+            logging.error(f"[CALLBACK VALIDATION ERROR][ONEDRIVE] HTTP 400")
+            return RedirectResponse(f"{frontend_origin}/app?error=oauth_invalid_account")
+        elif e.status_code == 402:
+            logging.info(f"[CALLBACK QUOTA][ONEDRIVE] Slot limit reached")
+            return RedirectResponse(f"{frontend_origin}/app?error=cloud_limit_reached")
+        else:
+            logging.error(f"[CALLBACK ERROR][ONEDRIVE] Unexpected HTTPException {e.status_code}")
+            return RedirectResponse(f"{frontend_origin}/app?error=connection_failed")
+    
+    # Get/create slot BEFORE upserting cloud_provider_account
+    try:
+        slot_result = quota.connect_cloud_account_with_slot(
+            supabase,
+            user_id,
+            "onedrive",
+            microsoft_account_id,
+            account_email
+        )
+        slot_id = slot_result["id"]
+        logging.info(f"[SLOT LINKED][ONEDRIVE] slot_id={slot_id}, is_new={slot_result.get('is_new')}")
+    except Exception as slot_err:
+        logging.error(f"[CRITICAL][ONEDRIVE] Failed to get/create slot: {type(slot_err).__name__}")
+        return RedirectResponse(f"{frontend_origin}/app?error=slot_creation_failed")
+    
+    # Prepare data for cloud_provider_accounts
+    upsert_data = {
+        "user_id": user_id,
+        "provider": "onedrive",
+        "provider_account_id": microsoft_account_id,
+        "account_email": account_email,
+        "access_token": encrypt_token(access_token),
+        "token_expiry": expiry_iso,
+        "is_active": True,
+        "disconnected_at": None,
+        "slot_log_id": slot_id,
+    }
+    
+    # CRITICAL: Only encrypt and save refresh_token if it exists
+    # If refresh_token is None, omitting it from upsert preserves the existing value in database
+    if refresh_token:
+        upsert_data["refresh_token"] = encrypt_token(refresh_token)
+        logging.info(f"[ONEDRIVE][CONNECT] Got refresh_token for slot_id={slot_id}")
+    else:
+        # Do NOT set refresh_token field - this preserves existing refresh_token in database
+        logging.warning(f"[ONEDRIVE][CONNECT] No refresh_token in response, preserving existing for slot_id={slot_id}")
+
+    # Save to database
+    resp = supabase.table("cloud_provider_accounts").upsert(
+        upsert_data,
+        on_conflict="user_id,provider,provider_account_id",
+    ).execute()
+
+    # Redirect to frontend dashboard
+    return RedirectResponse(f"{frontend_origin}/app?connection=success")
 
 
 if __name__ == "__main__":
