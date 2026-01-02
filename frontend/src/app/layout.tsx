@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { Suspense } from "react";
 import { CopyProvider } from "@/context/CopyContext";
 import { CopyProgressBar } from "@/components/CopyProgressBar";
 import { CanonicalURL } from "@/components/CanonicalURL";
@@ -102,7 +103,9 @@ export default function RootLayout({
       >
         <GoogleAnalytics />
         <CopyProvider>
-          <PageViewTracker />
+          <Suspense fallback={null}>
+            <PageViewTracker />
+          </Suspense>
           <CanonicalHostGuard />
           <CanonicalURL />
           {children}
