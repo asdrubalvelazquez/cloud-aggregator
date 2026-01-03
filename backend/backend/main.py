@@ -2039,17 +2039,23 @@ async def create_transfer_job_endpoint(
     PHASE 1 ONLY SUPPORTS: Google Drive → OneDrive
     """
     try:
-        # Validate providers
+        # PHASE 1 ENFORCEMENT: Only Google Drive → OneDrive
         if request.source_provider != "google_drive":
-            raise HTTPException(status_code=400, detail="Phase 1 only supports source_provider='google_drive'")
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "unsupported_provider", "message": f"Phase 1 only supports source_provider='google_drive', got '{request.source_provider}'"}
+            )
         if request.target_provider != "onedrive":
-            raise HTTPException(status_code=400, detail="Phase 1 only supports target_provider='onedrive'")
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "unsupported_provider", "message": f"Phase 1 only supports target_provider='onedrive', got '{request.target_provider}'"}
+            )
         
         if not request.file_ids:
-            raise HTTPException(status_code=400, detail="file_ids cannot be empty")
+            raise HTTPException(status_code=400, detail={"error": "invalid_request", "message": "file_ids cannot be empty"})
         
-        # Verify source account ownership (Google Drive uses cloud_accounts)
-        if request.source_provider == "google_drive":
+        # Verify source account ownership (Google Drive uses cloud_accounts table WITHOUT provider column)
+        try:
             source_check = (
                 supabase.table("cloud_accounts")
                 .select("id")
@@ -2059,13 +2065,22 @@ async def create_transfer_job_endpoint(
                 .execute()
             )
             if not source_check.data:
-                raise HTTPException(status_code=404, detail="Source Google Drive account not found or doesn't belong to you")
-        else:
-            # OneDrive source would use cloud_provider_accounts (Phase 2+)
-            raise HTTPException(status_code=400, detail=f"Unsupported source_provider: {request.source_provider}")
+                raise HTTPException(
+                    status_code=403,
+                    detail={"error": "account_not_owned", "message": "Source Google Drive account not found or doesn't belong to you"}
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            # Supabase .single() error (0 rows, multiple rows, etc.)
+            logging.warning(f"[TRANSFER] Source account validation failed for account_id={request.source_account_id}, user_id={user_id}: {e}")
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "account_not_owned", "message": "Source Google Drive account not found or doesn't belong to you"}
+            )
         
-        # Verify target account ownership (OneDrive uses cloud_provider_accounts)
-        if request.target_provider == "onedrive":
+        # Verify target account ownership (OneDrive uses cloud_provider_accounts WITH provider column)
+        try:
             target_check = (
                 supabase.table("cloud_provider_accounts")
                 .select("id")
@@ -2077,21 +2092,19 @@ async def create_transfer_job_endpoint(
                 .execute()
             )
             if not target_check.data:
-                raise HTTPException(status_code=404, detail="Target OneDrive account not found, doesn't belong to you, or is inactive")
-        elif request.target_provider == "google_drive":
-            # Google Drive target would use cloud_accounts (Phase 2+)
-            target_check = (
-                supabase.table("cloud_accounts")
-                .select("id")
-                .eq("id", request.target_account_id)
-                .eq("user_id", user_id)
-                .single()
-                .execute()
+                raise HTTPException(
+                    status_code=403,
+                    detail={"error": "account_not_owned", "message": "Target OneDrive account not found, doesn't belong to you, or is inactive"}
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            # Supabase .single() error (0 rows, multiple rows, etc.)
+            logging.warning(f"[TRANSFER] Target account validation failed for account_id={request.target_account_id}, user_id={user_id}: {e}")
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "account_not_owned", "message": "Target OneDrive account not found, doesn't belong to you, or is inactive"}
             )
-            if not target_check.data:
-                raise HTTPException(status_code=404, detail="Target Google Drive account not found or doesn't belong to you")
-        else:
-            raise HTTPException(status_code=400, detail=f"Unsupported target_provider: {request.target_provider}")
         
         # Get file metadata from Google Drive to populate sizes
         from backend.google_drive import get_valid_token
