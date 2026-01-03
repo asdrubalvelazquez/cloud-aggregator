@@ -2048,33 +2048,50 @@ async def create_transfer_job_endpoint(
         if not request.file_ids:
             raise HTTPException(status_code=400, detail="file_ids cannot be empty")
         
-        # Verify source account ownership
-        source_check = (
-            supabase.table("cloud_accounts")
-            .select("id,provider")
-            .eq("id", request.source_account_id)
-            .eq("user_id", user_id)
-            .single()
-            .execute()
-        )
-        if not source_check.data:
-            raise HTTPException(status_code=404, detail="Source account not found or doesn't belong to you")
-        if source_check.data["provider"] != request.source_provider:
-            raise HTTPException(status_code=400, detail=f"Source account provider mismatch")
+        # Verify source account ownership (Google Drive uses cloud_accounts)
+        if request.source_provider == "google_drive":
+            source_check = (
+                supabase.table("cloud_accounts")
+                .select("id")
+                .eq("id", request.source_account_id)
+                .eq("user_id", user_id)
+                .single()
+                .execute()
+            )
+            if not source_check.data:
+                raise HTTPException(status_code=404, detail="Source Google Drive account not found or doesn't belong to you")
+        else:
+            # OneDrive source would use cloud_provider_accounts (Phase 2+)
+            raise HTTPException(status_code=400, detail=f"Unsupported source_provider: {request.source_provider}")
         
-        # Verify target account ownership
-        target_check = (
-            supabase.table("cloud_accounts")
-            .select("id,provider")
-            .eq("id", request.target_account_id)
-            .eq("user_id", user_id)
-            .single()
-            .execute()
-        )
-        if not target_check.data:
-            raise HTTPException(status_code=404, detail="Target account not found or doesn't belong to you")
-        if target_check.data["provider"] != request.target_provider:
-            raise HTTPException(status_code=400, detail=f"Target account provider mismatch")
+        # Verify target account ownership (OneDrive uses cloud_provider_accounts)
+        if request.target_provider == "onedrive":
+            target_check = (
+                supabase.table("cloud_provider_accounts")
+                .select("id")
+                .eq("id", request.target_account_id)
+                .eq("user_id", user_id)
+                .eq("provider", "onedrive")
+                .eq("is_active", True)
+                .single()
+                .execute()
+            )
+            if not target_check.data:
+                raise HTTPException(status_code=404, detail="Target OneDrive account not found, doesn't belong to you, or is inactive")
+        elif request.target_provider == "google_drive":
+            # Google Drive target would use cloud_accounts (Phase 2+)
+            target_check = (
+                supabase.table("cloud_accounts")
+                .select("id")
+                .eq("id", request.target_account_id)
+                .eq("user_id", user_id)
+                .single()
+                .execute()
+            )
+            if not target_check.data:
+                raise HTTPException(status_code=404, detail="Target Google Drive account not found or doesn't belong to you")
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported target_provider: {request.target_provider}")
         
         # Get file metadata from Google Drive to populate sizes
         from backend.google_drive import get_valid_token
