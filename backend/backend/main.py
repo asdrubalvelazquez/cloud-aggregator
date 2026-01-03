@@ -2204,6 +2204,22 @@ async def run_transfer_job_endpoint(
         if job["status"] != "queued":
             raise HTTPException(status_code=400, detail=f"Job status is '{job['status']}', expected 'queued'")
         
+        # Guard: Verify job has items before running
+        items_check = (
+            supabase.table("transfer_job_items")
+            .select("id")
+            .eq("job_id", job_id)
+            .limit(1)
+            .execute()
+        )
+        
+        if not items_check.data:
+            logging.error(f"[TRANSFER] Job {job_id} has no items to process")
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "no_items", "message": "Transfer job has no items to process"}
+            )
+        
         # Update job status to 'running'
         await transfer.update_job_status(supabase, job_id, status="running", started_at=True)
         
@@ -2211,14 +2227,14 @@ async def run_transfer_job_endpoint(
         items_result = (
             supabase.table("transfer_job_items")
             .select("*")
-            .eq("transfer_job_id", job_id)
+            .eq("job_id", job_id)
             .eq("status", "queued")
             .execute()
         )
         
         items = items_result.data
         if not items:
-            # No items to process
+            # No items to process (all already processed or failed)
             await transfer.update_job_status(supabase, job_id, status="done", completed_at=True)
             return {"job_id": job_id, "status": "done", "message": "No items to transfer"}
         
