@@ -154,7 +154,8 @@ async def update_job_status(
         add_transferred_bytes: Add bytes to transferred_bytes
         started_at: Set started_at to now
         completed_at: Set completed_at to now
-    """update_data = {
+    """
+    update_data = {
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
     
