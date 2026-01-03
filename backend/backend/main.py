@@ -2147,6 +2147,9 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
         # 2. Fetch ALL cloud_accounts ONCE (eliminate N+1 query)
         all_accounts_result = supabase.table("cloud_accounts").select("*").eq("user_id", user_id).execute()
         
+        # 2b. Fetch ALL cloud_provider_accounts ONCE (OneDrive, Dropbox, etc.)
+        all_provider_accounts_result = supabase.table("cloud_provider_accounts").select("*").eq("user_id", user_id).execute()
+        
         # 3. Build normalized lookup map: google_account_id (normalized) -> cloud_account
         accounts_map = {}
         for acc in (all_accounts_result.data or []):
@@ -2154,13 +2157,29 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
             if acc_google_id_normalized:
                 accounts_map[acc_google_id_normalized] = acc
         
+        # 3b. Build lookup map for provider_accounts: (provider, provider_account_id) -> provider_account
+        provider_accounts_map = {}
+        for acc in (all_provider_accounts_result.data or []):
+            provider = acc.get("provider", "").strip()
+            acc_provider_id = str(acc.get("provider_account_id", "")).strip()
+            if provider and acc_provider_id:
+                key = (provider, acc_provider_id)
+                provider_accounts_map[key] = acc
+        
         accounts_status = []
         summary = {"connected": 0, "needs_reconnect": 0, "disconnected": 0}
         
         for slot in slots_result.data:
-            # 4. Match slot to cloud_account using normalized ID
-            slot_provider_id = str(slot["provider_account_id"]).strip() if slot.get("provider_account_id") else ""
-            cloud_account = accounts_map.get(slot_provider_id)
+            # 4. Match slot to cloud_account using normalized ID (provider-aware)
+            slot_provider = slot.get("provider", "").strip()
+            slot_provider_id = str(slot.get("provider_account_id", "")).strip()
+            
+            if slot_provider == "google_drive":
+                # Google uses cloud_accounts (legacy table)
+                cloud_account = accounts_map.get(slot_provider_id)
+            else:
+                # OneDrive/Dropbox/others use cloud_provider_accounts
+                cloud_account = provider_accounts_map.get((slot_provider, slot_provider_id))
             
             # 5. Classify status
             status = classify_account_status(slot, cloud_account)
