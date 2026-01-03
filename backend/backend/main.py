@@ -2733,12 +2733,21 @@ async def disconnect_slot(
             
         else:
             # OneDrive/Dropbox/etc: use cloud_provider_accounts table
-            supabase.table("cloud_provider_accounts").update({
-                "is_active": False,
-                "access_token": None,
-                "refresh_token": None,
-                "updated_at": now_iso
-            }).eq("user_id", user_id).eq("provider", provider).eq("provider_account_id", provider_account_id).execute()
+            try:
+                supabase.table("cloud_provider_accounts").update({
+                    "is_active": False,
+                    "access_token": None,
+                    "refresh_token": None,
+                    "updated_at": now_iso
+                }).eq("user_id", user_id).eq("provider", provider).eq("provider_account_id", provider_account_id).execute()
+            except Exception as token_clear_error:
+                # Only tolerate NOT NULL constraint errors (23502)
+                error_str = str(token_clear_error).lower()
+                if "23502" in error_str or "not-null constraint" in error_str or "violates not-null" in error_str:
+                    logging.warning(f"[DISCONNECT] Ignored NOT NULL constraint on tokens (slot already deactivated): {token_clear_error}")
+                else:
+                    # Re-raise other errors
+                    raise
         
         logging.info(f"[DISCONNECT] Successfully disconnected {provider} account {provider_email}")
         
