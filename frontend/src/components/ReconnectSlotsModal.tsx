@@ -187,9 +187,14 @@ export default function ReconnectSlotsModal({
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1">
-                              <span className="text-lg">☁️</span>
+                              <span className="text-lg">
+                                {account.provider === "google_drive" ? "🔵" : account.provider === "onedrive" ? "🟦" : "☁️"}
+                              </span>
                               <span className="font-medium text-white">
                                 {account.provider_email}
+                              </span>
+                              <span className="px-2 py-0.5 bg-slate-700 text-slate-300 text-xs font-medium rounded">
+                                {account.provider === "google_drive" ? "Google Drive" : account.provider === "onedrive" ? "OneDrive" : account.provider}
                               </span>
                               <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 text-xs font-semibold rounded">
                                 CONECTADA
@@ -256,9 +261,14 @@ export default function ReconnectSlotsModal({
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1">
-                              <span className="text-lg">☁️</span>
+                              <span className="text-lg">
+                                {account.provider === "google_drive" ? "🔵" : account.provider === "onedrive" ? "🟦" : "☁️"}
+                              </span>
                               <span className="font-medium text-white">
                                 {account.provider_email}
+                              </span>
+                              <span className="px-2 py-0.5 bg-slate-700 text-slate-300 text-xs font-medium rounded">
+                                {account.provider === "google_drive" ? "Google Drive" : account.provider === "onedrive" ? "OneDrive" : account.provider}
                               </span>
                               <span className="px-2 py-0.5 bg-amber-500/20 text-amber-400 text-xs font-semibold rounded">
                                 NECESITA RECONEXIÓN
@@ -310,9 +320,14 @@ export default function ReconnectSlotsModal({
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1">
-                              <span className="text-lg opacity-50">☁️</span>
+                              <span className="text-lg opacity-50">
+                                {account.provider === "google_drive" ? "🔵" : account.provider === "onedrive" ? "🟦" : "☁️"}
+                              </span>
                               <span className="font-medium text-slate-300">
                                 {account.provider_email}
+                              </span>
+                              <span className="px-2 py-0.5 bg-slate-700 text-slate-400 text-xs font-medium rounded">
+                                {account.provider === "google_drive" ? "Google Drive" : account.provider === "onedrive" ? "OneDrive" : account.provider}
                               </span>
                               <span className="px-2 py-0.5 bg-slate-700 text-slate-400 text-xs font-semibold rounded">
                                 DESCONECTADA

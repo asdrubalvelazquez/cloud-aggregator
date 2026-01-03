@@ -506,6 +506,9 @@ function DashboardContent({
       return sortOrder === "desc" ? -diff : diff;
     }) || [];
 
+  // Cuentas conectadas (multi-provider)
+  const connectedAccounts = (cloudStatus?.accounts ?? []).filter(a => a.connection_status === "connected");
+
   return (
     <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
       {/* Toast Notifications */}
@@ -820,7 +823,7 @@ function DashboardContent({
             <section className="bg-slate-800 rounded-xl p-6 shadow-lg border border-slate-700">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-bold text-white">
-                  Cuentas conectadas ({cloudStatus?.summary.connected || 0})
+                  Cuentas conectadas ({connectedAccounts.length})
                 </h2>
                 <button
                   onClick={() => {
@@ -881,14 +884,14 @@ function DashboardContent({
                 </button>
               </div>
 
-              {data.accounts.length === 0 ? (
+              {connectedAccounts.length === 0 ? (
                 <div className="text-center py-12 bg-slate-900/50 rounded-lg border-2 border-dashed border-slate-700">
                   <div className="text-5xl mb-4">☁️</div>
                   <p className="text-slate-300 mb-2">
                     Aún no hay cuentas conectadas
                   </p>
                   <p className="text-sm text-slate-400">
-                    Haz clic en <strong>"Conectar nueva cuenta de Google Drive"</strong> para empezar
+                    Haz clic en <strong>"Conectar Google Drive"</strong> o <strong>"Conectar OneDrive"</strong> para empezar
                   </p>
                 </div>
               ) : (
@@ -896,7 +899,8 @@ function DashboardContent({
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-left border-b border-slate-700">
-                        <th className="py-3 px-4 text-slate-300 font-semibold">Email</th>
+                        <th className="py-3 px-4 text-slate-300 font-semibold">Cuenta</th>
+                        <th className="py-3 px-4 text-slate-300 font-semibold">Provider</th>
                         <th className="py-3 px-4 text-slate-300 font-semibold">Estado</th>
                         <th className="py-3 px-4 text-slate-300 font-semibold">Uso</th>
                         <th className="py-3 px-4 text-slate-300 font-semibold">Límite</th>
@@ -905,59 +909,84 @@ function DashboardContent({
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredAndSortedAccounts.map((acc) => (
-                        <tr
-                          key={acc.id}
-                          className="border-b border-slate-800 hover:bg-slate-700/40 transition"
-                        >
-                          <td className="py-4 px-4">
-                            <div className="flex items-center gap-2">
-                              <span className="text-2xl">📧</span>
-                              <span className="font-medium text-white">{acc.email}</span>
-                            </div>
-                          </td>
-                          <td className="py-4 px-4">
-                            <AccountStatusBadge
-                              limit={acc.limit}
-                              usage={acc.usage}
-                              error={acc.error}
-                            />
-                          </td>
-                          <td className="py-4 px-4 text-slate-300">
-                            {formatStorageFromGB(acc.usage / (1024 ** 3))}
-                          </td>
-                          <td className="py-4 px-4 text-slate-300">
-                            {formatStorageFromGB(acc.limit / (1024 ** 3))}
-                          </td>
-                          <td className="py-4 px-4">
-                            <div className="w-32">
-                              <ProgressBar
-                                current={acc.usage}
-                                total={acc.limit}
-                                height="sm"
-                                showPercentage={false}
-                              />
-                            </div>
-                          </td>
-                          <td className="py-4 px-4 text-center">
-                            <div className="flex items-center justify-center gap-2">
-                              <a
-                                href={`/drive/${acc.id}`}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition"
-                              >
-                                📁 Ver archivos
-                              </a>
-                              <button
-                                onClick={() => handleDisconnectAccount(acc.id, acc.email)}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-red-400 hover:text-red-300 text-xs font-medium transition"
-                                title="Desconectar cuenta"
-                              >
-                                Desconectar
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                      {connectedAccounts.map((acc) => {
+                        // Buscar data de storage en data.accounts (Google-only por ahora)
+                        const storageData =
+                          acc.provider === "google_drive"
+                            ? data?.accounts.find(a => a.email === acc.provider_email)
+                            : undefined;
+                          return (
+                            <tr
+                              key={`${acc.provider}:${acc.slot_log_id}`}
+                              className="border-b border-slate-800 hover:bg-slate-700/40 transition"
+                            >
+                              <td className="py-4 px-4">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-2xl">📧</span>
+                                  <span className="font-medium text-white">{acc.provider_email}</span>
+                                </div>
+                              </td>
+                              <td className="py-4 px-4">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-lg">
+                                    {acc.provider === "google_drive" ? "🔵" : acc.provider === "onedrive" ? "🟦" : acc.provider === "dropbox" ? "🟪" : "☁️"}
+                                  </span>
+                                  <span className="px-2 py-0.5 bg-slate-700 text-slate-300 text-xs font-medium rounded">
+                                    {acc.provider === "google_drive" ? "Google Drive" : acc.provider === "onedrive" ? "OneDrive" : acc.provider === "dropbox" ? "Dropbox" : acc.provider}
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="py-4 px-4">
+                                {storageData ? (
+                                  <AccountStatusBadge
+                                    limit={storageData.limit}
+                                    usage={storageData.usage}
+                                    error={storageData.error}
+                                  />
+                                ) : (
+                                  <span className="px-2 py-1 bg-blue-500/20 text-blue-300 text-xs font-medium rounded">
+                                    Conectado
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-4 px-4 text-slate-300">
+                                {storageData ? formatStorageFromGB(storageData.usage / (1024 ** 3)) : "N/A"}
+                              </td>
+                              <td className="py-4 px-4 text-slate-300">
+                                {storageData ? formatStorageFromGB(storageData.limit / (1024 ** 3)) : "N/A"}
+                              </td>
+                              <td className="py-4 px-4">
+                                {storageData ? (
+                                  <div className="w-32">
+                                    <ProgressBar
+                                      current={storageData.usage}
+                                      total={storageData.limit}
+                                      height="sm"
+                                      showPercentage={false}
+                                    />
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-slate-500">-</span>
+                                )}
+                              </td>
+                              <td className="py-4 px-4 text-center">
+                                <div className="flex items-center justify-center gap-2">
+                                  {acc.provider === "google_drive" && storageData && (
+                                    <a
+                                      href={`/drive/${storageData.id}`}
+                                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition"
+                                    >
+                                      📁 Ver archivos
+                                    </a>
+                                  )}
+                                  {acc.provider !== "google_drive" && (
+                                    <span className="text-xs text-slate-500 italic">Próximamente</span>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
                     </tbody>
                   </table>
                 </div>
