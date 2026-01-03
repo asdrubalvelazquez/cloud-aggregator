@@ -2117,9 +2117,9 @@ async def create_transfer_job_endpoint(
         job_id = await transfer.create_transfer_job(
             user_id=user_id,
             source_provider=request.source_provider,
-            source_account_id=request.source_account_id,
+            source_account_id=str(request.source_account_id),
             target_provider=request.target_provider,
-            target_account_id=request.target_account_id,
+            target_account_id=str(request.target_account_id),
             target_folder_id=request.target_folder_id,
             total_items=len(file_items),
             total_bytes=sum(item["size_bytes"] for item in file_items)
@@ -2193,14 +2193,14 @@ async def run_transfer_job_endpoint(
         
         # Get tokens
         from backend.google_drive import get_valid_token
-        google_token = await get_valid_token(job["source_account_id"])
+        google_token = await get_valid_token(int(job["source_account_id"]))
         
         # Get OneDrive token (decrypt + refresh if needed)
         from backend.onedrive import refresh_onedrive_token
         target_account_result = (
             supabase.table("cloud_provider_accounts")
             .select("access_token,refresh_token")
-            .eq("cloud_account_id", job["target_account_id"])
+            .eq("cloud_account_id", int(job["target_account_id"]))
             .single()
             .execute()
         )
@@ -2224,7 +2224,7 @@ async def run_transfer_job_endpoint(
             if test_resp.status_code == 401:
                 logging.info(f"[TRANSFER] OneDrive token expired, refreshing...")
                 onedrive_access_token = await refresh_onedrive_token(
-                    job["target_account_id"],
+                    int(job["target_account_id"]),
                     onedrive_refresh_token
                 )
         
