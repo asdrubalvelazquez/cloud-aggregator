@@ -2325,13 +2325,19 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
             status = classify_account_status(slot, cloud_account)
             
             # 6. Build response
+            # For non-Google providers, include provider_account_uuid (DB row ID) for routing
+            provider_account_uuid = None
+            if slot_provider != "google_drive" and cloud_account:
+                provider_account_uuid = cloud_account.get("id")  # UUID from cloud_provider_accounts.id
+            
             accounts_status.append({
                 "slot_log_id": slot["id"],
                 "slot_number": slot["slot_number"],
                 "slot_is_active": slot["is_active"],
                 "provider": slot["provider"],
                 "provider_email": slot["provider_email"],
-                "provider_account_id": slot["provider_account_id"],
+                "provider_account_id": slot["provider_account_id"],  # Microsoft/Dropbox account ID
+                "provider_account_uuid": provider_account_uuid,  # UUID for /onedrive/{uuid}/files routing
                 "connection_status": status["connection_status"],
                 "reason": status["reason"],
                 "can_reconnect": status["can_reconnect"],
