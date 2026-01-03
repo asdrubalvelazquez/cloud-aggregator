@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { authenticatedFetch } from "@/lib/api";
 
 type OneDriveAccount = {
-  cloud_account_id: number;
+  cloud_account_id: string;  // UUID string from cloud_provider_accounts.id
   account_email: string;
 };
 
@@ -39,8 +40,6 @@ type TransferJobItem = {
   target_item_id?: string;
 };
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
-
 export default function TransferModal({
   isOpen,
   onClose,
@@ -49,7 +48,7 @@ export default function TransferModal({
   onTransferComplete,
 }: TransferModalProps) {
   const [targetAccounts, setTargetAccounts] = useState<OneDriveAccount[]>([]);
-  const [selectedTarget, setSelectedTarget] = useState<number | null>(null);
+  const [selectedTarget, setSelectedTarget] = useState<string | null>(null);  // UUID string
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,12 +70,7 @@ export default function TransferModal({
 
     const pollInterval = setInterval(async () => {
       try {
-        const token = localStorage.getItem("supabase.auth.token");
-        const res = await fetch(`${API_BASE_URL}/transfer/status/${jobId}`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
+        const res = await authenticatedFetch(`/transfer/status/${jobId}`);
 
         if (res.ok) {
           const data = await res.json();
@@ -102,21 +96,21 @@ export default function TransferModal({
     setError(null);
 
     try {
-      const token = localStorage.getItem("supabase.auth.token");
-      const res = await fetch(`${API_BASE_URL}/cloud/storage-summary`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      // Use authenticatedFetch with correct JWT handling
+      const res = await authenticatedFetch("/transfer/targets/onedrive");
 
       if (!res.ok) {
         throw new Error(`Failed to fetch accounts: ${res.status}`);
       }
 
       const data = await res.json();
-      const onedriveAccounts = data.accounts.filter(
-        (acc: any) => acc.provider === "onedrive"
-      );
+      
+      // Transform response to match expected type
+      const onedriveAccounts = data.accounts.map((acc: any) => ({
+        cloud_account_id: acc.id,
+        account_email: acc.email,
+      }));
+      
       setTargetAccounts(onedriveAccounts);
     } catch (e: any) {
       setError(e.message);
@@ -135,14 +129,11 @@ export default function TransferModal({
     setError(null);
 
     try {
-      const token = localStorage.getItem("supabase.auth.token");
-
       // Step 1: Create transfer job
-      const createRes = await fetch(`${API_BASE_URL}/transfer/create`, {
+      const createRes = await authenticatedFetch("/transfer/create", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           source_provider: "google_drive",
@@ -163,11 +154,8 @@ export default function TransferModal({
       setJobId(job_id);
 
       // Step 2: Run transfer job
-      const runRes = await fetch(`${API_BASE_URL}/transfer/run/${job_id}`, {
+      const runRes = await authenticatedFetch(`/transfer/run/${job_id}`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
       });
 
       if (!runRes.ok) {

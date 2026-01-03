@@ -2017,9 +2017,9 @@ async def rename_onedrive_item(
 
 class CreateTransferJobRequest(BaseModel):
     source_provider: str  # "google_drive"
-    source_account_id: int
+    source_account_id: int  # Google Drive account ID (int)
     target_provider: str  # "onedrive"
-    target_account_id: int
+    target_account_id: str  # OneDrive account UUID (string)
     file_ids: List[str]  # Google Drive file IDs
     target_folder_id: Optional[str] = None  # OneDrive folder ID (None = root)
 
@@ -2199,8 +2199,8 @@ async def run_transfer_job_endpoint(
         from backend.onedrive import refresh_onedrive_token
         target_account_result = (
             supabase.table("cloud_provider_accounts")
-            .select("access_token,refresh_token")
-            .eq("cloud_account_id", int(job["target_account_id"]))
+            .select("access_token,refresh_token,id")
+            .eq("id", job["target_account_id"])  # Use UUID directly, NOT int()
             .single()
             .execute()
         )
@@ -2223,10 +2223,8 @@ async def run_transfer_job_endpoint(
             )
             if test_resp.status_code == 401:
                 logging.info(f"[TRANSFER] OneDrive token expired, refreshing...")
-                onedrive_access_token = await refresh_onedrive_token(
-                    int(job["target_account_id"]),
-                    onedrive_refresh_token
-                )
+                token_data = await refresh_onedrive_token(onedrive_refresh_token)
+                onedrive_access_token = token_data["access_token"]
         
         # Process each item
         for item in items:
@@ -2351,6 +2349,56 @@ async def get_transfer_status_endpoint(
     except Exception as e:
         logging.exception(f"[TRANSFER] Failed to get status for job {job_id}")
         raise HTTPException(status_code=500, detail=f"Failed to get transfer status: {str(e)}")
+
+
+@app.get("/transfer/targets/onedrive")
+async def get_onedrive_transfer_targets(
+    user_id: str = Depends(verify_supabase_jwt),
+):
+    """
+    Get list of active OneDrive accounts available as transfer targets.
+    
+    SECURITY:
+    - Validates user authentication via JWT
+    - Returns only accounts belonging to authenticated user
+    - Only returns active accounts (is_active=true)
+    - Does NOT expose tokens or sensitive data
+    
+    SOURCE OF TRUTH: cloud_provider_accounts table ONLY
+    
+    Returns:
+        {
+            "accounts": [
+                {"id": account_id, "email": "user@example.com"},
+                ...
+            ]
+        }
+    """
+    try:
+        # Query cloud_provider_accounts directly (single source of truth)
+        result = (
+            supabase.table("cloud_provider_accounts")
+            .select("id,account_email")
+            .eq("user_id", user_id)
+            .eq("provider", "onedrive")
+            .eq("is_active", True)
+            .execute()
+        )
+        
+        accounts = [
+            {
+                "id": acc["id"],
+                "email": acc["account_email"],
+            }
+            for acc in (result.data or [])
+        ]
+        
+        logging.info(f"[TRANSFER_TARGETS] Found {len(accounts)} active OneDrive accounts for user {user_id}")
+        return {"accounts": accounts}
+        
+    except Exception as e:
+        logging.exception(f"[TRANSFER_TARGETS] Failed to fetch OneDrive targets for user {user_id}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch OneDrive accounts: {str(e)}")
 
 
 @app.get("/drive/picker-token")
