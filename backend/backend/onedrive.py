@@ -6,10 +6,13 @@ using Microsoft Graph API.
 """
 
 import os
+import logging
 import httpx
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
 from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
 
 
 MICROSOFT_CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID")
@@ -24,12 +27,12 @@ async def refresh_onedrive_token(refresh_token: str) -> Dict[str, Any]:
     Refresh OneDrive access token using refresh_token.
     
     Args:
-        refresh_token: Valid refresh token from cloud_provider_accounts
+        refresh_token: Valid refresh token from cloud_provider_accounts (DECRYPTED)
         
     Returns:
         {
-            "access_token": str,
-            "refresh_token": str,
+            "access_token": str (plaintext - caller must encrypt before storing),
+            "refresh_token": str (plaintext - caller must encrypt before storing),
             "expires_in": int,
             "token_expiry": datetime
         }
@@ -37,12 +40,14 @@ async def refresh_onedrive_token(refresh_token: str) -> Dict[str, Any]:
     Raises:
         HTTPException: If token refresh fails
     """
-    if not refresh_token:
+    if not refresh_token or not refresh_token.strip():
+        logger.warning("[ONEDRIVE] Refresh token missing")
         raise HTTPException(
             status_code=401,
             detail={
                 "error_code": "MISSING_REFRESH_TOKEN",
-                "message": "No refresh token available for this account"
+                "message": "OneDrive needs reconnect",
+                "detail": "No refresh token available"
             }
         )
     
@@ -51,6 +56,8 @@ async def refresh_onedrive_token(refresh_token: str) -> Dict[str, Any]:
         "client_secret": MICROSOFT_CLIENT_SECRET,
         "refresh_token": refresh_token,
         "grant_type": "refresh_token",
+        "redirect_uri": MICROSOFT_REDIRECT_URI,
+        "scope": "offline_access Files.ReadWrite.All User.Read"
     }
     
     try:
@@ -59,12 +66,14 @@ async def refresh_onedrive_token(refresh_token: str) -> Dict[str, Any]:
             
             if response.status_code != 200:
                 error_data = response.json() if response.text else {}
+                error_desc = error_data.get("error_description", error_data.get("error", "Unknown error"))
+                logger.error(f"[ONEDRIVE] Token refresh failed: {response.status_code} - {error_desc}")
                 raise HTTPException(
                     status_code=401,
                     detail={
                         "error_code": "TOKEN_REFRESH_FAILED",
-                        "message": "Failed to refresh OneDrive token",
-                        "detail": error_data.get("error_description", "Unknown error")
+                        "message": "OneDrive needs reconnect",
+                        "detail": error_desc
                     }
                 )
             
@@ -146,11 +155,13 @@ async def list_onedrive_files(
             response = await client.get(url, params=params, headers=headers, timeout=30.0)
             
             if response.status_code == 401:
+                logger.warning(f"[ONEDRIVE] Graph API returned 401 (unauthorized)")
                 raise HTTPException(
                     status_code=401,
                     detail={
-                        "error_code": "TOKEN_EXPIRED",
-                        "message": "OneDrive token expired or invalid"
+                        "error_code": "GRAPH_UNAUTHORIZED",
+                        "message": "OneDrive needs reconnect",
+                        "detail": "Token expired or invalid"
                     }
                 )
             

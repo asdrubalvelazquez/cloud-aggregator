@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend.db import supabase
-from backend.crypto import encrypt_token
+from backend.crypto import encrypt_token, decrypt_token
 from backend.google_drive import (
     get_storage_quota,
     list_drive_files,
@@ -1680,6 +1680,7 @@ async def get_onedrive_files(
             ).eq("id", account_id).eq("user_id", user_id).eq("provider", "onedrive").eq("is_active", True).single().execute()
             
             if not account_result.data:
+                logging.info(f"[ONEDRIVE] Account {account_id} not found for user {user_id}")
                 raise HTTPException(
                     status_code=404,
                     detail={
@@ -1689,6 +1690,23 @@ async def get_onedrive_files(
                 )
             
             account = account_result.data
+            
+            # SECURITY: Decrypt tokens from storage
+            has_refresh_token = bool(account.get("refresh_token"))
+            logging.info(f"[ONEDRIVE] Fetching files - user={user_id} account={account_id} has_refresh={has_refresh_token}")
+            
+            try:
+                access_token = decrypt_token(account["access_token"]) if account.get("access_token") else None
+                refresh_token = decrypt_token(account["refresh_token"]) if account.get("refresh_token") else None
+            except Exception as decrypt_error:
+                logging.error(f"[ONEDRIVE] Token decryption failed for account {account_id}: {decrypt_error}")
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error_code": "DECRYPTION_ERROR",
+                        "message": "Failed to decrypt account tokens"
+                    }
+                )
         except Exception as query_error:
             # Handle .single() errors (0 rows returned)
             error_msg = str(query_error).lower()
@@ -1711,7 +1729,6 @@ async def get_onedrive_files(
             )
         
         # 2. Check if token is expired and refresh if needed
-        access_token = account["access_token"]
         token_expiry = account.get("token_expiry")
         
         if token_expiry:
@@ -1720,27 +1737,51 @@ async def get_onedrive_files(
             
             # Refresh if token expires in less than 5 minutes
             if expiry_dt <= now + timedelta(minutes=5):
-                logging.info(f"[ONEDRIVE] Token expired for account {account_id}, refreshing...")
+                logging.info(f"[ONEDRIVE] Token expired/expiring for account {account_id}, refreshing...")
                 
-                refresh_result = await refresh_onedrive_token(account["refresh_token"])
+                # Validate refresh_token exists
+                if not refresh_token or not refresh_token.strip():
+                    logging.error(f"[ONEDRIVE] Missing refresh_token for account {account_id}")
+                    raise HTTPException(
+                        status_code=401,
+                        detail={
+                            "error_code": "MISSING_REFRESH_TOKEN",
+                            "message": "OneDrive needs reconnect",
+                            "detail": "No refresh token available"
+                        }
+                    )
                 
-                # Update tokens in database
-                supabase.table("cloud_provider_accounts").update({
-                    "access_token": refresh_result["access_token"],
-                    "refresh_token": refresh_result["refresh_token"],
-                    "token_expiry": refresh_result["token_expiry"].isoformat(),
-                    "updated_at": datetime.utcnow().isoformat()
-                }).eq("id", account_id).execute()
-                
-                access_token = refresh_result["access_token"]
-                logging.info(f"[ONEDRIVE] Token refreshed successfully for account {account_id}")
+                try:
+                    refresh_result = await refresh_onedrive_token(refresh_token)
+                    
+                    # SECURITY: Encrypt new tokens before storing
+                    supabase.table("cloud_provider_accounts").update({
+                        "access_token": encrypt_token(refresh_result["access_token"]),
+                        "refresh_token": encrypt_token(refresh_result["refresh_token"]),
+                        "token_expiry": refresh_result["token_expiry"].isoformat(),
+                        "updated_at": datetime.utcnow().isoformat()
+                    }).eq("id", account_id).execute()
+                    
+                    access_token = refresh_result["access_token"]  # Use fresh plaintext token
+                    logging.info(f"[ONEDRIVE] Token refreshed successfully for account {account_id}")
+                    
+                except HTTPException as refresh_error:
+                    # Propagate 401 errors from refresh_onedrive_token
+                    logging.error(f"[ONEDRIVE] Token refresh failed for account {account_id}: {refresh_error.detail}")
+                    raise
         
         # 3. List files from OneDrive
-        files_result = await list_onedrive_files(
-            access_token=access_token,
-            parent_id=parent_id,
-            page_size=50
-        )
+        try:
+            files_result = await list_onedrive_files(
+                access_token=access_token,
+                parent_id=parent_id,
+                page_size=50
+            )
+            logging.info(f"[ONEDRIVE] Successfully listed files for account {account_id}, items={len(files_result['items'])}")
+        except HTTPException as graph_error:
+            # Propagate structured errors from list_onedrive_files (401, 404, etc.)
+            logging.error(f"[ONEDRIVE] Graph API error for account {account_id}: {graph_error.detail}")
+            raise
         
         # 4. Return normalized response
         return {
