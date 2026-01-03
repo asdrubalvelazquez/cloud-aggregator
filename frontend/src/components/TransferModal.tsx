@@ -58,6 +58,59 @@ export default function TransferModal({
   const [transferJob, setTransferJob] = useState<TransferJob | null>(null);
   const [pollingErrors, setPollingErrors] = useState(0);
 
+  // Helper: Detect if job is in terminal state
+  const isTerminalState = (job: any): boolean => {
+    if (!job) return false;
+    
+    const status = (job.status || "").toLowerCase();
+    
+    // Known terminal states
+    if (["done", "completed", "success", "failed", "error", "partial"].includes(status)) {
+      return true;
+    }
+    
+    // Defensive: check if all items processed (completed + failed === total)
+    const total = parseInt(job.total_items) || 0;
+    const completed = parseInt(job.completed_items) || 0;
+    const failed = parseInt(job.failed_items) || 0;
+    
+    if (total > 0 && (completed + failed >= total)) {
+      return true;
+    }
+    
+    return false;
+  };
+
+  // Helper: Determine final result type
+  const getFinalResultType = (job: any): "success" | "partial" | "failed" => {
+    if (!job) return "failed";
+    
+    const completed = parseInt(job.completed_items) || 0;
+    const failed = parseInt(job.failed_items) || 0;
+    
+    if (failed === 0 && completed > 0) return "success";
+    if (failed > 0 && completed > 0) return "partial";
+    return "failed";
+  };
+
+  // Helper: Format bytes to human-readable
+  const formatBytes = (bytes: number): string => {
+    if (!bytes || bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
+  };
+
+  // Helper: Extract error message from backend response
+  const extractErrorMessage = (errorData: any): string => {
+    if (typeof errorData === "string") return errorData;
+    if (errorData?.message) return errorData.message;
+    if (errorData?.detail) return errorData.detail;
+    if (errorData?.error) return errorData.error;
+    return "Error desconocido";
+  };
+
   // Fetch OneDrive accounts when modal opens
   useEffect(() => {
     if (isOpen) {
@@ -69,47 +122,70 @@ export default function TransferModal({
   useEffect(() => {
     if (!jobId || transferState !== "running") return;
 
-    const pollInterval = setInterval(async () => {
-      try {
-        const res = await authenticatedFetch(`/transfer/status/${jobId}`);
+    let pollInterval: NodeJS.Timeout | null = null;
 
-        if (res.ok) {
-          const data = await res.json();
-          setTransferJob(data);
-          setPollingErrors(0); // Reset error count on success
+    const startPolling = () => {
+      pollInterval = setInterval(async () => {
+        try {
+          const res = await authenticatedFetch(`/transfer/status/${jobId}`);
 
-          // Stop polling if job is done
-          if (["done", "failed", "partial"].includes(data.status)) {
-            setTransferState("completed");
-            clearInterval(pollInterval);
+          if (res.ok) {
+            const data = await res.json();
             
-            // Auto-close after 2 seconds if successful
-            if (data.status === "done") {
-              setTimeout(() => {
-                handleClose();
-                onTransferComplete();
-              }, 2000);
-            } else {
-              onTransferComplete();
-            }
-          }
-        } else {
-          throw new Error(`Polling failed: ${res.status}`);
-        }
-      } catch (e) {
-        console.error("[TRANSFER] Polling error:", e);
-        setPollingErrors(prev => prev + 1);
-        
-        // If 3 consecutive errors, stop polling and show error
-        if (pollingErrors >= 2) {
-          clearInterval(pollInterval);
-          setError("Error al obtener el estado de la transferencia. Verifica tu conexión.");
-          setTransferState("completed");
-        }
-      }
-    }, 1500); // Poll every 1.5 seconds
+            // Defensive: ensure data has expected shape
+            const safeData = {
+              ...data,
+              total_items: parseInt(data.total_items) || 0,
+              completed_items: parseInt(data.completed_items) || 0,
+              failed_items: parseInt(data.failed_items) || 0,
+              total_bytes: parseInt(data.total_bytes) || 0,
+              transferred_bytes: parseInt(data.transferred_bytes) || 0,
+              items: Array.isArray(data.items) ? data.items : [],
+            };
+            
+            setTransferJob(safeData);
+            setPollingErrors(0); // Reset error count on success
 
-    return () => clearInterval(pollInterval);
+            // Stop polling if job is in terminal state
+            if (isTerminalState(safeData)) {
+              if (pollInterval) clearInterval(pollInterval);
+              setTransferState("completed");
+              
+              const resultType = getFinalResultType(safeData);
+              
+              // Auto-close after 2 seconds if full success
+              if (resultType === "success") {
+                setTimeout(() => {
+                  handleClose();
+                  onTransferComplete();
+                }, 2000);
+              } else {
+                // Partial or failed: call callback but don't auto-close
+                onTransferComplete();
+              }
+            }
+          } else {
+            throw new Error(`Polling failed: ${res.status}`);
+          }
+        } catch (e) {
+          console.error("[TRANSFER] Polling error:", e);
+          setPollingErrors(prev => prev + 1);
+          
+          // If 3 consecutive errors, stop polling and show error
+          if (pollingErrors >= 2) {
+            if (pollInterval) clearInterval(pollInterval);
+            setError("Error al obtener el estado de la transferencia. Verifica tu conexión.");
+            setTransferState("completed");
+          }
+        }
+      }, 1500); // Poll every 1.5 seconds
+    };
+
+    startPolling();
+
+    return () => {
+      if (pollInterval) clearInterval(pollInterval);
+    };
   }, [jobId, transferState, pollingErrors, onTransferComplete]);
 
   const fetchOneDriveAccounts = async () => {
@@ -169,7 +245,7 @@ export default function TransferModal({
 
       if (!createRes.ok) {
         const errorData = await createRes.json().catch(() => ({}));
-        throw new Error(errorData.detail || `Failed to create job: ${createRes.status}`);
+        throw new Error(extractErrorMessage(errorData) || `Failed to create job: ${createRes.status}`);
       }
 
       const { job_id } = await createRes.json();
@@ -182,7 +258,7 @@ export default function TransferModal({
 
       if (!runRes.ok) {
         const errorData = await runRes.json().catch(() => ({}));
-        throw new Error(errorData.detail || `Failed to run job: ${runRes.status}`);
+        throw new Error(extractErrorMessage(errorData) || `Failed to run job: ${runRes.status}`);
       }
 
       // Transition to running state, polling will start automatically
@@ -207,6 +283,22 @@ export default function TransferModal({
     setJobId(null);
     setTransferJob(null);
     setTransferState("idle");
+    setPollingErrors(0);
+  };
+
+  const handleRetryPolling = () => {
+    if (jobId) {
+      setError(null);
+      setPollingErrors(0);
+      setTransferState("running");
+    }
+  };
+
+  const handleRetryTransfer = () => {
+    setTransferState("idle");
+    setJobId(null);
+    setTransferJob(null);
+    setError(null);
     setPollingErrors(0);
   };
 
@@ -364,48 +456,83 @@ export default function TransferModal({
             )}
 
             {/* Status message */}
-            {transferState === "completed" && (
-              <>
-                {transferJob.status === "done" && (
-                  <div className="text-center text-emerald-400 font-semibold animate-fade-in">
-                    ✅ Transferencia completada exitosamente
+            {transferState === "completed" && (() => {
+              const resultType = getFinalResultType(transferJob);
+              const completed = transferJob?.completed_items || 0;
+              const failed = transferJob?.failed_items || 0;
+              const total = transferJob?.total_items || 0;
+              const transferred = transferJob?.transferred_bytes || 0;
+              
+              return (
+                <>
+                  {/* Result summary card */}
+                  <div className={`rounded-lg p-4 border ${
+                    resultType === "success" ? "bg-emerald-500/10 border-emerald-500/30" :
+                    resultType === "partial" ? "bg-amber-500/10 border-amber-500/30" :
+                    "bg-red-500/10 border-red-500/30"
+                  }`}>
+                    {/* Title */}
+                    <div className={`text-center font-bold text-lg mb-2 ${
+                      resultType === "success" ? "text-emerald-400" :
+                      resultType === "partial" ? "text-amber-400" :
+                      "text-red-400"
+                    }`}>
+                      {resultType === "success" && "✅ Transferencia completada"}
+                      {resultType === "partial" && "⚠️ Transferencia completada con errores"}
+                      {resultType === "failed" && "❌ Transferencia fallida"}
+                    </div>
+                    
+                    {/* Details */}
+                    <div className="text-sm text-slate-300 space-y-1">
+                      <div className="flex justify-between">
+                        <span>Copiados:</span>
+                        <span className="font-semibold">{completed} / {total}</span>
+                      </div>
+                      {failed > 0 && (
+                        <div className="flex justify-between">
+                          <span>Fallidos:</span>
+                          <span className="font-semibold text-red-400">{failed}</span>
+                        </div>
+                      )}
+                      {transferred > 0 && (
+                        <div className="flex justify-between">
+                          <span>Transferidos:</span>
+                          <span className="font-semibold">{formatBytes(transferred)}</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                )}
-                {transferJob.status === "failed" && (
-                  <div className="text-center text-red-400 font-semibold">
-                    ❌ Transferencia fallida
-                  </div>
-                )}
-                {transferJob.status === "partial" && (
-                  <div className="text-center text-amber-400 font-semibold">
-                    ⚠️ Transferencia parcial ({transferJob.completed_items} exitosos, {transferJob.failed_items} fallidos)
-                  </div>
-                )}
 
-                <div className="flex justify-end gap-3">
-                  {transferJob.status === "failed" && (
+                  {/* Action buttons */}
+                  <div className="flex justify-end gap-3">
+                    {(resultType === "failed" || resultType === "partial") && (
+                      <button
+                        onClick={handleRetryTransfer}
+                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg font-semibold transition"
+                        title="Reintentar transferencia desde el inicio"
+                      >
+                        Reintentar
+                      </button>
+                    )}
+                    {pollingErrors > 0 && transferState === "completed" && (
+                      <button
+                        onClick={handleRetryPolling}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition"
+                        title="Reintentar obtener estado actualizado"
+                      >
+                        Actualizar estado
+                      </button>
+                    )}
                     <button
-                      onClick={() => {
-                        setTransferState("idle");
-                        setJobId(null);
-                        setTransferJob(null);
-                        setError(null);
-                        setPollingErrors(0);
-                      }}
-                      className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg font-semibold transition"
+                      onClick={handleClose}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold transition"
                     >
-                      Reintentar
+                      Cerrar
                     </button>
-                  )}
-                  <button
-                    onClick={handleClose}
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold transition"
-                  >
-                    Cerrar
-                  </button>
-                </div>
-              </>
-            )}
+                  </div>
+                </>
+              );
+            })()}
 
             {/* Running status */}
             {transferState === "running" && (
