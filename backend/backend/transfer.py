@@ -18,6 +18,7 @@ ONEDRIVE_CHUNK_SIZE = 10 * 1024 * 1024  # 10MB
 
 
 async def create_transfer_job(
+    supabase: Client,
     user_id: str,
     source_provider: str,
     source_account_id: str,
@@ -31,6 +32,7 @@ async def create_transfer_job(
     Create a new cross-provider transfer job.
     
     Args:
+        supabase: Supabase client
         user_id: User UUID
         source_provider: "google_drive" | "onedrive" | "dropbox"
         source_account_id: Source account ID (str to support both INT and UUID)
@@ -43,9 +45,6 @@ async def create_transfer_job(
     Returns:
         job_id (UUID as string)
     """
-    from backend.db import get_supabase_client
-    supabase = get_supabase_client()
-    
     # Create job
     job_data = {
         "user_id": user_id,
@@ -73,6 +72,7 @@ async def create_transfer_job(
 
 
 async def create_transfer_job_items(
+    supabase: Client,
     job_id: str,
     items: List[Dict[str, Any]]
 ) -> None:
@@ -80,12 +80,10 @@ async def create_transfer_job_items(
     Create transfer job items in batch.
     
     Args:
+        supabase: Supabase client
         job_id: Transfer job UUID
         items: List of dicts with keys: source_item_id, file_name (or source_name), size_bytes
     """
-    from backend.db import get_supabase_client
-    supabase = get_supabase_client()
-    
     if not items:
         return
     
@@ -135,6 +133,8 @@ async def get_transfer_job_status(supabase: Client, job_id: str, user_id: str) -
 
 async def update_job_status(
     job_id: str,
+    supabase: Client,
+    job_id: str,
     status: Optional[str] = None,
     increment_completed: bool = False,
     increment_failed: bool = False,
@@ -146,6 +146,7 @@ async def update_job_status(
     Update transfer job status and counters.
     
     Args:
+        supabase: Supabase client
         job_id: Transfer job UUID
         status: New status ('queued', 'running', 'done', 'failed', 'partial')
         increment_completed: Increment completed_items by 1
@@ -153,11 +154,7 @@ async def update_job_status(
         add_transferred_bytes: Add bytes to transferred_bytes
         started_at: Set started_at to now
         completed_at: Set completed_at to now
-    """
-    from backend.db import get_supabase_client
-    supabase = get_supabase_client()
-    
-    update_data = {
+    """update_data = {
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
     
@@ -186,6 +183,8 @@ async def update_job_status(
 
 async def update_item_status(
     item_id: str,
+    supabase: Client,
+    item_id: str,
     status: str,
     error_message: Optional[str] = None,
     target_item_id: Optional[str] = None
@@ -194,15 +193,12 @@ async def update_item_status(
     Update transfer job item status.
     
     Args:
+        supabase: Supabase client
         item_id: Transfer job item UUID
         status: New status ('queued', 'running', 'done', 'failed')
         error_message: Error message if failed
         target_item_id: Target item ID if transferred successfully
-    """
-    from backend.db import get_supabase_client
-    supabase = get_supabase_client()
-    
-    update_data = {
+    """update_data = {
         "status": status
     }
     

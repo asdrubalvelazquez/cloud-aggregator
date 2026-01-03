@@ -2145,6 +2145,7 @@ async def create_transfer_job_endpoint(
         
         # Create transfer job
         job_id = await transfer.create_transfer_job(
+            supabase,
             user_id=user_id,
             source_provider=request.source_provider,
             source_account_id=str(request.source_account_id),
@@ -2156,7 +2157,7 @@ async def create_transfer_job_endpoint(
         )
         
         # Create transfer job items
-        await transfer.create_transfer_job_items(job_id, file_items)
+        await transfer.create_transfer_job_items(supabase, job_id, file_items)
         
         logging.info(f"[TRANSFER] Created job {job_id} for user {user_id}: {len(file_items)} files")
         return {"job_id": str(job_id)}
@@ -2204,7 +2205,7 @@ async def run_transfer_job_endpoint(
             raise HTTPException(status_code=400, detail=f"Job status is '{job['status']}', expected 'queued'")
         
         # Update job status to 'running'
-        await transfer.update_job_status(job_id, status="running", started_at=True)
+        await transfer.update_job_status(supabase, job_id, status="running", started_at=True)
         
         # Load items to transfer
         items_result = (
@@ -2218,7 +2219,7 @@ async def run_transfer_job_endpoint(
         items = items_result.data
         if not items:
             # No items to process
-            await transfer.update_job_status(job_id, status="done", completed_at=True)
+            await transfer.update_job_status(supabase, job_id, status="done", completed_at=True)
             return {"job_id": job_id, "status": "done", "message": "No items to transfer"}
         
         # Get tokens
@@ -2270,11 +2271,12 @@ async def run_transfer_job_endpoint(
                     if download_resp.status_code != 200:
                         error_msg = f"Google Drive download failed: {download_resp.status_code}"
                         await transfer.update_item_status(
+                            supabase,
                             item["id"],
                             status="failed",
                             error_message=error_msg
                         )
-                        await transfer.update_job_status(job_id, increment_failed=True)
+                        await transfer.update_job_status(supabase, job_id, increment_failed=True)
                         continue
                     
                     file_data = download_resp.content
@@ -2290,6 +2292,7 @@ async def run_transfer_job_endpoint(
                 
                 # Mark item as done
                 await transfer.update_item_status(
+                    supabase,
                     item["id"],
                     status="done",
                     target_item_id=upload_result.get("id")
@@ -2297,6 +2300,7 @@ async def run_transfer_job_endpoint(
                 
                 # Increment job counters
                 await transfer.update_job_status(
+                    supabase,
                     job_id,
                     increment_completed=True,
                     add_transferred_bytes=len(file_data)
@@ -2307,11 +2311,12 @@ async def run_transfer_job_endpoint(
             except Exception as e:
                 logging.exception(f"[TRANSFER] Failed to transfer item {item['id']}: {item['file_name']}")
                 await transfer.update_item_status(
+                    supabase,
                     item["id"],
                     status="failed",
                     error_message=str(e)[:500]  # Truncate long errors
                 )
-                await transfer.update_job_status(job_id, increment_failed=True)
+                await transfer.update_job_status(supabase, job_id, increment_failed=True)
         
         # Determine final job status
         final_result = (
@@ -2333,7 +2338,7 @@ async def run_transfer_job_endpoint(
         else:
             final_status = "partial"
         
-        await transfer.update_job_status(job_id, status=final_status, completed_at=True)
+        await transfer.update_job_status(supabase, job_id, status=final_status, completed_at=True)
         
         logging.info(f"[TRANSFER] Job {job_id} completed: {completed}/{total} successful, {failed} failed")
         return {
@@ -2350,7 +2355,7 @@ async def run_transfer_job_endpoint(
         logging.exception(f"[TRANSFER] Job {job_id} execution failed")
         # Try to mark job as failed
         try:
-            await transfer.update_job_status(job_id, status="failed", completed_at=True)
+            await transfer.update_job_status(supabase, job_id, status="failed", completed_at=True)
         except:
             pass
         raise HTTPException(status_code=500, detail=f"Transfer execution failed: {str(e)}")
