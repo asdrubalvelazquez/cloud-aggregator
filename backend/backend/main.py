@@ -2125,21 +2125,21 @@ async def create_transfer_job_endpoint(
                         data = resp.json()
                         file_items.append({
                             "source_item_id": file_id,
-                            "file_name": data.get("name", "unknown"),
+                            "source_name": data.get("name", "unknown"),
                             "size_bytes": int(data.get("size", 0))
                         })
                     else:
                         logging.warning(f"[TRANSFER] Could not fetch metadata for file {file_id}: {resp.status_code}")
                         file_items.append({
                             "source_item_id": file_id,
-                            "file_name": f"file_{file_id}",
+                            "source_name": f"file_{file_id}",
                             "size_bytes": 0
                         })
             except Exception as e:
                 logging.warning(f"[TRANSFER] Error fetching metadata for file {file_id}: {e}")
                 file_items.append({
                     "source_item_id": file_id,
-                    "file_name": f"file_{file_id}",
+                    "source_name": f"file_{file_id}",
                     "size_bytes": 0
                 })
         
@@ -2238,6 +2238,11 @@ async def run_transfer_job_endpoint(
             await transfer.update_job_status(supabase, job_id, status="done", completed_at=True)
             return {"job_id": job_id, "status": "done", "message": "No items to transfer"}
         
+        # Defensive logging: verify item structure
+        logging.info(f"[TRANSFER] Job {job_id} processing {len(items)} items")
+        if items:
+            logging.info(f"[TRANSFER] First item keys: {list(items[0].keys())}")
+        
         # Get tokens
         from backend.google_drive import get_valid_token
         google_token = await get_valid_token(int(job["source_account_id"]))
@@ -2299,9 +2304,10 @@ async def run_transfer_job_endpoint(
                 
                 # Upload to OneDrive (chunked)
                 target_folder_path = job.get("target_folder_id") or "root"
+                file_name = item.get("source_name") or item.get("source_item_id") or "unknown"
                 upload_result = await transfer.upload_to_onedrive_chunked(
                     access_token=onedrive_access_token,
-                    file_name=item["file_name"],
+                    file_name=file_name,
                     file_data=file_data,
                     folder_id=target_folder_path
                 )
@@ -2322,10 +2328,11 @@ async def run_transfer_job_endpoint(
                     add_transferred_bytes=len(file_data)
                 )
                 
-                logging.info(f"[TRANSFER] Item {item['id']} transferred successfully: {item['file_name']}")
+                logging.info(f"[TRANSFER] Item {item['id']} transferred successfully: {file_name}")
                 
             except Exception as e:
-                logging.exception(f"[TRANSFER] Failed to transfer item {item['id']}: {item['file_name']}")
+                file_name = item.get("source_name") or item.get("source_item_id") or "unknown"
+                logging.exception(f"[TRANSFER] Failed to transfer item {item['id']}: {file_name}")
                 await transfer.update_item_status(
                     supabase,
                     item["id"],

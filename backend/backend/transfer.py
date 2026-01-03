@@ -82,7 +82,7 @@ async def create_transfer_job_items(
     Args:
         supabase: Supabase client
         job_id: Transfer job UUID
-        items: List of dicts with keys: source_item_id, file_name (or source_name), size_bytes
+        items: List of dicts with keys: source_item_id, source_name, size_bytes
     """
     if not items:
         return
