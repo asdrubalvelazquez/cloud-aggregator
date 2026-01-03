@@ -203,3 +203,62 @@ export async function fetchOneDriveLoginUrl(params?: {
   }
   return await res.json();
 }
+
+/**
+ * OneDrive file/folder item type
+ */
+export type OneDriveItem = {
+  id: string;
+  name: string;
+  kind: "file" | "folder";
+  size: number;
+  modifiedTime: string | null;
+  webViewLink?: string | null;
+  parentId?: string | null;
+};
+
+/**
+ * OneDrive files list response
+ */
+export type OneDriveListResponse = {
+  provider: "onedrive";
+  account_id: string;
+  parent_id: string | null;
+  items: OneDriveItem[];
+  nextPageToken?: string | null;
+};
+
+/**
+ * Fetch OneDrive files/folders for a specific account
+ * 
+ * Lists files and folders from the user's OneDrive account.
+ * If parentId is provided, lists children of that folder.
+ * Otherwise, lists root folder contents.
+ * 
+ * @param accountId - UUID of the OneDrive account from cloud_provider_accounts
+ * @param parentId - Optional folder ID to list children from
+ * @returns OneDrive files list with items array
+ */
+export async function fetchOneDriveFiles(
+  accountId: string,
+  parentId?: string
+): Promise<OneDriveListResponse> {
+  const params = new URLSearchParams();
+  if (parentId) {
+    params.set("parent_id", parentId);
+  }
+  
+  const endpoint = `/onedrive/${accountId}/files${
+    params.toString() ? `?${params.toString()}` : ""
+  }`;
+  
+  const res = await authenticatedFetch(endpoint);
+  if (!res.ok) {
+    // Parse error response if available
+    const errorData = await res.json().catch(() => null);
+    const errorMessage = errorData?.message || errorData?.detail?.message || `Failed to fetch OneDrive files: ${res.status}`;
+    throw new Error(errorMessage);
+  }
+  
+  return await res.json();
+}

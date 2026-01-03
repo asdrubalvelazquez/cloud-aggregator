@@ -979,7 +979,15 @@ function DashboardContent({
                                       📁 Ver archivos
                                     </a>
                                   )}
-                                  {acc.provider !== "google_drive" && (
+                                  {acc.provider === "onedrive" && (
+                                    <a
+                                      href={`/onedrive/${acc.provider_account_id}`}
+                                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition"
+                                    >
+                                      📁 Ver archivos
+                                    </a>
+                                  )}
+                                  {acc.provider !== "google_drive" && acc.provider !== "onedrive" && (
                                     <span className="text-xs text-slate-500 italic">Próximamente</span>
                                   )}
                                 </div>
