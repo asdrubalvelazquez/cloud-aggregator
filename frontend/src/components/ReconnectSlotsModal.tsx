@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CloudAccountStatus, fetchCloudStatus, fetchGoogleLoginUrl, authenticatedFetch } from "@/lib/api";
+import { CloudAccountStatus, fetchCloudStatus, fetchGoogleLoginUrl, fetchOneDriveLoginUrl, authenticatedFetch } from "@/lib/api";
 import { supabase } from "@/lib/supabaseClient";
 
 type ReconnectSlotsModalProps = {
@@ -32,6 +32,22 @@ export default function ReconnectSlotsModal({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState<string | null>(null);
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
+
+  // Normalizar provider para manejar variaciones
+  function normalizeProvider(p?: string): string {
+    const v = (p || "").trim().toLowerCase();
+    if (v.includes("google")) return "google_drive";
+    if (
+      v.includes("onedrive") ||
+      v.includes("microsoft") ||
+      v.includes("ms_graph") ||
+      v.includes("graph") ||
+      v.includes("microsoft_graph") ||
+      v.includes("office")
+    ) return "onedrive";
+    return v;
+  }
 
   useEffect(() => {
     if (isOpen) {
@@ -82,13 +98,35 @@ export default function ReconnectSlotsModal({
       setReconnecting(account.slot_log_id);
       setError(null);
       
-      console.log("[RECONNECT] Fetching OAuth URL for:", account.provider_email, account.provider_account_id);
+      const normalizedProvider = normalizeProvider(account.provider);
+      console.log("[RECONNECT] Fetching OAuth URL for:", account.provider_email, "| Original provider:", account.provider, "| Normalized:", normalizedProvider, "| Account ID:", account.provider_account_id);
       
-      // Fetch OAuth URL with reconnect mode
-      const { url } = await fetchGoogleLoginUrl({ 
-        mode: "reconnect",
-        reconnect_account_id: account.provider_account_id
-      });
+      // Validar provider_account_id antes de reconexión
+      if (!account.provider_account_id) {
+        throw new Error("No se puede reconectar: falta provider_account_id para esta cuenta.");
+      }
+      
+      // Fetch OAuth URL with reconnect mode (provider-aware)
+      let url: string;
+      
+      if (normalizedProvider === "google_drive") {
+        // Google Drive OAuth
+        const result = await fetchGoogleLoginUrl({ 
+          mode: "reconnect",
+          reconnect_account_id: account.provider_account_id
+        });
+        url = result.url;
+      } else if (normalizedProvider === "onedrive") {
+        // OneDrive OAuth
+        const result = await fetchOneDriveLoginUrl({ 
+          mode: "reconnect",
+          reconnect_account_id: account.provider_account_id
+        });
+        url = result.url;
+      } else {
+        // Provider no soportado
+        throw new Error(`Provider "${account.provider}" no soportado para reconexión`);
+      }
       
       window.location.href = url;
       
@@ -98,13 +136,25 @@ export default function ReconnectSlotsModal({
       }
     } catch (err: any) {
       // Manejar error 404: slot_not_found (cuenta histórica no reconectable)
-      if (err.status === 404 || err.body?.error === "slot_not_found") {
+      if (err.status === 404 || (err.message && err.message.includes("slot_not_found"))) {
         // Mostrar mensaje y conectar automáticamente como nueva cuenta
         setError("Esta cuenta histórica no puede reconectarse. La conectaremos como nueva cuenta…");
         
         try {
-          // Conectar como nueva cuenta (sin reconnect_account_id)
-          const { url } = await fetchGoogleLoginUrl({ mode: "connect" });
+          // Conectar como nueva cuenta (sin reconnect_account_id) - provider-aware con normalización
+          const normalizedProvider = normalizeProvider(account.provider);
+          let url: string;
+          
+          if (normalizedProvider === "google_drive") {
+            const result = await fetchGoogleLoginUrl({ mode: "connect" });
+            url = result.url;
+          } else if (normalizedProvider === "onedrive") {
+            const result = await fetchOneDriveLoginUrl({ mode: "connect" });
+            url = result.url;
+          } else {
+            throw new Error(`Provider "${account.provider}" no soportado`);
+          }
+          
           window.location.href = url;
           // No llamar setReconnecting(null) aquí porque vamos a redirect
         } catch (connectErr: any) {
@@ -206,34 +256,75 @@ export default function ReconnectSlotsModal({
                           </div>
                           <button
                             onClick={async () => {
-                              if (!account.cloud_account_id) return;
+                              // Prevenir múltiples clicks
+                              if (disconnecting) {
+                                console.log("[DISCONNECT] Already disconnecting, ignoring click");
+                                return;
+                              }
+                              
                               if (!confirm(`¿Desconectar ${account.provider_email}? Esta acción no se puede deshacer.`)) {
                                 return;
                               }
                               
+                              setDisconnecting(account.slot_log_id);
+                              setError(null);
+                              
                               try {
-                                const res = await authenticatedFetch("/auth/revoke-account", {
-                                  method: "POST",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({ account_id: account.cloud_account_id }),
-                                });
+                                const normalizedProvider = normalizeProvider(account.provider);
+                                console.log("[DISCONNECT] Starting for:", account.provider_email, "| Provider:", normalizedProvider, "| Slot:", account.slot_log_id);
+                                
+                                let res: Response;
+                                
+                                // Provider-aware disconnect con lógica correcta
+                                if (normalizedProvider === "google_drive" && account.cloud_account_id) {
+                                  // Google Drive: usar endpoint legacy si cloud_account_id existe
+                                  console.log("[DISCONNECT] Using legacy endpoint for Google");
+                                  res = await authenticatedFetch("/auth/revoke-account", {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ account_id: account.cloud_account_id }),
+                                  });
+                                } else {
+                                  // OneDrive/otros: usar endpoint universal
+                                  console.log("[DISCONNECT] Using universal endpoint");
+                                  res = await authenticatedFetch("/cloud/disconnect", {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ slot_log_id: account.slot_log_id }),
+                                  });
+                                }
 
                                 if (res.ok) {
+                                  console.log("[DISCONNECT] Success");
                                   await loadCloudStatus();
                                   if (onDisconnect) {
                                     onDisconnect(account);
                                   }
                                 } else {
-                                  const errorData = await res.json();
-                                  setError(errorData.detail || "Error al desconectar cuenta");
+                                  // Manejo robusto de error para evitar crash en .json()
+                                  let errorMsg = "Error al desconectar cuenta";
+                                  try {
+                                    const errorData = await res.json();
+                                    errorMsg = errorData.detail || errorData.message || errorMsg;
+                                  } catch (parseErr) {
+                                    console.warn("[DISCONNECT] Could not parse error response");
+                                    errorMsg = `Error ${res.status}: ${res.statusText || errorMsg}`;
+                                  }
+                                  console.error("[DISCONNECT] Failed:", errorMsg);
+                                  setError(errorMsg);
                                 }
                               } catch (err: any) {
+                                console.error("[DISCONNECT] Exception:", err);
                                 setError(err.message || "Error al desconectar cuenta");
+                              } finally {
+                                // CRÍTICO: Siempre limpiar loading
+                                setDisconnecting(null);
                               }
                             }}
-                            className="ml-4 px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-sm font-semibold rounded-lg transition"
+                            disabled={disconnecting === account.slot_log_id}
+                            className="ml-4 px-4 py-2 bg-red-600 hover:bg-red-500 disabled:bg-red-800 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition"
                           >
-                            Desconectar
+                            {disconnecting === account.slot_log_id ? "Desconectando..." : "Desconectar"}
                           </button>
                         </div>
                       </div>
