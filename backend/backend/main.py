@@ -2281,6 +2281,13 @@ async def run_transfer_job_endpoint(
         # Process each item
         for item in items:
             try:
+                # Mark item as running (sets started_at)
+                await transfer.update_item_status(
+                    supabase,
+                    item["id"],
+                    status="running"
+                )
+                
                 # Download from Google Drive
                 async with httpx.AsyncClient() as client:
                     download_resp = await client.get(
@@ -2309,7 +2316,7 @@ async def run_transfer_job_endpoint(
                     access_token=onedrive_access_token,
                     file_name=file_name,
                     file_data=file_data,
-                    folder_id=target_folder_path
+                    folder_path=target_folder_path
                 )
                 
                 # Mark item as done

@@ -210,6 +210,18 @@ async def update_item_status(
     if status == "running":
         update_data["started_at"] = datetime.now(timezone.utc).isoformat()
     elif status in ("done", "failed"):
+        # Defensive: check if started_at exists to avoid constraint violation
+        has_started = False
+        try:
+            current_item = supabase.table("transfer_job_items").select("started_at").eq("id", item_id).single().execute()
+            has_started = bool(current_item.data and current_item.data.get("started_at"))
+        except Exception:
+            # If fetch fails, assume no started_at and set it
+            has_started = False
+        
+        if not has_started:
+            # Set started_at to satisfy constraint: completed_at requires started_at
+            update_data["started_at"] = datetime.now(timezone.utc).isoformat()
         update_data["completed_at"] = datetime.now(timezone.utc).isoformat()
     
     supabase.table("transfer_job_items").update(update_data).eq("id", item_id).execute()
