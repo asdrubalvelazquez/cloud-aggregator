@@ -3,12 +3,17 @@
 import { useEffect, useState, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { fetchOneDriveFiles } from "@/lib/api";
+import { fetchOneDriveFiles, fetchOneDriveAccountInfo, renameOneDriveItem, getOneDriveDownloadUrl } from "@/lib/api";
 import type { OneDriveListResponse, OneDriveItem } from "@/lib/api";
+import OnedriveRowActionsMenu from "@/components/OnedriveRowActionsMenu";
+import OneDriveRenameModal from "@/components/OneDriveRenameModal";
 
 export default function OneDriveFilesPage() {
   const params = useParams();
   const accountId = params.id as string;
+
+  // Account info
+  const [accountEmail, setAccountEmail] = useState<string | null>(null);
 
   // Navigation state
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
@@ -20,9 +25,25 @@ export default function OneDriveFilesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Rename modal state
+  const [showRenameModal, setShowRenameModal] = useState(false);
+  const [renameItemId, setRenameItemId] = useState<string | null>(null);
+  const [renameItemName, setRenameItemName] = useState<string>("");
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameStatus, setRenameStatus] = useState<string | null>(null);
+
   // Abort controller for cancelling requests
   const fetchAbortRef = useRef<AbortController | null>(null);
   const fetchSeqRef = useRef(0);
+
+  // Fetch account info on mount
+  useEffect(() => {
+    if (accountId) {
+      fetchOneDriveAccountInfo(accountId)
+        .then((info) => setAccountEmail(info.account_email))
+        .catch((err) => console.error("Failed to fetch account info:", err));
+    }
+  }, [accountId]);
 
   // Fetch files from OneDrive
   const fetchFiles = async (parentId: string | null = null) => {
@@ -108,6 +129,38 @@ export default function OneDriveFilesPage() {
     }
   };
 
+  const handleRename = (itemId: string, itemName: string) => {
+    setRenameItemId(itemId);
+    setRenameItemName(itemName);
+    setShowRenameModal(true);
+    setRenameStatus(null);
+  };
+
+  const handleRenameConfirm = async (newName: string) => {
+    if (!renameItemId) return;
+
+    setIsRenaming(true);
+    setRenameStatus(null);
+
+    try {
+      await renameOneDriveItem(accountId, renameItemId, newName);
+      setRenameStatus("success");
+      setShowRenameModal(false);
+      
+      // Refresh files list
+      fetchFiles(currentFolderId);
+    } catch (err: any) {
+      setRenameStatus(err.message || "Error al renombrar");
+    } finally {
+      setIsRenaming(false);
+    }
+  };
+
+  const handleDownload = (itemId: string, itemName: string) => {
+    const downloadUrl = getOneDriveDownloadUrl(accountId, itemId);
+    window.open(downloadUrl, "_blank");
+  };
+
   const formatSize = (bytes: number): string => {
     if (bytes === 0) return "0 B";
     const k = 1024;
@@ -133,7 +186,9 @@ export default function OneDriveFilesPage() {
         <header className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl md:text-3xl font-bold">OneDrive Files 🟦</h1>
-            <p className="text-sm text-slate-400 mt-1">Account ID: {accountId}</p>
+            <p className="text-sm text-slate-400 mt-1">
+              {accountEmail ? `Cuenta: ${accountEmail}` : `Cargando...`}
+            </p>
           </div>
           <Link
             href="/app"
@@ -168,6 +223,17 @@ export default function OneDriveFilesPage() {
           >
             ← Atrás
           </button>
+        )}
+
+        {/* Rename status banner */}
+        {renameStatus && (
+          <div className={`rounded-lg p-4 ${
+            renameStatus === "success" 
+              ? "bg-green-900/30 border border-green-700 text-green-300" 
+              : "bg-red-900/30 border border-red-700 text-red-300"
+          }`}>
+            <p>{renameStatus === "success" ? "✅ Archivo renombrado exitosamente" : `❌ ${renameStatus}`}</p>
+          </div>
         )}
 
         {/* Error banner */}
@@ -249,16 +315,15 @@ export default function OneDriveFilesPage() {
                         {formatDate(file.modifiedTime)}
                       </td>
                       <td className="py-4 px-4 text-center">
-                        {file.webViewLink && (
-                          <a
-                            href={file.webViewLink}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition"
-                          >
-                            🔗 Ver en OneDrive
-                          </a>
-                        )}
+                        <OnedriveRowActionsMenu
+                          fileId={file.id}
+                          fileName={file.name}
+                          webViewLink={file.webViewLink || undefined}
+                          isFolder={file.kind === "folder"}
+                          onOpenFolder={handleOpenFolder}
+                          onRename={handleRename}
+                          onDownload={handleDownload}
+                        />
                       </td>
                     </tr>
                   ))}
@@ -268,6 +333,18 @@ export default function OneDriveFilesPage() {
           </div>
         )}
       </div>
+
+      {/* Rename Modal */}
+      <OneDriveRenameModal
+        isOpen={showRenameModal}
+        fileName={renameItemName}
+        onClose={() => {
+          setShowRenameModal(false);
+          setRenameStatus(null);
+        }}
+        onConfirm={handleRenameConfirm}
+        isRenaming={isRenaming}
+      />
     </main>
   );
 }

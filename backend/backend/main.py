@@ -25,6 +25,7 @@ from backend.onedrive import (
     refresh_onedrive_token,
     list_onedrive_files,
     get_onedrive_storage_quota,
+    GRAPH_API_BASE,
 )
 from backend.auth import create_state_token, decode_state_token, verify_supabase_jwt, get_current_user, get_jwt_user_info
 from backend import quota
@@ -1804,6 +1805,209 @@ async def get_onedrive_files(
                 "detail": str(e)
             }
         )
+
+
+@app.get("/onedrive/account-info/{account_id}")
+async def get_onedrive_account_info(
+    account_id: str,
+    user_id: str = Depends(verify_supabase_jwt),
+):
+    """
+    Get OneDrive account information (email).
+    
+    Args:
+        account_id: UUID from cloud_provider_accounts table
+        user_id: Extracted from JWT
+        
+    Returns:
+        { "id": str, "account_email": str }
+    """
+    try:
+        account_result = supabase.table("cloud_provider_accounts").select(
+            "id, account_email"
+        ).eq("id", account_id).eq("user_id", user_id).eq("provider", "onedrive").single().execute()
+        
+        if not account_result.data:
+            raise HTTPException(
+                status_code=404,
+                detail={"error_code": "ACCOUNT_NOT_FOUND", "message": "OneDrive account not found"}
+            )
+        
+        return account_result.data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"[ONEDRIVE] Failed to get account info for {account_id}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error_code": "INTERNAL_ERROR", "message": "Failed to get account info"}
+        )
+
+
+@app.get("/onedrive/download")
+async def download_onedrive_file(
+    account_id: str,
+    item_id: str,
+    user_id: str = Depends(verify_supabase_jwt),
+):
+    """
+    Download OneDrive file by redirecting to Graph API /content endpoint.
+    
+    Args:
+        account_id: UUID from cloud_provider_accounts
+        item_id: OneDrive item ID
+        user_id: Extracted from JWT
+        
+    Returns:
+        Redirect to OneDrive download URL
+    """
+    try:
+        # Verify account ownership
+        account_result = supabase.table("cloud_provider_accounts").select(
+            "id, access_token, refresh_token"
+        ).eq("id", account_id).eq("user_id", user_id).eq("provider", "onedrive").eq("is_active", True).single().execute()
+        
+        if not account_result.data:
+            raise HTTPException(status_code=404, detail="Account not found")
+        
+        account = account_result.data
+        access_token = decrypt_token(account["access_token"])
+        
+        # Try to get download URL from Graph API
+        try:
+            async with httpx.AsyncClient() as client:
+                # Get item metadata first to check if it's downloadable
+                url = f"{GRAPH_API_BASE}/me/drive/items/{item_id}"
+                headers = {"Authorization": f"Bearer {access_token}"}
+                
+                response = await client.get(url, headers=headers, timeout=30.0)
+                
+                if response.status_code == 401:
+                    # Refresh token
+                    refresh_token = decrypt_token(account["refresh_token"])
+                    tokens = await refresh_onedrive_token(refresh_token)
+                    
+                    supabase.table("cloud_provider_accounts").update({
+                        "access_token": encrypt_token(tokens["access_token"]),
+                        "refresh_token": encrypt_token(tokens["refresh_token"]),
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }).eq("id", account_id).execute()
+                    
+                    access_token = tokens["access_token"]
+                    headers = {"Authorization": f"Bearer {access_token}"}
+                    response = await client.get(url, headers=headers, timeout=30.0)
+                
+                if response.status_code != 200:
+                    raise HTTPException(status_code=response.status_code, detail="Failed to get file info")
+                
+                item_data = response.json()
+                
+                # Check if it's a folder
+                if "folder" in item_data:
+                    raise HTTPException(status_code=400, detail="Cannot download folders")
+                
+                # Get download URL
+                download_url = item_data.get("@microsoft.graph.downloadUrl")
+                if not download_url:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "not_downloadable",
+                            "message": "Item is not downloadable (folder or missing permissions)"
+                        }
+                    )
+                
+                # Redirect to download URL (Graph API pre-signed URL, valid for 1 hour)
+                return RedirectResponse(download_url)
+                
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=503, detail=f"Network error: {str(e)}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"[ONEDRIVE] Download failed for account {account_id}, item {item_id}")
+        raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
+
+
+class RenameOneDriveItemRequest(BaseModel):
+    account_id: str
+    item_id: str
+    new_name: str
+
+
+@app.post("/onedrive/rename")
+async def rename_onedrive_item(
+    request: RenameOneDriveItemRequest,
+    user_id: str = Depends(verify_supabase_jwt),
+):
+    """
+    Rename OneDrive file or folder.
+    
+    Args:
+        account_id: UUID from cloud_provider_accounts
+        item_id: OneDrive item ID
+        new_name: New name for the item
+        user_id: Extracted from JWT
+        
+    Returns:
+        { "success": true }
+    """
+    try:
+        # Verify account ownership
+        account_result = supabase.table("cloud_provider_accounts").select(
+            "id, access_token, refresh_token"
+        ).eq("id", request.account_id).eq("user_id", user_id).eq("provider", "onedrive").eq("is_active", True).single().execute()
+        
+        if not account_result.data:
+            raise HTTPException(status_code=404, detail="Account not found")
+        
+        account = account_result.data
+        access_token = decrypt_token(account["access_token"])
+        
+        # Try to rename via Graph API PATCH
+        try:
+            async with httpx.AsyncClient() as client:
+                url = f"{GRAPH_API_BASE}/me/drive/items/{request.item_id}"
+                headers = {
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json"
+                }
+                payload = {"name": request.new_name}
+                
+                response = await client.patch(url, headers=headers, json=payload, timeout=30.0)
+                
+                if response.status_code == 401:
+                    # Refresh token
+                    refresh_token = decrypt_token(account["refresh_token"])
+                    tokens = await refresh_onedrive_token(refresh_token)
+                    
+                    supabase.table("cloud_provider_accounts").update({
+                        "access_token": encrypt_token(tokens["access_token"]),
+                        "refresh_token": encrypt_token(tokens["refresh_token"]),
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }).eq("id", request.account_id).execute()
+                    
+                    access_token = tokens["access_token"]
+                    headers = {"Authorization": f"Bearer {access_token}"}
+                    response = await client.patch(url, headers=headers, json=payload, timeout=30.0)
+                
+                if response.status_code != 200:
+                    error_data = response.json() if response.text else {}
+                    error_msg = error_data.get("error", {}).get("message", "Unknown error")
+                    raise HTTPException(status_code=response.status_code, detail=f"Rename failed: {error_msg}")
+                
+                return {"success": True}
+                
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=503, detail=f"Network error: {str(e)}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"[ONEDRIVE] Rename failed for account {request.account_id}, item {request.item_id}")
+        raise HTTPException(status_code=500, detail=f"Rename failed: {str(e)}")
 
 
 @app.get("/drive/picker-token")

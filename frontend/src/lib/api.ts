@@ -263,3 +263,44 @@ export async function fetchOneDriveFiles(
   
   return await res.json();
 }
+
+/**
+ * Fetch OneDrive account info (email)
+ */
+export async function fetchOneDriveAccountInfo(
+  accountId: string
+): Promise<{ id: string; account_email: string }> {
+  const res = await authenticatedFetch(`/onedrive/account-info/${accountId}`);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch account info: ${res.status}`);
+  }
+  return await res.json();
+}
+
+/**
+ * Rename OneDrive file or folder
+ */
+export async function renameOneDriveItem(
+  accountId: string,
+  itemId: string,
+  newName: string
+): Promise<{ success: boolean }> {
+  const res = await authenticatedFetch("/onedrive/rename", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ account_id: accountId, item_id: itemId, new_name: newName }),
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => null);
+    throw new Error(errorData?.detail || `Failed to rename: ${res.status}`);
+  }
+  return await res.json();
+}
+
+/**
+ * Get OneDrive file download URL
+ */
+export function getOneDriveDownloadUrl(accountId: string, itemId: string): string {
+  return `${API_BASE_URL}/onedrive/download?account_id=${accountId}&item_id=${itemId}`;
+}
+
