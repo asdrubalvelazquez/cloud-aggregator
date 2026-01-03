@@ -1050,9 +1050,9 @@ function DashboardContent({
                               </td>
                               <td className="py-4 px-4 text-center">
                                 <div className="flex items-center justify-center gap-2">
-                                  {acc.provider === "google_drive" && storageData && storageData.status === "ok" && (
+                                  {acc.provider === "google_drive" && acc.cloud_account_id && (
                                     <a
-                                      href={`/drive/${storageData.id}`}
+                                      href={`/drive/${acc.cloud_account_id}`}
                                       className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition"
                                     >
                                       📁 Ver archivos
