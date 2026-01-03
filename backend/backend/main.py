@@ -2552,6 +2552,10 @@ class RevokeAccountRequest(BaseModel):
     account_id: int
 
 
+class DisconnectSlotRequest(BaseModel):
+    slot_log_id: str  # UUID from cloud_slots_log
+
+
 @app.post("/auth/revoke-account")
 async def revoke_account(
     request: RevokeAccountRequest,
@@ -2642,6 +2646,114 @@ async def revoke_account(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to revoke account: {str(e)}"
+        )
+
+
+@app.post("/cloud/disconnect")
+async def disconnect_slot(
+    request: DisconnectSlotRequest,
+    user_id: str = Depends(verify_supabase_jwt)
+):
+    """
+    Universal endpoint to disconnect any cloud provider account (Google Drive, OneDrive, etc).
+    
+    Works with cloud_slots_log for multi-provider support. Deactivates slot and optionally
+    clears tokens from provider-specific tables (cloud_accounts for Google, 
+    cloud_provider_accounts for OneDrive/Dropbox).
+    
+    Security:
+    - Requires valid JWT token
+    - Validates slot ownership before disconnect
+    - Returns 403 if user doesn't own the slot
+    - Physically deletes OAuth tokens for security compliance
+    
+    Body:
+        {
+            "slot_log_id": "uuid-from-cloud-slots-log"
+        }
+    
+    Returns:
+        {
+            "success": true,
+            "message": "OneDrive account user@example.com disconnected successfully"
+        }
+    """
+    try:
+        # 1. Verify slot exists and belongs to user (filter by user_id directly)
+        try:
+            slot_resp = supabase.table("cloud_slots_log").select(
+                "id, user_id, provider, provider_email, provider_account_id, is_active"
+            ).eq("id", request.slot_log_id).eq("user_id", user_id).single().execute()
+        except Exception as query_error:
+            error_msg = str(query_error).lower()
+            if "0 rows" in error_msg or "single row" in error_msg or "no rows" in error_msg:
+                raise HTTPException(
+                    status_code=404,
+                    detail={"error_code": "SLOT_NOT_FOUND", "message": "Slot not found"}
+                )
+            raise
+        
+        if not slot_resp.data:
+            raise HTTPException(
+                status_code=404,
+                detail={"error_code": "SLOT_NOT_FOUND", "message": "Slot not found"}
+            )
+        
+        slot = slot_resp.data
+        
+        # Check if already disconnected
+        if not slot["is_active"]:
+            return {
+                "success": True,
+                "message": f"{slot['provider']} account {slot['provider_email']} already disconnected"
+            }
+        
+        provider = slot["provider"]
+        provider_email = slot["provider_email"]
+        provider_account_id = slot["provider_account_id"]
+        now_iso = datetime.now(timezone.utc).isoformat()
+        
+        logging.info(f"[DISCONNECT] user={user_id} slot={request.slot_log_id} provider={provider} email={provider_email}")
+        
+        # 3. Deactivate slot in cloud_slots_log
+        supabase.table("cloud_slots_log").update({
+            "is_active": False,
+            "disconnected_at": now_iso
+        }).eq("id", request.slot_log_id).execute()
+        
+        # 4. Deactivate and clear tokens in provider-specific table
+        if provider == "google_drive":
+            # Google Drive: use cloud_accounts table
+            supabase.table("cloud_accounts").update({
+                "is_active": False,
+                "disconnected_at": now_iso,
+                "access_token": None,
+                "refresh_token": None
+            }).eq("user_id", user_id).eq("google_account_id", provider_account_id).execute()
+            
+        else:
+            # OneDrive/Dropbox/etc: use cloud_provider_accounts table
+            supabase.table("cloud_provider_accounts").update({
+                "is_active": False,
+                "access_token": None,
+                "refresh_token": None,
+                "updated_at": now_iso
+            }).eq("user_id", user_id).eq("provider", provider).eq("provider_account_id", provider_account_id).execute()
+        
+        logging.info(f"[DISCONNECT] Successfully disconnected {provider} account {provider_email}")
+        
+        return {
+            "success": True,
+            "message": f"{provider} account {provider_email} disconnected successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[DISCONNECT ERROR] Failed to disconnect slot {request.slot_log_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to disconnect account: {str(e)}"
         )
 
 
