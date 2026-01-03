@@ -21,6 +21,11 @@ from backend.google_drive import (
     rename_file,
     download_file_stream,
 )
+from backend.onedrive import (
+    refresh_onedrive_token,
+    list_onedrive_files,
+    get_onedrive_storage_quota,
+)
 from backend.auth import create_state_token, decode_state_token, verify_supabase_jwt, get_current_user, get_jwt_user_info
 from backend import quota
 from backend.stripe_utils import STRIPE_PRICE_PLUS, STRIPE_PRICE_PRO, map_price_to_plan
@@ -1623,6 +1628,141 @@ async def get_drive_files(
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/onedrive/{account_id}/files")
+async def get_onedrive_files(
+    account_id: str,
+    parent_id: Optional[str] = None,
+    user_id: str = Depends(verify_supabase_jwt),
+):
+    """
+    List files and folders from OneDrive account.
+    
+    Security:
+    - Validates JWT authentication
+    - Verifies account ownership (user_id match)
+    - Ensures provider is 'onedrive' and account is active
+    
+    Args:
+        account_id: UUID from cloud_provider_accounts table
+        parent_id: OneDrive folder ID. If None, lists root
+        user_id: Extracted from JWT by dependency
+        
+    Returns:
+        {
+            "provider": "onedrive",
+            "account_id": int,
+            "parent_id": str | null,
+            "items": [
+                {
+                    "id": str,
+                    "name": str,
+                    "kind": "folder" | "file",
+                    "size": int,
+                    "mimeType": str | null,
+                    "modifiedTime": str (ISO),
+                    "webViewLink": str,
+                    "parentId": str | null
+                }
+            ],
+            "nextPageToken": str | null
+        }
+        
+    Raises:
+        HTTPException: 401/403/404/500 with structured error
+    """
+    try:
+        # 1. Verify account ownership, provider, and active status
+        try:
+            account_result = supabase.table("cloud_provider_accounts").select(
+                "id, user_id, provider, is_active, access_token, refresh_token, token_expiry"
+            ).eq("id", account_id).eq("user_id", user_id).eq("provider", "onedrive").eq("is_active", True).single().execute()
+            
+            if not account_result.data:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "error_code": "ACCOUNT_NOT_FOUND",
+                        "message": f"OneDrive account {account_id} not found or doesn't belong to you"
+                    }
+                )
+            
+            account = account_result.data
+        except Exception as query_error:
+            # Handle .single() errors (0 rows returned)
+            error_msg = str(query_error).lower()
+            if "0 rows" in error_msg or "no rows" in error_msg or "single row" in error_msg:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "error_code": "ACCOUNT_NOT_FOUND",
+                        "message": f"OneDrive account {account_id} not found or doesn't belong to you"
+                    }
+                )
+            # Other DB errors
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error_code": "INTERNAL_ERROR",
+                    "message": "Database error while fetching account",
+                    "detail": str(query_error)
+                }
+            )
+        
+        # 2. Check if token is expired and refresh if needed
+        access_token = account["access_token"]
+        token_expiry = account.get("token_expiry")
+        
+        if token_expiry:
+            expiry_dt = datetime.fromisoformat(token_expiry.replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            
+            # Refresh if token expires in less than 5 minutes
+            if expiry_dt <= now + timedelta(minutes=5):
+                logging.info(f"[ONEDRIVE] Token expired for account {account_id}, refreshing...")
+                
+                refresh_result = await refresh_onedrive_token(account["refresh_token"])
+                
+                # Update tokens in database
+                supabase.table("cloud_provider_accounts").update({
+                    "access_token": refresh_result["access_token"],
+                    "refresh_token": refresh_result["refresh_token"],
+                    "token_expiry": refresh_result["token_expiry"].isoformat(),
+                    "updated_at": datetime.utcnow().isoformat()
+                }).eq("id", account_id).execute()
+                
+                access_token = refresh_result["access_token"]
+                logging.info(f"[ONEDRIVE] Token refreshed successfully for account {account_id}")
+        
+        # 3. List files from OneDrive
+        files_result = await list_onedrive_files(
+            access_token=access_token,
+            parent_id=parent_id,
+            page_size=50
+        )
+        
+        # 4. Return normalized response
+        return {
+            "provider": "onedrive",
+            "account_id": account_id,
+            "parent_id": parent_id,
+            "items": files_result["items"],
+            "nextPageToken": files_result.get("nextPageToken")
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"[ONEDRIVE] Failed to list files for account {account_id}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_code": "INTERNAL_ERROR",
+                "message": "Failed to list OneDrive files",
+                "detail": str(e)
+            }
+        )
 
 
 @app.get("/drive/picker-token")
