@@ -2806,7 +2806,7 @@ async def get_cloud_storage_summary(user_id: str = Depends(verify_supabase_jwt))
         ).eq("user_id", user_id).eq("is_active", True).execute()
         
         onedrive_accounts_resp = supabase.table("cloud_provider_accounts").select(
-            "id, provider_account_id, provider_email, access_token, refresh_token"
+            "id, provider_account_id, account_email, access_token, refresh_token"
         ).eq("user_id", user_id).eq("provider", "onedrive").eq("is_active", True).execute()
         
         google_accounts = google_accounts_resp.data or []
@@ -2888,7 +2888,7 @@ async def get_cloud_storage_summary(user_id: str = Depends(verify_supabase_jwt))
                 
                 accounts_data.append({
                     "provider": "onedrive",
-                    "email": account["provider_email"],
+                    "email": account["account_email"],
                     "total_bytes": account_total,
                     "used_bytes": account_used,
                     "free_bytes": account_free,
@@ -2896,10 +2896,10 @@ async def get_cloud_storage_summary(user_id: str = Depends(verify_supabase_jwt))
                     "status": "ok"
                 })
             except Exception as e:
-                logging.warning(f"[STORAGE_SUMMARY] Failed to fetch OneDrive quota for {account.get('provider_email')}: {e}")
+                logging.warning(f"[STORAGE_SUMMARY] Failed to fetch OneDrive quota for {account.get('account_email')}: {e}")
                 accounts_data.append({
                     "provider": "onedrive",
-                    "email": account.get("provider_email", "unknown"),
+                    "email": account.get("account_email", "unknown"),
                     "total_bytes": None,
                     "used_bytes": None,
                     "free_bytes": None,
