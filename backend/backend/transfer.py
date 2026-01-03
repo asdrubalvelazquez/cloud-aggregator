@@ -132,7 +132,6 @@ async def get_transfer_job_status(supabase: Client, job_id: str, user_id: str) -
 
 
 async def update_job_status(
-    job_id: str,
     supabase: Client,
     job_id: str,
     status: Optional[str] = None,
@@ -183,7 +182,6 @@ async def update_job_status(
 
 
 async def update_item_status(
-    item_id: str,
     supabase: Client,
     item_id: str,
     status: str,
@@ -199,7 +197,8 @@ async def update_item_status(
         status: New status ('queued', 'running', 'done', 'failed')
         error_message: Error message if failed
         target_item_id: Target item ID if transferred successfully
-    """update_data = {
+    """
+    update_data = {
         "status": status
     }
     
