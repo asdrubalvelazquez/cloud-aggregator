@@ -21,6 +21,26 @@ type Account = {
   error?: string;
 };
 
+type CloudStorageAccount = {
+  provider: string;
+  email: string;
+  total_bytes: number | null;
+  used_bytes: number | null;
+  free_bytes: number | null;
+  percent_used: number | null;
+  status: "ok" | "unavailable" | "error";
+};
+
+type CloudStorageSummary = {
+  totals: {
+    total_bytes: number;
+    used_bytes: number;
+    free_bytes: number;
+    percent_used: number;
+  };
+  accounts: CloudStorageAccount[];
+};
+
 type StorageSummary = {
   accounts: Account[];
   total_limit: number;
@@ -106,6 +126,7 @@ function DashboardContent({
   routeParamsKey: string | null;
 }) {
   const [data, setData] = useState<StorageSummary | null>(null);
+  const [cloudStorage, setCloudStorage] = useState<CloudStorageSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [softTimeout, setSoftTimeout] = useState(false);
   const [hardError, setHardError] = useState<string | null>(null);
@@ -142,6 +163,17 @@ function DashboardContent({
     let didSoftTimeout = false;
     try {
       setLoading(true);
+      
+      // Fetch cloud storage summary (new unified endpoint)
+      const cloudRes = await authenticatedFetch("/cloud/storage-summary", { signal });
+      if (cloudRes.ok) {
+        const cloudJson = await cloudRes.json();
+        setCloudStorage(cloudJson);
+      } else {
+        console.warn("Failed to fetch cloud storage summary:", cloudRes.status);
+      }
+      
+      // Keep legacy endpoint for backwards compatibility (if needed)
       const res = await authenticatedFetch("/storage/summary", { signal });
       if (!res.ok) {
         throw new Error(`Error API: ${res.status}`);
@@ -762,23 +794,32 @@ function DashboardContent({
                     Total Espacio
                   </h2>
                   <p className="text-3xl font-bold text-white">
-                    {formatStorageFromGB(data.total_limit / (1024 ** 3))}
+                    {cloudStorage
+                      ? formatStorageFromGB(cloudStorage.totals.total_bytes / (1024 ** 3))
+                      : formatStorageFromGB(data.total_limit / (1024 ** 3))
+                    }
                   </p>
                 </div>
                 <div className="bg-slate-800 rounded-xl p-5 shadow-lg border border-slate-700">
                   <h2 className="text-xs text-slate-400 uppercase tracking-wide font-semibold mb-1">
-                    Usado
+                    Espacio Usado
                   </h2>
-                  <p className="text-3xl font-bold text-emerald-400">
-                    {formatStorageFromGB(data.total_usage / (1024 ** 3))}
+                  <p className="text-3xl font-bold text-white">
+                    {cloudStorage
+                      ? formatStorageFromGB(cloudStorage.totals.used_bytes / (1024 ** 3))
+                      : formatStorageFromGB(data.total_usage / (1024 ** 3))
+                    }
                   </p>
                 </div>
                 <div className="bg-slate-800 rounded-xl p-5 shadow-lg border border-slate-700">
                   <h2 className="text-xs text-slate-400 uppercase tracking-wide font-semibold mb-1">
-                    Libre
+                    Espacio Libre
                   </h2>
-                  <p className="text-3xl font-bold text-blue-400">
-                    {formatStorageFromGB((data.total_limit - data.total_usage) / (1024 ** 3))}
+                  <p className="text-3xl font-bold text-white">
+                    {cloudStorage
+                      ? formatStorageFromGB(cloudStorage.totals.free_bytes / (1024 ** 3))
+                      : formatStorageFromGB((data.total_limit - data.total_usage) / (1024 ** 3))
+                    }
                   </p>
                 </div>
                 <div className="bg-slate-800 rounded-xl p-5 shadow-lg border border-slate-700">
@@ -786,7 +827,10 @@ function DashboardContent({
                     % Utilizado
                   </h2>
                   <p className="text-3xl font-bold text-white">
-                    {data.total_usage_percent.toFixed(2)}%
+                    {cloudStorage
+                      ? cloudStorage.totals.percent_used.toFixed(1)
+                      : data.total_usage_percent.toFixed(1)
+                    }%
                   </p>
                 </div>
               </div>
@@ -805,15 +849,17 @@ function DashboardContent({
                   <span className="text-slate-500">Separate accounts. Consolidated view for management.</span>
                 </p>
                 <p className="text-xs text-slate-500 mb-1 italic">
-                  Storage limits are enforced by Google Drive. Transfers only occur when you confirm an action.
+                  Storage limits are enforced by cloud providers. Transfers only occur when you confirm an action.
                 </p>
                 <p className="text-xs text-slate-400 mb-3">
-                  {formatStorageFromGB(data.total_usage / (1024 ** 3))} usados de{" "}
-                  {formatStorageFromGB(data.total_limit / (1024 ** 3))} ({formatStorageFromGB((data.total_limit - data.total_usage) / (1024 ** 3))} libre)
+                  {cloudStorage
+                    ? `${formatStorageFromGB(cloudStorage.totals.used_bytes / (1024 ** 3))} usados de ${formatStorageFromGB(cloudStorage.totals.total_bytes / (1024 ** 3))} (${formatStorageFromGB(cloudStorage.totals.free_bytes / (1024 ** 3))} libre)`
+                    : `${formatStorageFromGB(data.total_usage / (1024 ** 3))} usados de ${formatStorageFromGB(data.total_limit / (1024 ** 3))} (${formatStorageFromGB((data.total_limit - data.total_usage) / (1024 ** 3))} libre)`
+                  }
                 </p>
                 <ProgressBar
-                  current={data.total_usage}
-                  total={data.total_limit}
+                  current={cloudStorage ? cloudStorage.totals.used_bytes : data.total_usage}
+                  total={cloudStorage ? cloudStorage.totals.total_bytes : data.total_limit}
                   height="lg"
                 />
               </div>
@@ -910,12 +956,33 @@ function DashboardContent({
                     </thead>
                     <tbody>
                       {connectedAccounts.map((acc) => {
-                        // Buscar data de storage en data.accounts (Google-only por ahora)
-                        const storageData =
-                          acc.provider === "google_drive"
-                            ? data?.accounts.find(a => a.email === acc.provider_email)
-                            : undefined;
-                          return (
+                        // Buscar data de storage: Google en data.accounts o unified en cloudStorage.accounts
+                        let storageData = undefined;
+                        
+                        if (cloudStorage) {
+                          // Usar nuevo endpoint unificado
+                          storageData = cloudStorage.accounts.find(
+                            a => a.email === acc.provider_email && 
+                                 ((a.provider === "google_drive" && acc.provider === "google_drive") ||
+                                  (a.provider === "onedrive" && acc.provider === "onedrive"))
+                          );
+                        } else if (acc.provider === "google_drive" && data?.accounts) {
+                          // Fallback a endpoint legacy (solo Google)
+                          const legacyData = data.accounts.find(a => a.email === acc.provider_email);
+                          if (legacyData) {
+                            storageData = {
+                              provider: "google_drive",
+                              email: legacyData.email,
+                              total_bytes: legacyData.limit,
+                              used_bytes: legacyData.usage,
+                              free_bytes: legacyData.limit - legacyData.usage,
+                              percent_used: legacyData.usage_percent,
+                              status: legacyData.error ? "error" : "ok"
+                            };
+                          }
+                        }
+                        
+                        return (
                             <tr
                               key={`${acc.provider}:${acc.slot_log_id}`}
                               className="border-b border-slate-800 hover:bg-slate-700/40 transition"
@@ -937,12 +1004,16 @@ function DashboardContent({
                                 </div>
                               </td>
                               <td className="py-4 px-4">
-                                {storageData ? (
+                                {storageData && storageData.status === "ok" ? (
                                   <AccountStatusBadge
-                                    limit={storageData.limit}
-                                    usage={storageData.usage}
-                                    error={storageData.error}
+                                    limit={storageData.total_bytes || 0}
+                                    usage={storageData.used_bytes || 0}
+                                    error={undefined}
                                   />
+                                ) : storageData && storageData.status === "unavailable" ? (
+                                  <span className="px-2 py-1 bg-amber-500/20 text-amber-300 text-xs font-medium rounded">
+                                    No disponible
+                                  </span>
                                 ) : (
                                   <span className="px-2 py-1 bg-blue-500/20 text-blue-300 text-xs font-medium rounded">
                                     Conectado
@@ -950,28 +1021,36 @@ function DashboardContent({
                                 )}
                               </td>
                               <td className="py-4 px-4 text-slate-300">
-                                {storageData ? formatStorageFromGB(storageData.usage / (1024 ** 3)) : "N/A"}
+                                {storageData && storageData.used_bytes !== null
+                                  ? formatStorageFromGB(storageData.used_bytes / (1024 ** 3))
+                                  : "N/A"}
                               </td>
                               <td className="py-4 px-4 text-slate-300">
-                                {storageData ? formatStorageFromGB(storageData.limit / (1024 ** 3)) : "N/A"}
+                                {storageData && storageData.total_bytes !== null
+                                  ? formatStorageFromGB(storageData.total_bytes / (1024 ** 3))
+                                  : "N/A"}
                               </td>
                               <td className="py-4 px-4">
-                                {storageData ? (
-                                  <div className="w-32">
+                                {storageData && storageData.used_bytes !== null && storageData.total_bytes !== null ? (
+                                  <div className="w-full">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="text-xs text-slate-400">
+                                        {storageData.percent_used?.toFixed(1)}%
+                                      </span>
+                                    </div>
                                     <ProgressBar
-                                      current={storageData.usage}
-                                      total={storageData.limit}
+                                      current={storageData.used_bytes}
+                                      total={storageData.total_bytes}
                                       height="sm"
-                                      showPercentage={false}
                                     />
                                   </div>
                                 ) : (
-                                  <span className="text-xs text-slate-500">-</span>
+                                  <span className="text-xs text-slate-500">N/A</span>
                                 )}
                               </td>
                               <td className="py-4 px-4 text-center">
                                 <div className="flex items-center justify-center gap-2">
-                                  {acc.provider === "google_drive" && storageData && (
+                                  {acc.provider === "google_drive" && storageData && storageData.status === "ok" && (
                                     <a
                                       href={`/drive/${storageData.id}`}
                                       className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition"
