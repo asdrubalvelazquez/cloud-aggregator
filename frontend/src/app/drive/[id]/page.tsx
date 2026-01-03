@@ -11,6 +11,7 @@ import RenameModal from "@/components/RenameModal";
 import ContextMenu from "@/components/ContextMenu";
 import GooglePickerButton from "@/components/GooglePickerButton";
 import { DriveLoadingState } from "@/components/DriveLoadingState";
+import TransferModal from "@/components/TransferModal";
 
 type File = {
   id: string;
@@ -91,6 +92,9 @@ export default function DriveFilesPage() {
   const [renameFileName, setRenameFileName] = useState<string>("");
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameStatus, setRenameStatus] = useState<string | null>(null);
+
+  // Transfer modal state (Google Drive → OneDrive)
+  const [showTransferModal, setShowTransferModal] = useState(false);
 
   // Row selection state (visual highlight)
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
@@ -1180,6 +1184,15 @@ export default function DriveFilesPage() {
                       </div>
                     ) : "Copiar seleccionados"}
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowTransferModal(true)}
+                    disabled={batchCopying}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition"
+                    title="Copiar archivos seleccionados a OneDrive"
+                  >
+                    Copiar a OneDrive...
+                  </button>
                 </div>
               )}
             </div>
@@ -1565,6 +1578,18 @@ export default function DriveFilesPage() {
             copyDisabled={copying || !copyOptions || copyOptions.target_accounts.length === 0}
           />
         )}
+
+        {/* Transfer Modal (Google Drive → OneDrive) */}
+        <TransferModal
+          isOpen={showTransferModal}
+          onClose={() => setShowTransferModal(false)}
+          sourceAccountId={parseInt(accountId)}
+          selectedFileIds={Array.from(selectedFiles)}
+          onTransferComplete={() => {
+            // Optionally refresh files or show success message
+            setQuotaRefreshKey(prev => prev + 1);
+          }}
+        />
       </div>
     </main>
   );
