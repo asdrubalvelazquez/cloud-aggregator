@@ -125,34 +125,31 @@ export default function TransferModal({
     }
   }, [isOpen]);
   
-  // Auto-start transfer when accounts are loaded
+  // Auto-select account when loaded (does NOT execute transfer)
   useEffect(() => {
     if (!isOpen || autoStartAttemptedRef.current || transferState !== "idle") return;
     if (loading || targetAccounts.length === 0) return;
     
-    // Auto-start logic
+    // Auto-select logic (NO auto-execute)
     autoStartAttemptedRef.current = true;
     
     // Get last used account from localStorage
     const lastUsedAccount = localStorage.getItem('transfer_last_onedrive_account');
     
     if (targetAccounts.length === 1) {
-      // Only 1 account: auto-select and start
+      // Only 1 account: auto-select
       const account = targetAccounts[0];
-      console.log('[TRANSFER] Auto-starting with single account:', account.account_email);
+      console.log('[TRANSFER] Auto-selecting single account:', account.account_email);
       setSelectedTarget(account.cloud_account_id);
-      setTimeout(() => handleTransfer(account.cloud_account_id), 100);
     } else if (lastUsedAccount && targetAccounts.find(a => a.cloud_account_id === lastUsedAccount)) {
-      // Multiple accounts but last used is available: auto-select and start
-      console.log('[TRANSFER] Auto-starting with last used account');
+      // Multiple accounts but last used is available: auto-select
+      console.log('[TRANSFER] Auto-selecting last used account');
       setSelectedTarget(lastUsedAccount);
-      setTimeout(() => handleTransfer(lastUsedAccount), 100);
     } else if (targetAccounts.length > 1) {
-      // Multiple accounts, no preference: auto-select first and start
+      // Multiple accounts, no preference: auto-select first
       const account = targetAccounts[0];
-      console.log('[TRANSFER] Auto-starting with first account:', account.account_email);
+      console.log('[TRANSFER] Auto-selecting first account:', account.account_email);
       setSelectedTarget(account.cloud_account_id);
-      setTimeout(() => handleTransfer(account.cloud_account_id), 100);
     }
     // If no accounts, error will be shown in UI (handled in render)
   }, [isOpen, loading, targetAccounts, transferState]);
@@ -425,7 +422,6 @@ export default function TransferModal({
             <div className="flex justify-end gap-3">
               <button
                 onClick={handleClose}
-                disabled={!selectedTarget || loading || targetAccounts.length === 0}
                 className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition"
               >
                 Cancelar
