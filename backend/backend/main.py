@@ -3985,7 +3985,124 @@ async def onedrive_callback(request: Request):
             logging.error(f"[CALLBACK ERROR][ONEDRIVE] Unexpected HTTPException {e.status_code}")
             return RedirectResponse(f"{frontend_origin}/app?error=connection_failed")
     
-    # Get/create slot BEFORE upserting cloud_provider_account
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SAFE RECLAIM: Check for existing account with different user_id
+    # CRITICAL: Must happen BEFORE creating new slot to avoid duplication
+    # ═══════════════════════════════════════════════════════════════════════════
+    existing_account = supabase.table("cloud_provider_accounts").select(
+        "id, user_id, account_email, is_active"
+    ).eq("provider", "onedrive").eq("provider_account_id", microsoft_account_id).execute()
+    
+    if existing_account.data and len(existing_account.data) > 0:
+        existing = existing_account.data[0]
+        existing_user_id = existing["user_id"]
+        existing_email = existing.get("account_email", "")
+        
+        # Check if account belongs to different user
+        if existing_user_id != user_id:
+            # Ownership mismatch detected
+            # SAFE RECLAIM: Allow reassignment ONLY if provider_email matches
+            
+            existing_email_normalized = existing_email.lower().strip() if existing_email else ""
+            current_email_normalized = account_email.lower().strip() if account_email else ""
+            
+            if not existing_email_normalized or not current_email_normalized:
+                # Missing email data => BLOCK for safety
+                logging.error(
+                    f"[SECURITY][ONEDRIVE][CONNECT] Ownership violation: Missing email for validation. "
+                    f"existing_user_id={existing_user_id} current_user_id={user_id}"
+                )
+                return RedirectResponse(f"{frontend_origin}/app?error=ownership_violation")
+            
+            if existing_email_normalized == current_email_normalized:
+                # ✅ Email matches => SAFE RECLAIM
+                email_domain = account_email.split("@")[1] if account_email and "@" in account_email else "unknown"
+                logging.warning(
+                    f"[SECURITY][RECLAIM][ONEDRIVE][CONNECT] Account reassignment authorized: "
+                    f"provider_account_id={microsoft_account_id} "
+                    f"from_user_id={existing_user_id} to_user_id={user_id} "
+                    f"email_domain={email_domain} (verified match)"
+                )
+                
+                # Find existing slot to reuse (avoid creating duplicate)
+                existing_slot = supabase.table("cloud_slots_log").select("id").eq(
+                    "provider", "onedrive"
+                ).eq("provider_account_id", microsoft_account_id).order(
+                    "created_at", desc=True
+                ).limit(1).execute()
+                
+                if not existing_slot.data:
+                    logging.error(
+                        f"[SECURITY][RECLAIM][ONEDRIVE][CONNECT] No slot found for provider_account_id={microsoft_account_id}"
+                    )
+                    return RedirectResponse(f"{frontend_origin}/app?error=slot_not_found")
+                
+                reclaimed_slot_id = existing_slot.data[0]["id"]
+                
+                # Transfer ownership in cloud_provider_accounts and cloud_slots_log
+                # NOTE: We'll update instead of upsert to ensure we transfer the existing row
+                try:
+                    # Transfer ownership in cloud_slots_log FIRST
+                    supabase.table("cloud_slots_log").update({
+                        "user_id": user_id,
+                        "is_active": True,
+                        "disconnected_at": None
+                    }).eq("id", reclaimed_slot_id).execute()
+                    
+                    # Then update cloud_provider_accounts
+                    supabase.table("cloud_provider_accounts").update({
+                        "user_id": user_id,
+                        "is_active": True,
+                        "disconnected_at": None,
+                        "access_token": encrypt_token(access_token),
+                        "token_expiry": expiry_iso,
+                        "slot_log_id": reclaimed_slot_id,
+                        "account_email": account_email,
+                        "refresh_token": encrypt_token(refresh_token) if refresh_token else None
+                    }).eq("provider", "onedrive").eq("provider_account_id", microsoft_account_id).execute()
+                    
+                    logging.info(
+                        f"[SECURITY][RECLAIM][ONEDRIVE][CONNECT] Ownership transferred successfully. "
+                        f"new_user_id={user_id} slot_id={reclaimed_slot_id}"
+                    )
+                    
+                    # CRITICAL: Return immediately to avoid creating new slot
+                    return RedirectResponse(f"{frontend_origin}/app?connection=success")
+                    
+                except Exception as e:
+                    logging.error(
+                        f"[SECURITY][RECLAIM][ONEDRIVE][CONNECT] Ownership transfer failed: {type(e).__name__}"
+                    )
+                    return RedirectResponse(f"{frontend_origin}/app?error=reconnect_failed")
+            else:
+                # ❌ Email doesn't match => BLOCK (account takeover attempt)
+                logging.error(
+                    f"[SECURITY][ONEDRIVE][CONNECT] Account takeover attempt blocked! "
+                    f"provider_account_id={microsoft_account_id} belongs to different user. "
+                    f"Email mismatch prevents reclaim."
+                )
+                return RedirectResponse(f"{frontend_origin}/app?error=ownership_violation")
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # END SAFE RECLAIM - Proceed with normal flow (new account or same user reconnect)
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    # Guard defensivo: verificar que no exista slot huérfano antes de crear nuevo
+    orphan_slot_check = supabase.table("cloud_slots_log").select("id, user_id").eq(
+        "provider", "onedrive"
+    ).eq("provider_account_id", microsoft_account_id).execute()
+    
+    if orphan_slot_check.data and len(orphan_slot_check.data) > 0:
+        orphan_user_id = orphan_slot_check.data[0]["user_id"]
+        if orphan_user_id != user_id:
+            # Slot exists for different user but cloud_provider_accounts didn't catch it
+            logging.error(
+                f"[SECURITY][ONEDRIVE][CONNECT] Orphan slot detected: "
+                f"slot belongs to user_id={orphan_user_id} but current user_id={user_id}"
+            )
+            return RedirectResponse(f"{frontend_origin}/app?error=ownership_violation")
+    
+    # Get/create slot (only if no SAFE RECLAIM happened)
     try:
         slot_result = quota.connect_cloud_account_with_slot(
             supabase,
