@@ -60,6 +60,9 @@ export default function TransferModal({
   
   // Auto-close timer ref
   const autoCloseTimerRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Flag to track if auto-start has been attempted
+  const autoStartAttemptedRef = useRef(false);
 
   // Helper: Detect if job is in terminal state
   const isTerminalState = (job: any): boolean => {
@@ -117,9 +120,42 @@ export default function TransferModal({
   // Fetch OneDrive accounts when modal opens
   useEffect(() => {
     if (isOpen) {
+      autoStartAttemptedRef.current = false;  // Reset flag on modal open
       fetchOneDriveAccounts();
     }
   }, [isOpen]);
+  
+  // Auto-start transfer when accounts are loaded
+  useEffect(() => {
+    if (!isOpen || autoStartAttemptedRef.current || transferState !== "idle") return;
+    if (loading || targetAccounts.length === 0) return;
+    
+    // Auto-start logic
+    autoStartAttemptedRef.current = true;
+    
+    // Get last used account from localStorage
+    const lastUsedAccount = localStorage.getItem('transfer_last_onedrive_account');
+    
+    if (targetAccounts.length === 1) {
+      // Only 1 account: auto-select and start
+      const account = targetAccounts[0];
+      console.log('[TRANSFER] Auto-starting with single account:', account.account_email);
+      setSelectedTarget(account.cloud_account_id);
+      setTimeout(() => handleTransfer(account.cloud_account_id), 100);
+    } else if (lastUsedAccount && targetAccounts.find(a => a.cloud_account_id === lastUsedAccount)) {
+      // Multiple accounts but last used is available: auto-select and start
+      console.log('[TRANSFER] Auto-starting with last used account');
+      setSelectedTarget(lastUsedAccount);
+      setTimeout(() => handleTransfer(lastUsedAccount), 100);
+    } else if (targetAccounts.length > 1) {
+      // Multiple accounts, no preference: auto-select first and start
+      const account = targetAccounts[0];
+      console.log('[TRANSFER] Auto-starting with first account:', account.account_email);
+      setSelectedTarget(account.cloud_account_id);
+      setTimeout(() => handleTransfer(account.cloud_account_id), 100);
+    }
+    // If no accounts, error will be shown in UI (handled in render)
+  }, [isOpen, loading, targetAccounts, transferState]);
 
   // Poll transfer status when job is running
   useEffect(() => {
@@ -156,7 +192,7 @@ export default function TransferModal({
               
               const resultType = getFinalResultType(safeData);
               
-              // Auto-close after 2 seconds if full success
+              // Auto-close after 800ms if full success
               if (resultType === "success") {
                 // Clear any existing timer
                 if (autoCloseTimerRef.current) {
@@ -167,7 +203,7 @@ export default function TransferModal({
                   handleClose();
                   onTransferComplete();
                   autoCloseTimerRef.current = null;
-                }, 2000);
+                }, 800);
               } else {
                 // Partial or failed: call callback but don't auto-close
                 onTransferComplete();
@@ -225,11 +261,16 @@ export default function TransferModal({
     }
   };
 
-  const handleTransfer = async () => {
-    if (!selectedTarget) {
+  const handleTransfer = async (targetAccountId?: string) => {
+    const targetId = targetAccountId || selectedTarget;
+    
+    if (!targetId) {
       setError("Por favor selecciona una cuenta OneDrive destino");
       return;
     }
+    
+    // Save last used account
+    localStorage.setItem('transfer_last_onedrive_account', targetId);
 
     setTransferState("preparing");
     setError(null);
@@ -246,7 +287,7 @@ export default function TransferModal({
           source_provider: "google_drive",
           source_account_id: sourceAccountId,
           target_provider: "onedrive",
-          target_account_id: selectedTarget,
+          target_account_id: targetId,
           file_ids: selectedFileIds,
           target_folder_id: null, // Root folder
         }),
@@ -295,6 +336,7 @@ export default function TransferModal({
     setTransferJob(null);
     setTransferState("idle");
     setPollingErrors(0);
+    autoStartAttemptedRef.current = false;
   };
 
   const handleRetryPolling = () => {
@@ -311,6 +353,15 @@ export default function TransferModal({
     setTransferJob(null);
     setError(null);
     setPollingErrors(0);
+    autoStartAttemptedRef.current = false;
+    // Will trigger auto-start again
+    if (targetAccounts.length > 0) {
+      setTimeout(() => {
+        if (selectedTarget) {
+          handleTransfer(selectedTarget);
+        }
+      }, 100);
+    }
   };
 
   if (!isOpen) return null;
@@ -374,12 +425,13 @@ export default function TransferModal({
             <div className="flex justify-end gap-3">
               <button
                 onClick={handleClose}
+                disabled={!selectedTarget || loading || targetAccounts.length === 0}
                 className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition"
               >
                 Cancelar
               </button>
               <button
-                onClick={handleTransfer}
+                onClick={() => handleTransfer()}
                 disabled={!selectedTarget || loading || targetAccounts.length === 0}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white rounded-lg font-semibold transition"
               >
