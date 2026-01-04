@@ -2406,7 +2406,7 @@ async def get_transfer_status_endpoint(
     Frontend should poll this endpoint every 2-3 seconds during transfer.
     """
     try:
-        result = await transfer.get_transfer_job_status(job_id, user_id)
+        result = await transfer.get_transfer_job_status(supabase, job_id, user_id)
         return result
         
     except HTTPException:
