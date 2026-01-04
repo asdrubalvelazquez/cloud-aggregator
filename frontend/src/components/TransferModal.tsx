@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { authenticatedFetch } from "@/lib/api";
 
 type OneDriveAccount = {
@@ -57,6 +57,9 @@ export default function TransferModal({
   const [jobId, setJobId] = useState<string | null>(null);
   const [transferJob, setTransferJob] = useState<TransferJob | null>(null);
   const [pollingErrors, setPollingErrors] = useState(0);
+  
+  // Auto-close timer ref
+  const autoCloseTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Helper: Detect if job is in terminal state
   const isTerminalState = (job: any): boolean => {
@@ -155,9 +158,15 @@ export default function TransferModal({
               
               // Auto-close after 2 seconds if full success
               if (resultType === "success") {
-                setTimeout(() => {
+                // Clear any existing timer
+                if (autoCloseTimerRef.current) {
+                  clearTimeout(autoCloseTimerRef.current);
+                }
+                
+                autoCloseTimerRef.current = setTimeout(() => {
                   handleClose();
                   onTransferComplete();
+                  autoCloseTimerRef.current = null;
                 }, 2000);
               } else {
                 // Partial or failed: call callback but don't auto-close
@@ -271,11 +280,13 @@ export default function TransferModal({
   };
 
   const handleClose = () => {
-    if (transferState === "running" || transferState === "preparing") {
-      if (!confirm("¿Seguro que quieres cerrar? La transferencia seguirá en proceso.")) {
-        return;
-      }
+    // Allow closing/hiding always (no confirmation)
+    // Cleanup timer if exists
+    if (autoCloseTimerRef.current) {
+      clearTimeout(autoCloseTimerRef.current);
+      autoCloseTimerRef.current = null;
     }
+    
     onClose();
     // Reset state
     setSelectedTarget(null);
@@ -314,6 +325,7 @@ export default function TransferModal({
           <button
             onClick={handleClose}
             className="text-slate-400 hover:text-white transition"
+            title={transferState === "running" || transferState === "preparing" ? "Ocultar (la transferencia continuará)" : "Cerrar"}
           >
             ✕
           </button>
@@ -387,7 +399,8 @@ export default function TransferModal({
         )}
 
         {/* Transfer progress */}
-        {(transferState === "running" || transferState === "completed") && transferJob && (
+        {(transferState === "running" || transferState === "completed") && (
+          transferJob ? (
           <div className="space-y-4">
             {/* Progress percentage */}
             <div className="text-center">
@@ -541,6 +554,21 @@ export default function TransferModal({
               </div>
             )}
           </div>
+          ) : transferState === "running" ? (
+            <div className="text-center py-8">
+              <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-slate-600 border-t-emerald-500 mb-4"></div>
+              <p className="text-slate-300 font-semibold">Preparando transferencia...</p>
+              <p className="text-sm text-slate-400 mt-2">Obteniendo estado inicial</p>
+              <div className="mt-6">
+                <button
+                  onClick={handleClose}
+                  className="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg transition"
+                >
+                  Ocultar
+                </button>
+              </div>
+            </div>
+          ) : null
         )}
       </div>
     </div>
