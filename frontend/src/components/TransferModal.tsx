@@ -58,9 +58,6 @@ export default function TransferModal({
   const [transferJob, setTransferJob] = useState<TransferJob | null>(null);
   const [pollingErrors, setPollingErrors] = useState(0);
   
-  // Auto-close timer ref
-  const autoCloseTimerRef = useRef<NodeJS.Timeout | null>(null);
-  
   // Flag to track if auto-start has been attempted
   const autoStartAttemptedRef = useRef(false);
 
@@ -186,25 +183,7 @@ export default function TransferModal({
             if (isTerminalState(safeData)) {
               if (pollInterval) clearInterval(pollInterval);
               setTransferState("completed");
-              
-              const resultType = getFinalResultType(safeData);
-              
-              // Auto-close after 800ms if full success
-              if (resultType === "success") {
-                // Clear any existing timer
-                if (autoCloseTimerRef.current) {
-                  clearTimeout(autoCloseTimerRef.current);
-                }
-                
-                autoCloseTimerRef.current = setTimeout(() => {
-                  handleClose();
-                  onTransferComplete();
-                  autoCloseTimerRef.current = null;
-                }, 800);
-              } else {
-                // Partial or failed: call callback but don't auto-close
-                onTransferComplete();
-              }
+              // Do NOT auto-close or call callback - wait for user to click "Aceptar"
             }
           } else {
             throw new Error(`Polling failed: ${res.status}`);
@@ -319,12 +298,6 @@ export default function TransferModal({
 
   const handleClose = () => {
     // Allow closing/hiding always (no confirmation)
-    // Cleanup timer if exists
-    if (autoCloseTimerRef.current) {
-      clearTimeout(autoCloseTimerRef.current);
-      autoCloseTimerRef.current = null;
-    }
-    
     onClose();
     // Reset state
     setSelectedTarget(null);
@@ -334,6 +307,12 @@ export default function TransferModal({
     setTransferState("idle");
     setPollingErrors(0);
     autoStartAttemptedRef.current = false;
+  };
+
+  const handleAcceptResult = () => {
+    // User confirmed result - close modal and trigger refresh
+    onTransferComplete();
+    handleClose();
   };
 
   const handleRetryPolling = () => {
@@ -533,21 +512,29 @@ export default function TransferModal({
                     "bg-red-500/10 border-red-500/30"
                   }`}>
                     {/* Title */}
-                    <div className={`text-center font-bold text-lg mb-2 ${
+                    <div className={`text-center font-bold text-xl mb-3 ${
                       resultType === "success" ? "text-emerald-400" :
                       resultType === "partial" ? "text-amber-400" :
                       "text-red-400"
                     }`}>
                       {resultType === "success" && "✅ Transferencia completada"}
-                      {resultType === "partial" && "⚠️ Transferencia completada con errores"}
+                      {resultType === "partial" && "✅ Transferencia completada"}
                       {resultType === "failed" && "❌ Transferencia fallida"}
                     </div>
                     
-                    {/* Details */}
-                    <div className="text-sm text-slate-300 space-y-1">
+                    {/* Confirmation message */}
+                    <p className="text-center text-slate-300 mb-4">
+                      {resultType === "success" && total === 1 && "El archivo fue copiado a OneDrive correctamente."}
+                      {resultType === "success" && total > 1 && `Los ${total} archivos fueron copiados a OneDrive correctamente.`}
+                      {resultType === "partial" && `${completed} ${completed === 1 ? 'archivo fue copiado' : 'archivos fueron copiados'} correctamente, pero ${failed} ${failed === 1 ? 'falló' : 'fallaron'}.`}
+                      {resultType === "failed" && "No se pudo completar la transferencia. Verifica tu conexión e intenta nuevamente."}
+                    </p>
+                    
+                    {/* Details summary */}
+                    <div className="text-sm text-slate-400 space-y-1 mb-4">
                       <div className="flex justify-between">
-                        <span>Copiados:</span>
-                        <span className="font-semibold">{completed} / {total}</span>
+                        <span>Éxito:</span>
+                        <span className="font-semibold text-emerald-400">{completed}</span>
                       </div>
                       {failed > 0 && (
                         <div className="flex justify-between">
@@ -565,30 +552,12 @@ export default function TransferModal({
                   </div>
 
                   {/* Action buttons */}
-                  <div className="flex justify-end gap-3">
-                    {(resultType === "failed" || resultType === "partial") && (
-                      <button
-                        onClick={handleRetryTransfer}
-                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg font-semibold transition"
-                        title="Reintentar transferencia desde el inicio"
-                      >
-                        Reintentar
-                      </button>
-                    )}
-                    {pollingErrors > 0 && transferState === "completed" && (
-                      <button
-                        onClick={handleRetryPolling}
-                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition"
-                        title="Reintentar obtener estado actualizado"
-                      >
-                        Actualizar estado
-                      </button>
-                    )}
+                  <div className="flex justify-center gap-3">
                     <button
-                      onClick={handleClose}
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold transition"
+                      onClick={handleAcceptResult}
+                      className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold transition"
                     >
-                      Cerrar
+                      Aceptar
                     </button>
                   </div>
                 </>
