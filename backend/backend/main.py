@@ -3785,16 +3785,26 @@ async def onedrive_callback(request: Request):
             logging.error(f"[ONEDRIVE][USERINFO] Unexpected error: {type(e).__name__}")
             return RedirectResponse(f"{frontend_origin}/app?error=onedrive_userinfo_failed")
 
-    account_email = userinfo.get("userPrincipalName") or userinfo.get("mail")
+    # Extract multiple email/identity fields from Microsoft Graph API for robust matching
+    graph_mail = userinfo.get("mail")
+    graph_upn = userinfo.get("userPrincipalName")
     microsoft_account_id = userinfo.get("id")
+    
+    # Build primary account_email (for storage)
+    account_email = graph_upn or graph_mail
     
     # Normalize Microsoft account ID for consistent comparison
     if microsoft_account_id:
         microsoft_account_id = str(microsoft_account_id).strip()
-        # Secure logging: hash account_id, mask email domain
+        # Secure logging: hash account_id, log available email fields (domains only)
         account_hash = hashlib.sha256(microsoft_account_id.encode()).hexdigest()[:8]
-        email_domain = account_email.split("@")[1] if account_email and "@" in account_email else "unknown"
-        logging.info(f"[OAUTH CALLBACK][ONEDRIVE] account_hash={account_hash}, email_domain={email_domain}")
+        mail_domain = graph_mail.split("@")[1] if graph_mail and "@" in graph_mail else None
+        upn_domain = graph_upn.split("@")[1] if graph_upn and "@" in graph_upn else None
+        logging.info(
+            f"[OAUTH CALLBACK][ONEDRIVE] account_hash={account_hash}, "
+            f"mail_present={bool(graph_mail)}, mail_domain={mail_domain}, "
+            f"upn_present={bool(graph_upn)}, upn_domain={upn_domain}"
+        )
 
     # Calculate expiry
     expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
@@ -4001,20 +4011,42 @@ async def onedrive_callback(request: Request):
         # Check if account belongs to different user
         if existing_user_id != user_id:
             # Ownership mismatch detected
-            # SAFE RECLAIM: Allow reassignment ONLY if provider_email matches
+            # SAFE RECLAIM: Allow reassignment ONLY if ANY current email matches stored email
             
+            # Build set of current emails (normalized: trim + lowercase)
+            current_emails_set = set()
+            if graph_mail:
+                current_emails_set.add(graph_mail.lower().strip())
+            if graph_upn:
+                current_emails_set.add(graph_upn.lower().strip())
+            if account_email:  # Fallback (should be upn or mail)
+                current_emails_set.add(account_email.lower().strip())
+            
+            # Normalize existing email from DB
             existing_email_normalized = existing_email.lower().strip() if existing_email else ""
-            current_email_normalized = account_email.lower().strip() if account_email else ""
             
-            if not existing_email_normalized or not current_email_normalized:
+            # Validation: must have at least one email to compare
+            if not current_emails_set or not existing_email_normalized:
                 # Missing email data => BLOCK for safety
                 logging.error(
                     f"[SECURITY][ONEDRIVE][CONNECT] Ownership violation: Missing email for validation. "
-                    f"existing_user_id={existing_user_id} current_user_id={user_id}"
+                    f"existing_user_id={existing_user_id} current_user_id={user_id} "
+                    f"current_emails_count={len(current_emails_set)} existing_email_present={bool(existing_email_normalized)}"
                 )
                 return RedirectResponse(f"{frontend_origin}/app?error=ownership_violation")
             
-            if existing_email_normalized == current_email_normalized:
+            # Check if ANY current email matches the stored email
+            emails_match = existing_email_normalized in current_emails_set
+            
+            # Log match attempt (domains only for security)
+            current_domains = [e.split("@")[1] if "@" in e else "invalid" for e in current_emails_set]
+            existing_domain = existing_email_normalized.split("@")[1] if "@" in existing_email_normalized else "invalid"
+            logging.info(
+                f"[SECURITY][ONEDRIVE][CONNECT] Email match check: "
+                f"existing_domain={existing_domain} current_domains={current_domains} match={emails_match}"
+            )
+            
+            if emails_match:
                 # ✅ Email matches => SAFE RECLAIM
                 email_domain = account_email.split("@")[1] if account_email and "@" in account_email else "unknown"
                 logging.warning(
