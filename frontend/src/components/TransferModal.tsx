@@ -401,7 +401,7 @@ export default function TransferModal({
         {/* Transfer progress */}
         {(transferState === "running" || transferState === "completed") && (
           transferJob ? (
-          <div className="space-y-4">
+            <div className="space-y-4">
             {/* Progress percentage */}
             <div className="text-center">
               <div className="text-2xl font-bold text-emerald-400">
@@ -553,7 +553,7 @@ export default function TransferModal({
                 🔄 Copiando archivos...
               </div>
             )}
-          </div>
+            </div>
           ) : transferState === "running" ? (
             <div className="text-center py-8">
               <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-slate-600 border-t-emerald-500 mb-4"></div>
