@@ -91,15 +91,30 @@ export default function TransferModal({
   };
 
   // Helper: Determine final result type
-  const getFinalResultType = (job: any): "success" | "partial" | "failed" => {
+  const getFinalResultType = (job: any): "success" | "partial" | "failed" | "skipped" => {
     if (!job) return "failed";
     
     const completed = parseInt(job.completed_items) || 0;
     const failed = parseInt(job.failed_items) || 0;
+    const skipped = parseInt(job.skipped_items) || 0;
     
-    if (failed === 0 && completed > 0) return "success";
-    if (failed > 0 && completed > 0) return "partial";
-    return "failed";
+    // Rule 1: Real failure (only failed items, nothing else)
+    if (failed > 0 && completed === 0 && skipped === 0) return "failed";
+    
+    // Rule 2: Pure success (only completed items)
+    if (completed > 0 && failed === 0 && skipped === 0) return "success";
+    
+    // Rule 3: Only skipped (files already exist - NOT an error)
+    if (completed === 0 && failed === 0 && skipped > 0) return "skipped";
+    
+    // Rule 4: Partial (mix of completed/failed)
+    if (completed > 0 && failed > 0) return "partial";
+    
+    // Rule 5: Mix with skipped (considered success if no real failures)
+    if (skipped > 0 && failed === 0 && completed >= 0) return "success";
+    
+    // Default: partial if there's any mix
+    return "partial";
   };
 
   // Helper: Format bytes to human-readable
@@ -464,15 +479,20 @@ export default function TransferModal({
             <div className="text-center">
               <div className="text-2xl font-bold text-emerald-400">
                 {transferJob.total_items > 0 
-                  ? Math.round((transferJob.completed_items / transferJob.total_items) * 100)
+                  ? Math.round(((transferJob.completed_items + transferJob.failed_items + (transferJob.skipped_items || 0)) / transferJob.total_items) * 100)
                   : 0}%
               </div>
               <div className="text-sm text-slate-400 mt-1">
-                {transferJob.completed_items} / {transferJob.total_items} archivos completados
+                {transferJob.completed_items + transferJob.failed_items + (transferJob.skipped_items || 0)} / {transferJob.total_items} archivos procesados
               </div>
               {transferJob.failed_items > 0 && (
                 <div className="text-sm text-red-400 mt-1">
                   {transferJob.failed_items} fallidos
+                </div>
+              )}
+              {(transferJob.skipped_items || 0) > 0 && (
+                <div className="text-sm text-yellow-400 mt-1">
+                  {transferJob.skipped_items} omitidos
                 </div>
               )}
               {pollingErrors > 0 && transferState === "running" && (
@@ -547,33 +567,43 @@ export default function TransferModal({
                   <div className={`rounded-lg p-4 border ${
                     resultType === "success" ? "bg-emerald-500/10 border-emerald-500/30" :
                     resultType === "partial" ? "bg-amber-500/10 border-amber-500/30" :
+                    resultType === "skipped" ? "bg-blue-500/10 border-blue-500/30" :
                     "bg-red-500/10 border-red-500/30"
                   }`}>
                     {/* Title */}
                     <div className={`text-center font-bold text-xl mb-3 ${
                       resultType === "success" ? "text-emerald-400" :
                       resultType === "partial" ? "text-amber-400" :
+                      resultType === "skipped" ? "text-blue-400" :
                       "text-red-400"
                     }`}>
                       {resultType === "success" && "✅ Transferencia completada"}
-                      {resultType === "partial" && "✅ Transferencia completada"}
+                      {resultType === "partial" && "⚠️ Transferencia completada con advertencias"}
+                      {resultType === "skipped" && "ℹ️ Ya existe en destino"}
                       {resultType === "failed" && "❌ Transferencia fallida"}
                     </div>
                     
                     {/* Confirmation message */}
                     <p className="text-center text-slate-300 mb-4">
-                      {resultType === "success" && total === 1 && "El archivo fue copiado a OneDrive correctamente."}
-                      {resultType === "success" && total > 1 && `Los ${total} archivos fueron copiados a OneDrive correctamente.`}
-                      {resultType === "partial" && `${completed} ${completed === 1 ? 'archivo fue copiado' : 'archivos fueron copiados'} correctamente, pero ${failed} ${failed === 1 ? 'falló' : 'fallaron'}.`}
+                      {resultType === "success" && completed > 0 && total === 1 && "El archivo fue copiado a OneDrive correctamente."}
+                      {resultType === "success" && completed > 0 && total > 1 && `Los ${completed} archivos fueron copiados a OneDrive correctamente.`}
+                      {resultType === "success" && completed === 0 && skipped > 0 && total === 1 && "El archivo ya existe en la carpeta destino. No se realizó la copia."}
+                      {resultType === "success" && completed === 0 && skipped > 0 && total > 1 && `Los ${skipped} archivos ya existen en la carpeta destino. No se realizó la copia.`}
+                      {resultType === "partial" && completed > 0 && failed > 0 && `${completed} ${completed === 1 ? 'archivo fue copiado' : 'archivos fueron copiados'} correctamente, pero ${failed} ${failed === 1 ? 'falló' : 'fallaron'}.`}
+                      {resultType === "partial" && completed === 0 && failed > 0 && skipped > 0 && "Algunos archivos ya existían y otros fallaron."}
+                      {resultType === "skipped" && total === 1 && "El archivo ya existe en la carpeta destino. No se realizó la copia."}
+                      {resultType === "skipped" && total > 1 && `Los ${total} archivos ya existen en la carpeta destino. No se realizó la copia.`}
                       {resultType === "failed" && "No se pudo completar la transferencia. Verifica tu conexión e intenta nuevamente."}
                     </p>
                     
                     {/* Details summary */}
                     <div className="text-sm text-slate-400 space-y-1 mb-4">
-                      <div className="flex justify-between">
-                        <span>Éxito:</span>
-                        <span className="font-semibold text-emerald-400">{completed}</span>
-                      </div>
+                      {completed > 0 && (
+                        <div className="flex justify-between">
+                          <span>Éxito:</span>
+                          <span className="font-semibold text-emerald-400">{completed}</span>
+                        </div>
+                      )}
                       {skipped > 0 && (
                         <div className="flex justify-between">
                           <span>Omitidos (ya existían):</span>
