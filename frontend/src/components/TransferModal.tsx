@@ -94,6 +94,9 @@ export default function TransferModal({
   const getFinalResultType = (job: any): "success" | "partial" | "failed" | "skipped" => {
     if (!job) return "failed";
     
+    // Check job-level status first (for done_skipped state from backend)
+    if (job.status === "done_skipped") return "skipped";
+    
     const completed = parseInt(job.completed_items) || 0;
     const failed = parseInt(job.failed_items) || 0;
     const skipped = parseInt(job.skipped_items) || 0;
@@ -286,7 +289,7 @@ export default function TransferModal({
     setPollingErrors(0);
 
     try {
-      // Step 1: Create transfer job
+      // PHASE 1: Create empty job (fast, <500ms)
       const createRes = await authenticatedFetch("/transfer/create", {
         method: "POST",
         headers: {
@@ -310,9 +313,22 @@ export default function TransferModal({
       const { job_id } = await createRes.json();
       setJobId(job_id);
 
-      // Step 2: Run transfer job (async, don't wait for completion)
+      // PHASE 2: Prepare job (fetch metadata, check quota, create items)
+      // This is the heavy phase, use 120s timeout
+      const prepareRes = await authenticatedFetch(`/transfer/prepare/${job_id}`, {
+        method: "POST",
+        signal: AbortSignal.timeout(120000), // 120s for metadata fetch
+      });
+
+      if (!prepareRes.ok) {
+        const errorData = await prepareRes.json().catch(() => ({}));
+        throw new Error(extractErrorMessage(errorData) || `Failed to prepare job: ${prepareRes.status}`);
+      }
+
+      // PHASE 3: Run transfer job (async, don't wait for completion)
       const runRes = await authenticatedFetch(`/transfer/run/${job_id}`, {
         method: "POST",
+        signal: AbortSignal.timeout(120000), // 120s timeout
       });
 
       if (!runRes.ok) {

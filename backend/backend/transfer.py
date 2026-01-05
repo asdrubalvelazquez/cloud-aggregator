@@ -45,7 +45,7 @@ async def create_transfer_job(
     Returns:
         job_id (UUID as string)
     """
-    # Create job
+    # Create job in pending state (will be updated to queued/blocked by prepare)
     job_data = {
         "user_id": user_id,
         "source_provider": source_provider,
@@ -53,7 +53,7 @@ async def create_transfer_job(
         "target_provider": target_provider,
         "target_account_id": target_account_id,
         "target_folder_id": target_folder_id,
-        "status": "queued",
+        "status": "pending",  # pending → prepare → queued/blocked
         "total_items": total_items,
         "completed_items": 0,
         "failed_items": 0,

@@ -2029,14 +2029,21 @@ async def create_transfer_job_endpoint(
     user_id: str = Depends(verify_supabase_jwt),
 ):
     """
-    Create a new cross-provider transfer job.
+    PHASE 1: Create empty transfer job (fast, <500ms).
+    
+    BLOCKER 1: State Flow
+    - Creates job with status='pending'
+    - Stores file_ids in metadata JSONB
+    - Returns job_id immediately (no metadata fetch)
+    - Client must call POST /transfer/prepare/{job_id} next
+    
+    BLOCKER 5: Metadata Validation
+    - Max 100 files per job (payload protection)
+    - file_ids must be non-empty string array
     
     SECURITY:
-    - Validates that both source and target accounts belong to user
-    - Creates job + items in database (status='queued')
-    - Returns job_id for subsequent /transfer/run call
-    
-    PHASE 1 ONLY SUPPORTS: Google Drive → OneDrive
+    - Validates both source/target accounts belong to user
+    - Only Google Drive → OneDrive supported
     """
     try:
         # PHASE 1 ENFORCEMENT: Only Google Drive → OneDrive
@@ -2051,8 +2058,26 @@ async def create_transfer_job_endpoint(
                 detail={"error": "unsupported_provider", "message": f"Phase 1 only supports target_provider='onedrive', got '{request.target_provider}'"}
             )
         
+        # BLOCKER 5: Validate metadata (file_ids)
         if not request.file_ids:
             raise HTTPException(status_code=400, detail={"error": "invalid_request", "message": "file_ids cannot be empty"})
+        
+        if not isinstance(request.file_ids, list):
+            raise HTTPException(status_code=400, detail={"error": "invalid_request", "message": "file_ids must be an array"})
+        
+        # BLOCKER 5: Protect against huge payloads (max 100 files per job)
+        if len(request.file_ids) > 100:
+            raise HTTPException(
+                status_code=400, 
+                detail={
+                    "error": "payload_too_large", 
+                    "message": f"Maximum 100 files per transfer (requested: {len(request.file_ids)})"
+                }
+            )
+        
+        # Validate file_ids are strings
+        if not all(isinstance(fid, str) and fid.strip() for fid in request.file_ids):
+            raise HTTPException(status_code=400, detail={"error": "invalid_request", "message": "All file_ids must be non-empty strings"})
         
         # Verify source account ownership (Google Drive uses cloud_accounts table WITHOUT provider column)
         try:
@@ -2106,44 +2131,8 @@ async def create_transfer_job_endpoint(
                 detail={"error": "account_not_owned", "message": "Target OneDrive account not found, doesn't belong to you, or is inactive"}
             )
         
-        # Get file metadata from Google Drive to populate sizes
-        from backend.google_drive import get_valid_token
-        google_token = await get_valid_token(request.source_account_id)
-        
-        file_items = []
-        for file_id in request.file_ids:
-            try:
-                async with httpx.AsyncClient() as client:
-                    # Get file metadata (name + size)
-                    resp = await client.get(
-                        f"https://www.googleapis.com/drive/v3/files/{file_id}",
-                        params={"fields": "name,size,mimeType"},
-                        headers={"Authorization": f"Bearer {google_token}"},
-                        timeout=10.0
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        file_items.append({
-                            "source_item_id": file_id,
-                            "source_name": data.get("name", "unknown"),
-                            "size_bytes": int(data.get("size", 0))
-                        })
-                    else:
-                        logging.warning(f"[TRANSFER] Could not fetch metadata for file {file_id}: {resp.status_code}")
-                        file_items.append({
-                            "source_item_id": file_id,
-                            "source_name": f"file_{file_id}",
-                            "size_bytes": 0
-                        })
-            except Exception as e:
-                logging.warning(f"[TRANSFER] Error fetching metadata for file {file_id}: {e}")
-                file_items.append({
-                    "source_item_id": file_id,
-                    "source_name": f"file_{file_id}",
-                    "size_bytes": 0
-                })
-        
-        # Create transfer job
+        # PHASE 1: Create empty job (fast, <500ms)
+        # Metadata fetch and quota check moved to /transfer/prepare/{job_id}
         job_id = await transfer.create_transfer_job(
             supabase,
             user_id=user_id,
@@ -2152,14 +2141,16 @@ async def create_transfer_job_endpoint(
             target_provider=request.target_provider,
             target_account_id=str(request.target_account_id),
             target_folder_id=request.target_folder_id,
-            total_items=len(file_items),
-            total_bytes=sum(item["size_bytes"] for item in file_items)
+            total_items=len(request.file_ids),  # Estimated count
+            total_bytes=0  # Will be updated in prepare
         )
         
-        # Create transfer job items
-        await transfer.create_transfer_job_items(supabase, job_id, file_items)
+        # Store file_ids in job metadata (JSON column) for prepare phase
+        supabase.table("transfer_jobs").update({
+            "metadata": {"file_ids": request.file_ids}
+        }).eq("id", job_id).execute()
         
-        logging.info(f"[TRANSFER] Created job {job_id} for user {user_id}: {len(file_items)} files")
+        logging.info(f"[TRANSFER] Created empty job {job_id} for user {user_id}: {len(request.file_ids)} files (pending prepare)")
         return {"job_id": str(job_id)}
         
     except HTTPException:
@@ -2169,21 +2160,130 @@ async def create_transfer_job_endpoint(
         raise HTTPException(status_code=500, detail=f"Failed to create transfer job: {str(e)}")
 
 
-@app.post("/transfer/run/{job_id}")
-async def run_transfer_job_endpoint(
+# ============================================================================
+# BLOCKER 3: Provider Abstraction for Metadata Fetch
+# ============================================================================
+
+async def get_source_metadata_google_drive(source_account_id: int, file_ids: List[str]) -> List[Dict[str, Any]]:
+    """
+    Fetch file metadata from Google Drive.
+    
+    Args:
+        source_account_id: Google Drive account ID (int)
+        file_ids: List of Google Drive file IDs
+    
+    Returns:
+        List of {source_item_id, source_name, size_bytes}
+    """
+    from backend.google_drive import get_valid_token
+    
+    google_token = await get_valid_token(source_account_id)
+    file_items = []
+    
+    for file_id in file_ids:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"https://www.googleapis.com/drive/v3/files/{file_id}",
+                    params={"fields": "name,size,mimeType"},
+                    headers={"Authorization": f"Bearer {google_token}"},
+                    timeout=10.0
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    file_items.append({
+                        "source_item_id": file_id,
+                        "source_name": data.get("name", "unknown"),
+                        "size_bytes": int(data.get("size", 0))
+                    })
+                else:
+                    logging.warning(f"[TRANSFER] Could not fetch metadata for file {file_id}: {resp.status_code}")
+                    file_items.append({
+                        "source_item_id": file_id,
+                        "source_name": f"file_{file_id}",
+                        "size_bytes": 0
+                    })
+        except Exception as e:
+            logging.warning(f"[TRANSFER] Error fetching metadata for file {file_id}: {e}")
+            file_items.append({
+                "source_item_id": file_id,
+                "source_name": f"file_{file_id}",
+                "size_bytes": 0
+            })
+    
+    return file_items
+
+
+async def get_source_metadata(provider: str, source_account_id: str, file_ids: List[str]) -> List[Dict[str, Any]]:
+    """
+    Provider-agnostic metadata fetch (BLOCKER 3: extensible for OneDrive/Dropbox).
+    
+    Args:
+        provider: "google_drive" | "onedrive" | "dropbox"
+        source_account_id: Account ID (str to support both int and UUID)
+        file_ids: List of file IDs
+    
+    Returns:
+        List of {source_item_id, source_name, size_bytes}
+    
+    Raises:
+        HTTPException: Unsupported provider
+    """
+    if provider == "google_drive":
+        return await get_source_metadata_google_drive(int(source_account_id), file_ids)
+    elif provider == "onedrive":
+        # TODO: Implement OneDrive metadata fetch (for OneDrive→Google future support)
+        raise HTTPException(
+            status_code=501,
+            detail=f"OneDrive as source provider not yet implemented"
+        )
+    elif provider == "dropbox":
+        # TODO: Implement Dropbox metadata fetch
+        raise HTTPException(
+            status_code=501,
+            detail=f"Dropbox as source provider not yet implemented"
+        )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported source provider: {provider}"
+        )
+
+
+@app.post("/transfer/prepare/{job_id}")
+async def prepare_transfer_job_endpoint(
     job_id: str,
     user_id: str = Depends(verify_supabase_jwt),
 ):
     """
-    Execute a transfer job (downloads from Google Drive, uploads to OneDrive).
+    PHASE 2: Prepare transfer job (fetch metadata, check quota, create items).
+    
+    BLOCKER 1: State Flow
+    - Accepts job with status='pending'
+    - Transitions to 'queued' (success) or 'blocked_quota' (quota exceeded)
+    - Must be called before /transfer/run
+    
+    BLOCKER 3: Provider Abstraction
+    - Uses get_source_metadata() for extensibility
+    - Currently supports: Google Drive
+    - Stubs: OneDrive, Dropbox (501 Not Implemented)
+    
+    BLOCKER 4: Idempotence
+    - If already queued/blocked/done: returns current status
+    - Safe to retry on network errors
+    
+    This is the heavy lifting phase moved out of /transfer/create to avoid timeouts.
+    
+    Process:
+    1. Fetch file metadata from Google Drive (name, size)
+    2. Calculate total_bytes
+    3. Check transfer quota (raises 402 if exceeded)
+    4. Create transfer_job_items
+    5. Update job status to 'queued' (ready) or 'blocked_quota'
     
     SECURITY:
     - Validates job belongs to user
-    - Only runs jobs with status='queued'
-    - Updates job/item status atomically
-    
-    NOTE: Executes in-request (no background worker). For large transfers,
-    client should show progress UI and handle potential timeouts gracefully.
+    - Only prepares jobs with status='pending'
     """
     try:
         # Load job and verify ownership
@@ -2201,8 +2301,186 @@ async def run_transfer_job_endpoint(
         
         job = job_result.data
         
+        # BLOCKER 4: Idempotence - skip if already prepared
+        if job["status"] in ["queued", "blocked_quota", "running", "done", "done_skipped", "failed", "partial", "cancelled"]:
+            logging.info(f"[TRANSFER] Job {job_id} already prepared (status={job['status']}), skipping prepare")
+            return {
+                "job_id": str(job_id),
+                "status": job["status"],
+                "total_items": job.get("total_items", 0),
+                "total_bytes": job.get("total_bytes", 0),
+                "message": "Job already prepared"
+            }
+        
+        # AUDIT CONDITION 1: Single-flight protection - reject if already preparing
+        if job["status"] == "preparing":
+            raise HTTPException(
+                status_code=409, 
+                detail="Job is already being prepared by another request. Please wait."
+            )
+        
+        if job["status"] != "pending":
+            raise HTTPException(status_code=400, detail=f"Job status is '{job['status']}', cannot prepare (expected 'pending')")
+        
+        # AUDIT CONDITION 1: Mark as preparing to prevent concurrent prepare calls
+        supabase.table("transfer_jobs").update({
+            "status": "preparing"
+        }).eq("id", job_id).execute()
+        logging.info(f"[TRANSFER] Job {job_id} marked as preparing")
+        
+        # Get file_ids from job metadata
+        file_ids = job.get("metadata", {}).get("file_ids", [])
+        if not file_ids:
+            raise HTTPException(status_code=400, detail="Job has no file_ids to prepare")
+        
+        # BLOCKER 3: Provider-agnostic metadata fetch
+        file_items = await get_source_metadata(
+            provider=job["source_provider"],
+            source_account_id=job["source_account_id"],
+            file_ids=file_ids
+        )
+        
+        # Calculate total bytes
+        total_bytes = sum(item["size_bytes"] for item in file_items)
+        
+        # QUOTA CHECK: Validate transfer quota
+        try:
+            quota_check = quota.check_transfer_bytes_available(supabase, user_id, total_bytes)
+            logging.info(
+                f"[TRANSFER] Quota check passed for job {job_id}: "
+                f"requesting {total_bytes / 1_073_741_824:.2f}GB, "
+                f"remaining {quota_check.get('remaining_bytes', 0) / 1_073_741_824:.2f}GB"
+            )
+            
+            # Create transfer job items
+            await transfer.create_transfer_job_items(supabase, job_id, file_items)
+            
+            # Update job: pending → queued (ready to run)
+            supabase.table("transfer_jobs").update({
+                "status": "queued",
+                "total_items": len(file_items),
+                "total_bytes": total_bytes
+            }).eq("id", job_id).execute()
+            
+            logging.info(f"[TRANSFER] Prepared job {job_id}: {len(file_items)} files, {total_bytes / 1_073_741_824:.2f}GB")
+            return {
+                "job_id": str(job_id),
+                "status": "queued",
+                "total_items": len(file_items),
+                "total_bytes": total_bytes
+            }
+            
+        except HTTPException as quota_error:
+            # Quota exceeded: mark job as blocked
+            logging.warning(
+                f"[TRANSFER] Quota exceeded for job {job_id}: "
+                f"requesting {total_bytes / 1_073_741_824:.2f}GB - {quota_error.detail}"
+            )
+            
+            supabase.table("transfer_jobs").update({
+                "status": "blocked_quota",
+                "total_bytes": total_bytes
+            }).eq("id", job_id).execute()
+            
+            # Re-raise quota error to frontend
+            raise
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"[TRANSFER] Failed to prepare job {job_id}")
+        # Mark job as failed
+        try:
+            supabase.table("transfer_jobs").update({
+                "status": "failed",
+                "error_message": str(e)[:500]
+            }).eq("id", job_id).execute()
+        except:
+            pass
+        raise HTTPException(status_code=500, detail=f"Failed to prepare transfer job: {str(e)}")
+
+
+@app.post("/transfer/run/{job_id}")
+async def run_transfer_job_endpoint(
+    job_id: str,
+    user_id: str = Depends(verify_supabase_jwt),
+):
+    """
+    PHASE 3: Execute a transfer job (downloads from Google Drive, uploads to OneDrive).
+    
+    BLOCKER 1: State Flow
+    - Accepts job with status='queued' (prepared and ready)
+    - Rejects 'pending' (not prepared), 'blocked_quota' (no quota)
+    - Transitions: queued → running → done/done_skipped/failed/partial
+    
+    BLOCKER 4: Idempotence
+    - If already done/failed/partial: returns current status (no re-execution)
+    - If running: allows retry/resume (idempotent)
+    
+    BLOCKER 6: Timeout Handling
+    - Executes synchronously (in-request)
+    - Client must use 120s timeout (handled in frontend)
+    - Shows progress UI during transfer
+    
+    SECURITY:
+    - Validates job belongs to user
+    - Updates job/item status atomically
+    """
+    try:
+        # Load job and verify ownership
+        job_result = (
+            supabase.table("transfer_jobs")
+            .select("*")
+            .eq("id", job_id)
+            .eq("user_id", user_id)
+            .single()
+            .execute()
+        )
+        
+        if not job_result.data:
+            raise HTTPException(status_code=404, detail="Transfer job not found or doesn't belong to you")
+        
+        job = job_result.data
+        
+        # BLOCKER 4: Idempotence - don't re-run terminal states
+        if job["status"] in ["done", "done_skipped", "failed", "partial", "cancelled"]:
+            logging.info(f"[TRANSFER] Job {job_id} already completed (status={job['status']}), skipping run")
+            # Return current status without re-executing
+            status_data = await transfer.get_transfer_job_status(supabase, job_id, user_id)
+            return {
+                "job_id": str(job_id),
+                "status": job["status"],
+                "message": "Job already completed",
+                **status_data
+            }
+        
+        # BLOCKER 1: Only accept 'queued' status (prepared and ready)
         if job["status"] != "queued":
-            raise HTTPException(status_code=400, detail=f"Job status is '{job['status']}', expected 'queued'")
+            # AUDIT CONDITION 2: If already running, return current status without re-executing
+            if job["status"] == "running":
+                logging.info(f"[TRANSFER] Job {job_id} already running, returning current status")
+                status_data = await transfer.get_transfer_job_status(supabase, job_id, user_id)
+                return {
+                    "job_id": str(job_id),
+                    "status": "running",
+                    "message": "Job already in progress",
+                    **status_data
+                }
+            elif job["status"] == "pending":
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Job not prepared yet. Run POST /transfer/prepare/{job_id} first."
+                )
+            elif job["status"] == "blocked_quota":
+                raise HTTPException(
+                    status_code=402, 
+                    detail="Job blocked: quota exceeded. Upgrade plan or free up quota."
+                )
+            else:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Job status is '{job['status']}', cannot run. Expected 'queued'."
+                )
         
         # Guard: Verify job has items before running
         items_check = (
@@ -2391,7 +2669,7 @@ async def run_transfer_job_endpoint(
         # Determine final job status
         final_result = (
             supabase.table("transfer_jobs")
-            .select("total_items,completed_items,failed_items")
+            .select("total_items,completed_items,failed_items,skipped_items")
             .eq("id", job_id)
             .single()
             .execute()
@@ -2400,13 +2678,26 @@ async def run_transfer_job_endpoint(
         total = final_result.data["total_items"]
         completed = final_result.data["completed_items"]
         failed = final_result.data["failed_items"]
+        skipped = final_result.data.get("skipped_items", 0)
         
-        if completed == total:
+        # BLOCKER 1: Terminal state determination
+        # Special case: all items skipped (already exist in destination)
+        if skipped == total and completed == 0 and failed == 0:
+            final_status = "done_skipped"
+            logging.info(f"[TRANSFER] Job {job_id} completed: all {total} items already existed (skipped)")
+        elif completed == total and failed == 0:
+            # Pure success (all completed, no failures)
             final_status = "done"
-        elif failed == total:
+        elif failed == total and completed == 0:
+            # Pure failure (all failed, no success)
             final_status = "failed"
-        else:
+        elif completed > 0 or skipped > 0:
+            # Partial success (some completed/skipped, some failed)
             final_status = "partial"
+        else:
+            # Unexpected state (no items processed?)
+            final_status = "failed"
+            logging.warning(f"[TRANSFER] Job {job_id} unexpected state: completed=0, failed=0, skipped=0, total={total}")
         
         await transfer.update_job_status(supabase, job_id, status=final_status, completed_at=True)
         
