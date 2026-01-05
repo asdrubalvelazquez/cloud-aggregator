@@ -137,6 +137,7 @@ async def get_transfer_job_status(supabase: Client, job_id: str, user_id: str) -
     if items:
         completed_count = sum(1 for item in items if item.get("status") in ["completed", "success", "done"])
         failed_count = sum(1 for item in items if item.get("status") in ["failed", "error"])
+        skipped_count = sum(1 for item in items if item.get("status") == "skipped")
         total_count = len(items)
         transferred_bytes = sum(item.get("bytes_transferred", 0) or 0 for item in items)
         total_bytes = sum(item.get("size_bytes", 0) or 0 for item in items)
@@ -144,6 +145,7 @@ async def get_transfer_job_status(supabase: Client, job_id: str, user_id: str) -
         # Fallback to job fields if no items yet
         completed_count = job_data.get("completed_items", 0) or 0
         failed_count = job_data.get("failed_items", 0) or 0
+        skipped_count = 0
         total_count = job_data.get("total_items", 0) or 0
         transferred_bytes = job_data.get("transferred_bytes", 0) or 0
         total_bytes = job_data.get("total_bytes", 0) or 0
@@ -154,6 +156,7 @@ async def get_transfer_job_status(supabase: Client, job_id: str, user_id: str) -
         "total_items": total_count,
         "completed_items": completed_count,
         "failed_items": failed_count,
+        "skipped_items": skipped_count,
         "transferred_bytes": transferred_bytes,
         "total_bytes": total_bytes,
     }
@@ -214,7 +217,9 @@ async def update_item_status(
     item_id: str,
     status: str,
     error_message: Optional[str] = None,
-    target_item_id: Optional[str] = None
+    target_item_id: Optional[str] = None,
+    target_web_url: Optional[str] = None,
+    bytes_transferred: Optional[int] = None
 ) -> None:
     """
     Update transfer job item status.
@@ -222,9 +227,11 @@ async def update_item_status(
     Args:
         supabase: Supabase client
         item_id: Transfer job item UUID
-        status: New status ('queued', 'running', 'done', 'failed')
-        error_message: Error message if failed
+        status: New status ('queued', 'running', 'done', 'failed', 'skipped')
+        error_message: Error message if failed (or reason if skipped)
         target_item_id: Target item ID if transferred successfully
+        target_web_url: OneDrive web URL for "View in OneDrive" button
+        bytes_transferred: Bytes transferred (for progress tracking)
     """
     update_data = {
         "status": status
@@ -234,6 +241,10 @@ async def update_item_status(
         update_data["error_message"] = error_message
     if target_item_id:
         update_data["target_item_id"] = target_item_id
+    if target_web_url:
+        update_data["target_web_url"] = target_web_url
+    if bytes_transferred is not None:
+        update_data["bytes_transferred"] = bytes_transferred
     
     if status == "running":
         update_data["started_at"] = datetime.now(timezone.utc).isoformat()
@@ -338,8 +349,28 @@ async def upload_to_onedrive_chunked(
         # Step 3: Get final result
         final_response = chunk_response.json()
         
+        item_id = final_response.get("id")
+        web_url = final_response.get("webUrl")
+        
+        # If webUrl not in response, fetch it explicitly
+        if item_id and not web_url:
+            try:
+                get_item_url = f"{GRAPH_API_BASE}/me/drive/items/{item_id}"
+                get_response = await client.get(
+                    get_item_url,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    params={"$select": "webUrl,name,size"}
+                )
+                if get_response.status_code == 200:
+                    item_data = get_response.json()
+                    web_url = item_data.get("webUrl")
+                    logger.info(f"[ONEDRIVE_UPLOAD] Fetched webUrl: {web_url}")
+            except Exception as e:
+                logger.warning(f"[ONEDRIVE_UPLOAD] Failed to fetch webUrl: {e}")
+        
         return {
-            "id": final_response.get("id"),
+            "id": item_id,
             "name": final_response.get("name"),
-            "size": final_response.get("size", file_size)
+            "size": final_response.get("size", file_size),
+            "webUrl": web_url
         }

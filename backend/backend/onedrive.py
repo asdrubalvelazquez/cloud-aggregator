@@ -22,6 +22,100 @@ MICROSOFT_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/toke
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
 
 
+async def find_duplicate_in_onedrive(
+    access_token: str,
+    file_name: str,
+    file_size: int,
+    folder_id: str = "root"
+) -> Optional[Dict[str, Any]]:
+    """
+    Search for duplicate file in OneDrive folder.
+    
+    Strategy:
+    - Uses Graph API search endpoint (more reliable than $filter)
+    - Filters results by: same parentReference.id, name, and size
+    - OneDrive doesn't expose reliable file hash, so we match by name+size
+    
+    Args:
+        access_token: OneDrive access token
+        file_name: Name of file to search for
+        file_size: Size in bytes (for matching)
+        folder_id: Target folder ID (default "root")
+        
+    Returns:
+        File metadata if duplicate found, None otherwise
+        {
+            "id": str,
+            "name": str,
+            "size": int,
+            "webUrl": str
+        }
+    """
+    try:
+        # Escape filename for search query
+        escaped_name = file_name.replace("'", "''")
+        
+        # Use search endpoint (more reliable than $filter on /children)
+        if folder_id == "root":
+            search_url = f"{GRAPH_API_BASE}/me/drive/root/search(q='{escaped_name}')"
+        else:
+            search_url = f"{GRAPH_API_BASE}/me/drive/items/{folder_id}/search(q='{escaped_name}')"
+        
+        headers = {"Authorization": f"Bearer {access_token}"}
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(search_url, headers=headers)
+            
+            if response.status_code != 200:
+                logger.warning(f"[ONEDRIVE_DEDUPE] Search failed: {response.status_code}")
+                return None
+            
+            data = response.json()
+            candidates = data.get("value", [])
+            
+            if not candidates:
+                return None
+            
+            # Filter candidates by exact name, size, and parent folder
+            for candidate in candidates:
+                # Match by name (exact)
+                if candidate.get("name") != file_name:
+                    continue
+                
+                # Match by size (exact)
+                if candidate.get("size") != file_size:
+                    continue
+                
+                # Match by parent folder
+                parent_ref = candidate.get("parentReference", {})
+                parent_id = parent_ref.get("id", "")
+                
+                # For root: check if parent path is /drive/root
+                if folder_id == "root":
+                    parent_path = parent_ref.get("path", "")
+                    if "/drive/root:" not in parent_path and parent_path != "/drive/root":
+                        continue
+                else:
+                    # For specific folder: match parent ID
+                    if parent_id != folder_id:
+                        continue
+                
+                # Found exact match
+                logger.info(f"[ONEDRIVE_DEDUPE] Found duplicate: {file_name} (size={file_size})")
+                return {
+                    "id": candidate.get("id"),
+                    "name": candidate.get("name"),
+                    "size": candidate.get("size"),
+                    "webUrl": candidate.get("webUrl")
+                }
+            
+            return None
+            
+    except Exception as e:
+        logger.exception(f"[ONEDRIVE_DEDUPE] Error searching for duplicate: {e}")
+        return None
+
+
 async def refresh_onedrive_token(refresh_token: str) -> Dict[str, Any]:
     """
     Refresh OneDrive access token using refresh_token.

@@ -22,6 +22,7 @@ type TransferJob = {
   total_items: number;
   completed_items: number;
   failed_items: number;
+  skipped_items?: number;
   total_bytes: number;
   transferred_bytes: number;
   created_at: string;
@@ -35,9 +36,10 @@ type TransferJobItem = {
   source_item_id: string;
   source_name: string;  // Changed from file_name to match backend
   size_bytes: number;
-  status: "queued" | "running" | "done" | "failed";
+  status: "queued" | "running" | "done" | "failed" | "skipped";
   error_message?: string;
   target_item_id?: string;
+  target_web_url?: string;
 };
 
 export default function TransferModal({
@@ -171,6 +173,7 @@ export default function TransferModal({
               total_items: parseInt(data.total_items) || 0,
               completed_items: parseInt(data.completed_items) || 0,
               failed_items: parseInt(data.failed_items) || 0,
+              skipped_items: parseInt(data.skipped_items) || 0,
               total_bytes: parseInt(data.total_bytes) || 0,
               transferred_bytes: parseInt(data.transferred_bytes) || 0,
               items: Array.isArray(data.items) ? data.items : [],
@@ -500,8 +503,15 @@ export default function TransferModal({
               const resultType = getFinalResultType(transferJob);
               const completed = transferJob?.completed_items || 0;
               const failed = transferJob?.failed_items || 0;
+              const skipped = transferJob?.skipped_items || 0;
               const total = transferJob?.total_items || 0;
               const transferred = transferJob?.transferred_bytes || 0;
+              
+              // Get webUrl from first successful item
+              const firstSuccessfulItem = transferJob?.items?.find(
+                item => (item.status === "done" || item.status === "skipped") && item.target_web_url
+              );
+              const hasWebUrl = !!firstSuccessfulItem?.target_web_url;
               
               return (
                 <>
@@ -536,6 +546,12 @@ export default function TransferModal({
                         <span>Éxito:</span>
                         <span className="font-semibold text-emerald-400">{completed}</span>
                       </div>
+                      {skipped > 0 && (
+                        <div className="flex justify-between">
+                          <span>Omitidos (ya existían):</span>
+                          <span className="font-semibold text-yellow-400">{skipped}</span>
+                        </div>
+                      )}
                       {failed > 0 && (
                         <div className="flex justify-between">
                           <span>Fallidos:</span>
@@ -553,6 +569,15 @@ export default function TransferModal({
 
                   {/* Action buttons */}
                   <div className="flex justify-center gap-3">
+                    {hasWebUrl && (
+                      <button
+                        onClick={() => window.open(firstSuccessfulItem?.target_web_url, '_blank')}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition"
+                        title="Abrir archivo en OneDrive"
+                      >
+                        Ver en OneDrive
+                      </button>
+                    )}
                     <button
                       onClick={handleAcceptResult}
                       className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold transition"

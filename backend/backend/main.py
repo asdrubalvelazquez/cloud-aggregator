@@ -2288,6 +2288,33 @@ async def run_transfer_job_endpoint(
                     status="running"
                 )
                 
+                # Check for duplicates BEFORE downloading (save bandwidth)
+                target_folder_path = job.get("target_folder_id") or "root"
+                file_name = item.get("source_name") or item.get("source_item_id") or "unknown"
+                file_size = item.get("size_bytes", 0)
+                
+                from backend.onedrive import find_duplicate_in_onedrive
+                
+                duplicate = await find_duplicate_in_onedrive(
+                    access_token=onedrive_access_token,
+                    file_name=file_name,
+                    file_size=file_size,
+                    folder_id=target_folder_path
+                )
+                
+                if duplicate:
+                    # File already exists - skip transfer
+                    await transfer.update_item_status(
+                        supabase,
+                        item["id"],
+                        status="skipped",
+                        error_message="already_exists",
+                        target_item_id=duplicate.get("id"),
+                        target_web_url=duplicate.get("webUrl")
+                    )
+                    logging.info(f"[TRANSFER] Item {item['id']} skipped (already exists): {file_name}")
+                    continue
+                
                 # Download from Google Drive
                 async with httpx.AsyncClient() as client:
                     download_resp = await client.get(
@@ -2310,8 +2337,6 @@ async def run_transfer_job_endpoint(
                     file_data = download_resp.content
                 
                 # Upload to OneDrive (chunked)
-                target_folder_path = job.get("target_folder_id") or "root"
-                file_name = item.get("source_name") or item.get("source_item_id") or "unknown"
                 upload_result = await transfer.upload_to_onedrive_chunked(
                     access_token=onedrive_access_token,
                     file_name=file_name,
@@ -2319,12 +2344,14 @@ async def run_transfer_job_endpoint(
                     folder_path=target_folder_path
                 )
                 
-                # Mark item as done
+                # Mark item as done (with webUrl)
                 await transfer.update_item_status(
                     supabase,
                     item["id"],
                     status="done",
-                    target_item_id=upload_result.get("id")
+                    target_item_id=upload_result.get("id"),
+                    target_web_url=upload_result.get("webUrl"),
+                    bytes_transferred=len(file_data)
                 )
                 
                 # Increment job counters
