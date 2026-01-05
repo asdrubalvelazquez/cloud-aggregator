@@ -113,7 +113,12 @@ async def get_transfer_job_status(supabase: Client, job_id: str, user_id: str) -
     Returns:
         {
             "job": {...},
-            "items": [...]
+            "items": [...],
+            "total_items": int,
+            "completed_items": int,
+            "failed_items": int,
+            "transferred_bytes": int,
+            "total_bytes": int
         }
     """
     # Get job
@@ -122,12 +127,35 @@ async def get_transfer_job_status(supabase: Client, job_id: str, user_id: str) -
     if not job_result.data:
         raise HTTPException(status_code=404, detail="Transfer job not found")
     
+    job_data = job_result.data
+    
     # Get items
     items_result = supabase.table("transfer_job_items").select("*").eq("job_id", job_id).order("created_at").execute()
+    items = items_result.data or []
+    
+    # Calculate summary from items (or fallback to job fields)
+    if items:
+        completed_count = sum(1 for item in items if item.get("status") in ["completed", "success", "done"])
+        failed_count = sum(1 for item in items if item.get("status") in ["failed", "error"])
+        total_count = len(items)
+        transferred_bytes = sum(item.get("bytes_transferred", 0) or 0 for item in items)
+        total_bytes = sum(item.get("size_bytes", 0) or 0 for item in items)
+    else:
+        # Fallback to job fields if no items yet
+        completed_count = job_data.get("completed_items", 0) or 0
+        failed_count = job_data.get("failed_items", 0) or 0
+        total_count = job_data.get("total_items", 0) or 0
+        transferred_bytes = job_data.get("transferred_bytes", 0) or 0
+        total_bytes = job_data.get("total_bytes", 0) or 0
     
     return {
-        "job": job_result.data,
-        "items": items_result.data or []
+        "job": job_data,
+        "items": items,
+        "total_items": total_count,
+        "completed_items": completed_count,
+        "failed_items": failed_count,
+        "transferred_bytes": transferred_bytes,
+        "total_bytes": total_bytes,
     }
 
 
