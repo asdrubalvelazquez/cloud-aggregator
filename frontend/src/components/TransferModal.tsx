@@ -14,6 +14,7 @@ type TransferModalProps = {
   sourceAccountId: number;
   selectedFileIds: string[];
   onTransferComplete: () => void;
+  onViewInDestination?: (targetAccountId: string, folderId: string) => void;
 };
 
 type TransferJob = {
@@ -48,6 +49,7 @@ export default function TransferModal({
   sourceAccountId,
   selectedFileIds,
   onTransferComplete,
+  onViewInDestination,
 }: TransferModalProps) {
   const [targetAccounts, setTargetAccounts] = useState<OneDriveAccount[]>([]);
   const [selectedTarget, setSelectedTarget] = useState<string | null>(null);  // UUID string
@@ -318,6 +320,19 @@ export default function TransferModal({
     handleClose();
   };
 
+  const handleViewInDestination = () => {
+    // Navigate to destination account (OneDrive) within app
+    if (!selectedTarget) return;
+    
+    // Close modal first
+    handleClose();
+    
+    // Trigger navigation callback (folder_id = "root" since we always transfer to root)
+    if (onViewInDestination) {
+      onViewInDestination(selectedTarget, "root");
+    }
+  };
+
   const handleRetryPolling = () => {
     if (jobId) {
       setError(null);
@@ -569,11 +584,11 @@ export default function TransferModal({
 
                   {/* Action buttons */}
                   <div className="flex justify-center gap-3">
-                    {hasWebUrl && (
+                    {hasWebUrl && onViewInDestination && (
                       <button
-                        onClick={() => window.open(firstSuccessfulItem?.target_web_url, '_blank')}
+                        onClick={handleViewInDestination}
                         className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition"
-                        title="Abrir archivo en OneDrive"
+                        title="Ir a la carpeta en OneDrive dentro de Cloud Aggregator"
                       >
                         Ver en OneDrive
                       </button>

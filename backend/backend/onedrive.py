@@ -35,6 +35,8 @@ async def find_duplicate_in_onedrive(
     - Uses Graph API search endpoint (more reliable than $filter)
     - Filters results by: same parentReference.id, name, and size
     - OneDrive doesn't expose reliable file hash, so we match by name+size
+    - Robust error handling: timeouts, 429 rate limits, network errors
+    - NEVER raises: returns None on any error (safe fallback)
     
     Args:
         access_token: OneDrive access token
@@ -43,7 +45,7 @@ async def find_duplicate_in_onedrive(
         folder_id: Target folder ID (default "root")
         
     Returns:
-        File metadata if duplicate found, None otherwise
+        File metadata if duplicate found, None otherwise (or on error)
         {
             "id": str,
             "name": str,
@@ -63,11 +65,31 @@ async def find_duplicate_in_onedrive(
         
         headers = {"Authorization": f"Bearer {access_token}"}
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(search_url, headers=headers)
+        # Shorter timeout for dedupe check (don't block transfer)
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+            try:
+                response = await client.get(search_url, headers=headers)
+            except httpx.TimeoutException:
+                logger.warning(f"[ONEDRIVE_DEDUPE] Search timeout for: {file_name}")
+                return None  # Safe fallback: assume no duplicate
+            except httpx.NetworkError as e:
+                logger.warning(f"[ONEDRIVE_DEDUPE] Network error: {e}")
+                return None
             
+            # Handle rate limiting (429)
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After", "60")
+                logger.warning(f"[ONEDRIVE_DEDUPE] Rate limited (429), retry after {retry_after}s")
+                return None  # Don't wait, assume no duplicate
+            
+            # Handle auth errors (401, 403)
+            if response.status_code in (401, 403):
+                logger.error(f"[ONEDRIVE_DEDUPE] Auth error: {response.status_code}")
+                return None
+            
+            # Handle other errors
             if response.status_code != 200:
-                logger.warning(f"[ONEDRIVE_DEDUPE] Search failed: {response.status_code}")
+                logger.warning(f"[ONEDRIVE_DEDUPE] Search failed: {response.status_code} - {response.text[:200]}")
                 return None
             
             data = response.json()
@@ -111,9 +133,15 @@ async def find_duplicate_in_onedrive(
             
             return None
             
-    except Exception as e:
-        logger.exception(f"[ONEDRIVE_DEDUPE] Error searching for duplicate: {e}")
+    except httpx.TimeoutException:
+        logger.warning(f"[ONEDRIVE_DEDUPE] Timeout searching for: {file_name}")
+        return None  # Safe fallback
+    except httpx.HTTPError as e:
+        logger.warning(f"[ONEDRIVE_DEDUPE] HTTP error: {e}")
         return None
+    except Exception as e:
+        logger.exception(f"[ONEDRIVE_DEDUPE] Unexpected error searching for duplicate: {e}")
+        return None  # NEVER raise, always safe fallback
 
 
 async def refresh_onedrive_token(refresh_token: str) -> Dict[str, Any]:

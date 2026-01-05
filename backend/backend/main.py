@@ -2312,6 +2312,8 @@ async def run_transfer_job_endpoint(
                         target_item_id=duplicate.get("id"),
                         target_web_url=duplicate.get("webUrl")
                     )
+                    # CRITICAL: Update job counters (skipped counts as completed for job progress)
+                    await transfer.update_job_status(supabase, job_id, increment_completed=True)
                     logging.info(f"[TRANSFER] Item {item['id']} skipped (already exists): {file_name}")
                     continue
                 
