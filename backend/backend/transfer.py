@@ -248,7 +248,7 @@ async def update_item_status(
     
     if status == "running":
         update_data["started_at"] = datetime.now(timezone.utc).isoformat()
-    elif status in ("done", "failed"):
+    elif status in ("done", "failed", "skipped"):
         # Defensive: check if started_at exists to avoid constraint violation
         has_started = False
         try:

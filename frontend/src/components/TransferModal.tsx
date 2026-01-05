@@ -72,16 +72,18 @@ export default function TransferModal({
     const status = (job.status || "").toLowerCase();
     
     // Known terminal states
-    if (["done", "completed", "success", "failed", "error", "partial"].includes(status)) {
+    if (["done", "completed", "success", "failed", "error", "partial", "cancelled"].includes(status)) {
       return true;
     }
     
-    // Defensive: check if all items processed (completed + failed === total)
+    // CRITICAL: check if all items processed (completed + failed + skipped === total)
+    // Bug fix: skipped items must count toward completion
     const total = parseInt(job.total_items) || 0;
     const completed = parseInt(job.completed_items) || 0;
     const failed = parseInt(job.failed_items) || 0;
+    const skipped = parseInt(job.skipped_items) || 0;
     
-    if (total > 0 && (completed + failed >= total)) {
+    if (total > 0 && (completed + failed + skipped >= total)) {
       return true;
     }
     
@@ -160,9 +162,17 @@ export default function TransferModal({
     if (!jobId || transferState !== "running") return;
 
     let pollInterval: NodeJS.Timeout | null = null;
+    const inFlightRef = { current: false }; // Prevent overlapping requests
 
     const startPolling = () => {
       pollInterval = setInterval(async () => {
+        // Skip if previous request still in flight
+        if (inFlightRef.current) {
+          console.log("[TRANSFER] Skipping poll (request in flight)");
+          return;
+        }
+
+        inFlightRef.current = true;
         try {
           const res = await authenticatedFetch(`/transfer/status/${jobId}`);
 
@@ -188,6 +198,7 @@ export default function TransferModal({
             if (isTerminalState(safeData)) {
               if (pollInterval) clearInterval(pollInterval);
               setTransferState("completed");
+              console.log("[TRANSFER] Job completed, stopped polling");
               // Do NOT auto-close or call callback - wait for user to click "Aceptar"
             }
           } else {
@@ -203,8 +214,10 @@ export default function TransferModal({
             setError("Error al obtener el estado de la transferencia. Verifica tu conexión.");
             setTransferState("completed");
           }
+        } finally {
+          inFlightRef.current = false;
         }
-      }, 1500); // Poll every 1.5 seconds
+      }, 2000); // Poll every 2 seconds
     };
 
     startPolling();
