@@ -2280,6 +2280,7 @@ async def run_transfer_job_endpoint(
         
         # Process each item
         for item in items:
+            file_name = item.get("source_name") or item.get("source_item_id") or "unknown"
             try:
                 # Mark item as running (sets started_at)
                 await transfer.update_item_status(
@@ -2289,21 +2290,28 @@ async def run_transfer_job_endpoint(
                 )
                 
                 # Check for duplicates BEFORE downloading (save bandwidth)
+                # CRITICAL: Wrap in try/except to prevent dedupe failures from blocking job
                 target_folder_path = job.get("target_folder_id") or "root"
-                file_name = item.get("source_name") or item.get("source_item_id") or "unknown"
                 file_size = item.get("size_bytes", 0)
                 
                 from backend.onedrive import find_duplicate_in_onedrive
                 
-                duplicate = await find_duplicate_in_onedrive(
-                    access_token=onedrive_access_token,
-                    file_name=file_name,
-                    file_size=file_size,
-                    folder_id=target_folder_path
-                )
+                duplicate = None
+                try:
+                    duplicate = await find_duplicate_in_onedrive(
+                        access_token=onedrive_access_token,
+                        file_name=file_name,
+                        file_size=file_size,
+                        folder_id=target_folder_path
+                    )
+                except Exception as e:
+                    # CRITICAL: Dedupe failure must not block transfer
+                    logging.error(f"[TRANSFER] DEDUPE FAILED (fallback to copy): {file_name} - {e}")
+                    duplicate = None  # Safe fallback: proceed with copy
                 
                 if duplicate:
                     # File already exists - skip transfer
+                    logging.info(f"[TRANSFER] Item {item['id']} SKIPPED (already exists): {file_name}")
                     await transfer.update_item_status(
                         supabase,
                         item["id"],
@@ -2314,7 +2322,6 @@ async def run_transfer_job_endpoint(
                     )
                     # CRITICAL: Update job counters (skipped counts as completed for job progress)
                     await transfer.update_job_status(supabase, job_id, increment_completed=True)
-                    logging.info(f"[TRANSFER] Item {item['id']} skipped (already exists): {file_name}")
                     continue
                 
                 # Download from Google Drive
@@ -2367,15 +2374,19 @@ async def run_transfer_job_endpoint(
                 logging.info(f"[TRANSFER] Item {item['id']} transferred successfully: {file_name}")
                 
             except Exception as e:
-                file_name = item.get("source_name") or item.get("source_item_id") or "unknown"
-                logging.exception(f"[TRANSFER] Failed to transfer item {item['id']}: {file_name}")
-                await transfer.update_item_status(
-                    supabase,
-                    item["id"],
-                    status="failed",
-                    error_message=str(e)[:500]  # Truncate long errors
-                )
-                await transfer.update_job_status(supabase, job_id, increment_failed=True)
+                # CRITICAL: Any failure must update counters to prevent zombie job
+                logging.exception(f"[TRANSFER] FAILED item {item['id']}: {file_name}")
+                try:
+                    await transfer.update_item_status(
+                        supabase,
+                        item["id"],
+                        status="failed",
+                        error_message=str(e)[:500]  # Truncate long errors
+                    )
+                    await transfer.update_job_status(supabase, job_id, increment_failed=True)
+                except Exception as update_error:
+                    # Last resort: log and continue (don't cascade failures)
+                    logging.error(f"[TRANSFER] CRITICAL: Failed to update status for item {item['id']}: {update_error}")
         
         # Determine final job status
         final_result = (

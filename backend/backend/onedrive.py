@@ -36,7 +36,8 @@ async def find_duplicate_in_onedrive(
     - Filters results by: same parentReference.id, name, and size
     - OneDrive doesn't expose reliable file hash, so we match by name+size
     - Robust error handling: timeouts, 429 rate limits, network errors
-    - NEVER raises: returns None on any error (safe fallback)
+    - NEVER raises: returns None on any error (safe fallback to allow transfer)
+    - Pagination: processes only first page (top 200 results) to avoid blocking
     
     Args:
         access_token: OneDrive access token
@@ -53,54 +54,68 @@ async def find_duplicate_in_onedrive(
             "webUrl": str
         }
     """
+    logger.info(f"[DEDUPE] START search: {file_name} (size={file_size}, folder={folder_id})")
+    
     try:
-        # Escape filename for search query
+        # Proper escaping for OData search query
+        # OneDrive search uses single quotes, so escape: ' → ''
+        # Special chars like (), [], &, etc. are handled by URL encoding
         escaped_name = file_name.replace("'", "''")
         
         # Use search endpoint (more reliable than $filter on /children)
+        # Limit to first 200 results (don't paginate to avoid blocking)
         if folder_id == "root":
-            search_url = f"{GRAPH_API_BASE}/me/drive/root/search(q='{escaped_name}')"
+            search_url = f"{GRAPH_API_BASE}/me/drive/root/search(q='{escaped_name}')?$top=200"
         else:
-            search_url = f"{GRAPH_API_BASE}/me/drive/items/{folder_id}/search(q='{escaped_name}')"
+            search_url = f"{GRAPH_API_BASE}/me/drive/items/{folder_id}/search(q='{escaped_name}')?$top=200"
         
         headers = {"Authorization": f"Bearer {access_token}"}
         
-        # Shorter timeout for dedupe check (don't block transfer)
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+        # Strict 5s timeout (don't block transfer job)
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0)) as client:
             try:
                 response = await client.get(search_url, headers=headers)
             except httpx.TimeoutException:
-                logger.warning(f"[ONEDRIVE_DEDUPE] Search timeout for: {file_name}")
+                logger.warning(f"[DEDUPE] TIMEOUT (5s exceeded) for: {file_name}")
                 return None  # Safe fallback: assume no duplicate
             except httpx.NetworkError as e:
-                logger.warning(f"[ONEDRIVE_DEDUPE] Network error: {e}")
+                logger.warning(f"[DEDUPE] NETWORK ERROR: {e}")
+                return None
+            except Exception as e:
+                logger.warning(f"[DEDUPE] HTTP REQUEST FAILED: {e}")
                 return None
             
             # Handle rate limiting (429)
             if response.status_code == 429:
-                retry_after = response.headers.get("Retry-After", "60")
-                logger.warning(f"[ONEDRIVE_DEDUPE] Rate limited (429), retry after {retry_after}s")
+                retry_after = response.headers.get("Retry-After", "?")
+                logger.warning(f"[DEDUPE] RATE LIMITED (429), retry_after={retry_after}s - fallback to copy")
                 return None  # Don't wait, assume no duplicate
             
             # Handle auth errors (401, 403)
             if response.status_code in (401, 403):
-                logger.error(f"[ONEDRIVE_DEDUPE] Auth error: {response.status_code}")
+                logger.error(f"[DEDUPE] AUTH ERROR ({response.status_code}) - fallback to copy")
                 return None
             
-            # Handle other errors
+            # Handle other errors (404, 500, etc.)
             if response.status_code != 200:
-                logger.warning(f"[ONEDRIVE_DEDUPE] Search failed: {response.status_code} - {response.text[:200]}")
+                logger.warning(f"[DEDUPE] SEARCH FAILED ({response.status_code}): {response.text[:300]} - fallback to copy")
                 return None
             
             data = response.json()
             candidates = data.get("value", [])
             
+            # Log pagination info (for debugging)
+            next_link = data.get("@odata.nextLink")
+            if next_link:
+                logger.info(f"[DEDUPE] NOTE: More results exist (pagination ignored), checking first {len(candidates)} items")
+            
             if not candidates:
+                logger.info(f"[DEDUPE] NO MATCH: {file_name}")
                 return None
             
             # Filter candidates by exact name, size, and parent folder
             for candidate in candidates:
-                # Match by name (exact)
+                # Match by name (exact, case-sensitive)
                 if candidate.get("name") != file_name:
                     continue
                 
@@ -123,7 +138,7 @@ async def find_duplicate_in_onedrive(
                         continue
                 
                 # Found exact match
-                logger.info(f"[ONEDRIVE_DEDUPE] Found duplicate: {file_name} (size={file_size})")
+                logger.info(f"[DEDUPE] DUPLICATE FOUND: {file_name} (id={candidate.get('id')}, size={file_size})")
                 return {
                     "id": candidate.get("id"),
                     "name": candidate.get("name"),
@@ -131,16 +146,17 @@ async def find_duplicate_in_onedrive(
                     "webUrl": candidate.get("webUrl")
                 }
             
+            logger.info(f"[DEDUPE] NO EXACT MATCH: {file_name} ({len(candidates)} candidates checked)")
             return None
             
     except httpx.TimeoutException:
-        logger.warning(f"[ONEDRIVE_DEDUPE] Timeout searching for: {file_name}")
-        return None  # Safe fallback
+        logger.warning(f"[DEDUPE] FALLBACK (outer timeout): {file_name}")
+        return None
     except httpx.HTTPError as e:
-        logger.warning(f"[ONEDRIVE_DEDUPE] HTTP error: {e}")
+        logger.warning(f"[DEDUPE] FALLBACK (http error): {e}")
         return None
     except Exception as e:
-        logger.exception(f"[ONEDRIVE_DEDUPE] Unexpected error searching for duplicate: {e}")
+        logger.exception(f"[DEDUPE] FALLBACK (unexpected error): {e}")
         return None  # NEVER raise, always safe fallback
 
 
