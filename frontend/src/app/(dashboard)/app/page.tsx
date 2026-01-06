@@ -5,6 +5,7 @@ import { DashboardLoadingState } from "@/components/LoadingState";
 import { supabase } from "@/lib/supabaseClient";
 import { authenticatedFetch, fetchCloudStatus } from "@/lib/api";
 import type { CloudStatusResponse } from "@/lib/api";
+import { emitCloudStatusRefresh } from "@/lib/cloudStatusEvents";
 import { useRouter, useSearchParams } from "next/navigation";
 import Toast from "@/components/Toast";
 import ProgressBar from "@/components/ProgressBar";
@@ -304,6 +305,9 @@ function DashboardContent({
           fetchQuota(abortController.signal);
           fetchBillingQuota(abortController.signal);
           fetchCloudStatusData();
+          
+          // Emit event to refresh sidebar
+          emitCloudStatusRefresh();
         } catch (err) {
           console.error("[OAUTH] Exception refreshing session:", err);
           setToast({
@@ -376,6 +380,9 @@ function DashboardContent({
           fetchSummary(abortController.signal);
           fetchQuota(abortController.signal);
           fetchBillingQuota(abortController.signal);
+          
+          // Emit event to refresh sidebar
+          emitCloudStatusRefresh();
         } catch (error) {
           console.error("Failed to validate reconnect:", error);
           const message =

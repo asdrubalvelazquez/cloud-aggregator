@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { fetchCloudStatus, type CloudStatusResponse } from "@/lib/api";
+import { onCloudStatusRefresh } from "@/lib/cloudStatusEvents";
 import { ProviderTree } from "./ProviderTree";
 
 type Props = {
@@ -42,7 +43,15 @@ export function ExplorerSidebar({ onNavigate }: Props) {
 
   useEffect(() => {
     loadClouds();
-    // No auto-refresh - user manually refreshes with button
+    
+    // Subscribe to cloud status refresh events
+    const unsubscribe = onCloudStatusRefresh(() => {
+      console.log("[ExplorerSidebar] Cloud status refresh event received");
+      loadClouds();  // Use cache - page already fetched fresh data
+    });
+    
+    // Cleanup subscription on unmount
+    return unsubscribe;
   }, []);
 
   const handleRefresh = () => {

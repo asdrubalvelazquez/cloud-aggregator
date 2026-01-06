@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { CloudAccountStatus, fetchCloudStatus, fetchGoogleLoginUrl, fetchOneDriveLoginUrl, authenticatedFetch } from "@/lib/api";
 import { supabase } from "@/lib/supabaseClient";
+import { emitCloudStatusRefresh } from "@/lib/cloudStatusEvents";
 
 type ReconnectSlotsModalProps = {
   isOpen: boolean;
@@ -297,6 +298,10 @@ export default function ReconnectSlotsModal({
                                 if (res.ok) {
                                   console.log("[DISCONNECT] Success");
                                   await loadCloudStatus();
+                                  
+                                  // Emit event to refresh sidebar
+                                  emitCloudStatusRefresh();
+                                  
                                   if (onDisconnect) {
                                     onDisconnect(account);
                                   }
