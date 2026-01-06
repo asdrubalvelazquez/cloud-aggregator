@@ -1765,7 +1765,8 @@ export default function DriveFilesPage() {
             setQuotaRefreshKey(prev => prev + 1);
           }}
         />
-        </>
+      </div>
+      </>
       )}
 
       {/* Reconnect Modal */}
