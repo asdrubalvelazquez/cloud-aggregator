@@ -1,16 +1,23 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { fetchOneDriveFiles, fetchOneDriveAccountInfo, renameOneDriveItem, getOneDriveDownloadUrl } from "@/lib/api";
-import type { OneDriveListResponse, OneDriveItem } from "@/lib/api";
+import { fetchOneDriveFiles, fetchOneDriveAccountInfo, renameOneDriveItem, getOneDriveDownloadUrl, fetchCloudStatus } from "@/lib/api";
+import type { OneDriveListResponse, OneDriveItem, CloudAccountStatus } from "@/lib/api";
 import OnedriveRowActionsMenu from "@/components/OnedriveRowActionsMenu";
 import OneDriveRenameModal from "@/components/OneDriveRenameModal";
+import ReconnectSlotsModal from "@/components/ReconnectSlotsModal";
 
 export default function OneDriveFilesPage() {
   const params = useParams();
+  const router = useRouter();
   const accountId = params.id as string;
+
+  // Connection status state
+  const [accountStatus, setAccountStatus] = useState<CloudAccountStatus | null>(null);
+  const [checkingConnection, setCheckingConnection] = useState(true);
+  const [showReconnectModal, setShowReconnectModal] = useState(false);
 
   // Account info
   const [accountEmail, setAccountEmail] = useState<string | null>(null);
@@ -36,13 +43,42 @@ export default function OneDriveFilesPage() {
   const fetchAbortRef = useRef<AbortController | null>(null);
   const fetchSeqRef = useRef(0);
 
-  // Fetch account info on mount
+  // Check connection status before loading files
   useEffect(() => {
-    if (accountId) {
-      fetchOneDriveAccountInfo(accountId)
-        .then((info) => setAccountEmail(info.account_email))
-        .catch((err) => console.error("Failed to fetch account info:", err));
-    }
+    const checkConnection = async () => {
+      if (!accountId) return;
+
+      setCheckingConnection(true);
+      try {
+        const cloudStatus = await fetchCloudStatus(true);
+        
+        // Find account by provider_account_uuid (OneDrive uses UUID, not numeric ID)
+        const account = cloudStatus.accounts.find(
+          (acc) => acc.provider_account_uuid === accountId
+        );
+        
+        setAccountStatus(account || null);
+        
+        // Only proceed if account exists and is connected
+        if (account && account.connection_status === "connected") {
+          // Fetch account info
+          fetchOneDriveAccountInfo(accountId)
+            .then((info) => setAccountEmail(info.account_email))
+            .catch((err) => console.error("Failed to fetch account info:", err));
+          
+          // Fetch files
+          fetchFiles(null);
+        }
+      } catch (err) {
+        console.error("Failed to check connection status:", err);
+        setError("Error al verificar estado de conexión");
+      } finally {
+        setCheckingConnection(false);
+      }
+    };
+
+    checkConnection();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountId]);
 
   // Fetch files from OneDrive
@@ -99,14 +135,6 @@ export default function OneDriveFilesPage() {
       }
     };
   }, []);
-
-  // Initial load
-  useEffect(() => {
-    if (accountId) {
-      fetchFiles(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accountId]);
 
   const handleOpenFolder = (folderId: string, folderName: string) => {
     setBreadcrumb((prev) => [...prev, { id: folderId, name: folderName }]);
@@ -181,22 +209,75 @@ export default function OneDriveFilesPage() {
 
   return (
     <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
-      <div className="w-full max-w-6xl space-y-6">
-        {/* Header */}
-        <header className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl md:text-3xl font-bold">OneDrive Files 🟦</h1>
-            <p className="text-sm text-slate-400 mt-1">
-              {accountEmail ? `Cuenta: ${accountEmail}` : `Cargando...`}
-            </p>
+      {/* Checking connection state */}
+      {checkingConnection && (
+        <div className="w-full max-w-2xl mt-20">
+          <div className="bg-slate-800 rounded-lg p-8 border border-slate-700 text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+            <p className="text-slate-300">Verificando estado de conexión...</p>
           </div>
-          <Link
-            href="/app"
-            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium transition"
-          >
-            ← Volver al Dashboard
-          </Link>
-        </header>
+        </div>
+      )}
+
+      {/* Account not found or not connected - Reconnect UI */}
+      {!checkingConnection && (!accountStatus || accountStatus.connection_status !== "connected") && (
+        <div className="w-full max-w-2xl mt-20">
+          <div className="bg-gradient-to-br from-amber-500/20 to-red-500/20 rounded-lg p-8 border-2 border-amber-500/50 shadow-xl">
+            <div className="text-center mb-6">
+              <div className="text-6xl mb-4">⚠️</div>
+              <h2 className="text-2xl font-bold text-white mb-2">
+                Necesitas reconectar esta nube
+              </h2>
+              <p className="text-slate-300 mb-4">
+                {!accountStatus 
+                  ? "No se encontró esta cuenta en tu lista de nubes conectadas."
+                  : accountStatus.connection_status === "needs_reconnect"
+                  ? `Tu acceso a OneDrive (${accountStatus.provider_email}) no está activo. Reconecta para ver archivos.`
+                  : "Esta cuenta de OneDrive está desconectada."}
+              </p>
+              {accountStatus && accountStatus.reason && (
+                <p className="text-xs text-amber-300 mb-4">
+                  Motivo: {accountStatus.reason}
+                </p>
+              )}
+            </div>
+            
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+              <button
+                onClick={() => setShowReconnectModal(true)}
+                className="w-full sm:w-auto px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition shadow-lg"
+              >
+                📊 Ver mis cuentas
+              </button>
+              <button
+                onClick={() => router.push("/app")}
+                className="w-full sm:w-auto px-6 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-lg font-semibold transition"
+              >
+                ← Volver al dashboard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Normal UI - Only show if connected */}
+      {!checkingConnection && accountStatus && accountStatus.connection_status === "connected" && (
+        <div className="w-full max-w-6xl space-y-6">
+          {/* Header */}
+          <header className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl md:text-3xl font-bold">OneDrive Files 🟦</h1>
+              <p className="text-sm text-slate-400 mt-1">
+                {accountEmail ? `Cuenta: ${accountEmail}` : `Cargando...`}
+              </p>
+            </div>
+            <Link
+              href="/app"
+              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium transition"
+            >
+              ← Volver al Dashboard
+            </Link>
+          </header>
 
         {/* Breadcrumb */}
         <nav className="flex items-center gap-2 text-sm text-slate-300">
@@ -332,7 +413,14 @@ export default function OneDriveFilesPage() {
             )}
           </div>
         )}
-      </div>
+        </div>
+      )}
+
+      {/* Reconnect Modal */}
+      <ReconnectSlotsModal
+        isOpen={showReconnectModal}
+        onClose={() => setShowReconnectModal(false)}
+      />
 
       {/* Rename Modal */}
       <OneDriveRenameModal

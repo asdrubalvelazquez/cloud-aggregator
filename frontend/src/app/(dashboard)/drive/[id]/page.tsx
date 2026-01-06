@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useCopyContext } from "@/context/CopyContext";
-import { authenticatedFetch } from "@/lib/api";
+import { authenticatedFetch, fetchCloudStatus } from "@/lib/api";
+import type { CloudAccountStatus } from "@/lib/api";
 import QuotaBadge from "@/components/QuotaBadge";
 import RowActionsMenu from "@/components/RowActionsMenu";
 import RenameModal from "@/components/RenameModal";
@@ -12,6 +13,7 @@ import ContextMenu from "@/components/ContextMenu";
 import GooglePickerButton from "@/components/GooglePickerButton";
 import { DriveLoadingState } from "@/components/DriveLoadingState";
 import TransferModal from "@/components/TransferModal";
+import ReconnectSlotsModal from "@/components/ReconnectSlotsModal";
 
 type File = {
   id: string;
@@ -48,7 +50,13 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8
 
 export default function DriveFilesPage() {
   const params = useParams();
+  const router = useRouter();
   const accountId = params.id as string;
+
+  // Connection status state
+  const [accountStatus, setAccountStatus] = useState<CloudAccountStatus | null>(null);
+  const [checkingConnection, setCheckingConnection] = useState(true);
+  const [showReconnectModal, setShowReconnectModal] = useState(false);
 
   // Use global copy context
   const {
@@ -271,13 +279,37 @@ export default function DriveFilesPage() {
     };
   }, []);
 
-  // Initial load
+  // Check connection status before loading files
   useEffect(() => {
-    if (accountId) {
-      fetchFiles("root", null);
-      fetchCopyOptions();
-    }
+    const checkConnection = async () => {
+      if (!accountId) return;
 
+      setCheckingConnection(true);
+      try {
+        const cloudStatus = await fetchCloudStatus(true);
+        const accountIdNum = parseInt(accountId, 10);
+        
+        // Find account by cloud_account_id
+        const account = cloudStatus.accounts.find(
+          (acc) => acc.cloud_account_id === accountIdNum
+        );
+        
+        setAccountStatus(account || null);
+        
+        // Only proceed if account exists and is connected
+        if (account && account.connection_status === "connected") {
+          fetchFiles("root", null);
+          fetchCopyOptions();
+        }
+      } catch (err) {
+        console.error("Failed to check connection status:", err);
+        setError("Error al verificar estado de conexión");
+      } finally {
+        setCheckingConnection(false);
+      }
+    };
+
+    checkConnection();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountId]);
 
@@ -1074,6 +1106,60 @@ export default function DriveFilesPage() {
 
   return (
     <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
+      {/* Checking connection state */}
+      {checkingConnection && (
+        <div className="w-full max-w-2xl mt-20">
+          <div className="bg-slate-800 rounded-lg p-8 border border-slate-700 text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500 mx-auto mb-4"></div>
+            <p className="text-slate-300">Verificando estado de conexión...</p>
+          </div>
+        </div>
+      )}
+
+      {/* Account not found or not connected - Reconnect UI */}
+      {!checkingConnection && (!accountStatus || accountStatus.connection_status !== "connected") && (
+        <div className="w-full max-w-2xl mt-20">
+          <div className="bg-gradient-to-br from-amber-500/20 to-red-500/20 rounded-lg p-8 border-2 border-amber-500/50 shadow-xl">
+            <div className="text-center mb-6">
+              <div className="text-6xl mb-4">⚠️</div>
+              <h2 className="text-2xl font-bold text-white mb-2">
+                Necesitas reconectar esta nube
+              </h2>
+              <p className="text-slate-300 mb-4">
+                {!accountStatus 
+                  ? "No se encontró esta cuenta en tu lista de nubes conectadas."
+                  : accountStatus.connection_status === "needs_reconnect"
+                  ? `Tu acceso a Google Drive (${accountStatus.provider_email}) no está activo. Reconecta para ver archivos.`
+                  : "Esta cuenta de Google Drive está desconectada."}
+              </p>
+              {accountStatus && accountStatus.reason && (
+                <p className="text-xs text-amber-300 mb-4">
+                  Motivo: {accountStatus.reason}
+                </p>
+              )}
+            </div>
+            
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+              <button
+                onClick={() => setShowReconnectModal(true)}
+                className="w-full sm:w-auto px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold transition shadow-lg"
+              >
+                📊 Ver mis cuentas
+              </button>
+              <button
+                onClick={() => router.push("/app")}
+                className="w-full sm:w-auto px-6 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-lg font-semibold transition"
+              >
+                ← Volver al dashboard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Normal UI - Only show if connected */}
+      {!checkingConnection && accountStatus && accountStatus.connection_status === "connected" && (
+        <>
       {/* Floating Progress Bar (Sticky) */}
       {copying && (
         <div className="fixed bottom-0 left-0 right-0 bg-slate-800 border-t border-slate-700 shadow-xl z-40">
@@ -1679,6 +1765,14 @@ export default function DriveFilesPage() {
             setQuotaRefreshKey(prev => prev + 1);
           }}
         />
+        </>
+      )}
+
+      {/* Reconnect Modal */}
+      <ReconnectSlotsModal
+        isOpen={showReconnectModal}
+        onClose={() => setShowReconnectModal(false)}
+      />
       </div>
     </main>
   );
