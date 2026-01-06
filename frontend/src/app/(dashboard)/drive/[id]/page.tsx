@@ -1774,7 +1774,6 @@ export default function DriveFilesPage() {
         isOpen={showReconnectModal}
         onClose={() => setShowReconnectModal(false)}
       />
-      </div>
     </main>
   );
 }
