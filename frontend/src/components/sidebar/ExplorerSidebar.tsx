@@ -47,7 +47,7 @@ export function ExplorerSidebar({ onNavigate }: Props) {
     // Subscribe to cloud status refresh events
     const unsubscribe = onCloudStatusRefresh(() => {
       console.log("[ExplorerSidebar] Cloud status refresh event received");
-      loadClouds();  // Use cache - page already fetched fresh data
+      loadClouds(true);  // Force refresh to avoid stale cache
     });
     
     // Cleanup subscription on unmount
@@ -58,9 +58,27 @@ export function ExplorerSidebar({ onNavigate }: Props) {
     loadClouds(true);
   };
 
-  // Group accounts by provider
-  const googleAccounts = (cloudStatus?.accounts ?? []).filter(a => a.provider === "google");
-  const onedriveAccounts = (cloudStatus?.accounts ?? []).filter(a => a.provider === "onedrive");
+  /**
+   * Normalize provider name variations to consistent values
+   * Backend may return: "google", "google_drive", "onedrive", "microsoft", "ms_graph", etc.
+   */
+  const normalizeProvider = (provider: string): "google" | "onedrive" | null => {
+    const p = provider.toLowerCase().trim();
+    if (p.includes("google")) return "google";
+    if (p.includes("one") || p.includes("microsoft") || p.includes("ms_graph") || p.includes("office")) return "onedrive";
+    return null;
+  };
+
+  // Group accounts by normalized provider
+  const accounts = cloudStatus?.accounts ?? [];
+  
+  // Debug log (temporary - helps diagnose provider mismatches)
+  if (accounts.length > 0 && process.env.NODE_ENV === "development") {
+    console.log("[ExplorerSidebar] Provider values:", accounts.map(a => ({ email: a.provider_email, provider: a.provider })));
+  }
+  
+  const googleAccounts = accounts.filter(a => normalizeProvider(a.provider) === "google");
+  const onedriveAccounts = accounts.filter(a => normalizeProvider(a.provider) === "onedrive");
 
   return (
     <div className="flex flex-col h-full bg-slate-800 border-r border-slate-700">
