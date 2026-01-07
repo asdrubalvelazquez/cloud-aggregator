@@ -220,6 +220,9 @@ async def list_drive_files(
     Returns:
         dict with files list, nextPageToken, account info, and current folder_id
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     # Get account from database
     resp = supabase.table("cloud_accounts").select("*").eq("id", account_id).single().execute()
     account = resp.data
@@ -227,6 +230,16 @@ async def list_drive_files(
         raise ValueError(f"Account {account_id} not found")
     
     token = await get_valid_token(account_id)
+    
+    # Log request details (for scope drift detection)
+    granted_scope = account.get("granted_scope") or "UNKNOWN"
+    logger.info(
+        f"[LIST_DRIVE_FILES] account_id={account_id} "
+        f"folder_id={folder_id} "
+        f"page_size={page_size} "
+        f"has_page_token={bool(page_token)} "
+        f"granted_scope={granted_scope}"
+    )
     
     headers = {"Authorization": f"Bearer {token}"}
     
@@ -248,6 +261,18 @@ async def list_drive_files(
         )
         res.raise_for_status()
         data = res.json()
+    
+    files_count = len(data.get("files", []))
+    has_next_page = bool(data.get("nextPageToken"))
+    
+    # Log response details
+    logger.info(
+        f"[LIST_DRIVE_FILES_RESULT] account_id={account_id} "
+        f"folder_id={folder_id} "
+        f"files_returned={files_count} "
+        f"has_next_page={has_next_page} "
+        f"granted_scope={granted_scope}"
+    )
     
     return {
         "account_id": account_id,

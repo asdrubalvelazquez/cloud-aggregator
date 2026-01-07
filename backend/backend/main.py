@@ -1112,6 +1112,7 @@ async def google_callback(request: Request):
     access_token = token_json.get("access_token")
     refresh_token = token_json.get("refresh_token")
     expires_in = token_json.get("expires_in", 3600)
+    granted_scope = token_json.get("scope")  # Puede ser None si no viene en token response
 
     if not access_token:
         return RedirectResponse(f"{frontend_origin}?error=no_access_token")
@@ -1294,6 +1295,7 @@ async def google_callback(request: Request):
             "is_active": True,
             "disconnected_at": None,
             "slot_log_id": slot_id,
+            "granted_scope": granted_scope,  # OAuth scope concedido
         }
         
         # Solo actualizar refresh_token si viene un valor real (no None)
@@ -1417,6 +1419,7 @@ async def google_callback(request: Request):
         "is_active": True,              # Reactivar cuenta si estaba soft-deleted
         "disconnected_at": None,        # Limpiar timestamp de desconexión
         "slot_log_id": slot_id,         # CRITICAL: Link to slot (prevents orphan accounts)
+        "granted_scope": granted_scope,  # OAuth scope concedido
     }
 
     # Save to database
