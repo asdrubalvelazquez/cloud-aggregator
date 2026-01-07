@@ -1503,7 +1503,6 @@ export default function DriveFilesPage() {
                       );
                     })}
                   </select>
-                  </select>
                   <button
                     type="button"
                     onClick={handleBatchCopy}
