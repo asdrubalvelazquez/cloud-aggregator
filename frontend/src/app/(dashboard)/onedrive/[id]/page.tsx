@@ -246,7 +246,7 @@ export default function OneDriveFilesPage() {
       fileId: file.id,
       fileName: file.name,
       mimeType: file.kind === "folder" ? "application/vnd.ms-onedrive.folder" : "application/octet-stream",
-      webViewLink: file.webViewLink,
+      webViewLink: file.webViewLink || undefined,
       isFolder: file.kind === "folder",
     });
   };
