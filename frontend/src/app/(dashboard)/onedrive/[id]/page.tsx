@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { fetchOneDriveFiles, fetchOneDriveAccountInfo, renameOneDriveItem, getOneDriveDownloadUrl, fetchCloudStatus } from "@/lib/api";
@@ -8,6 +8,7 @@ import type { OneDriveListResponse, OneDriveItem, CloudAccountStatus } from "@/l
 import OnedriveRowActionsMenu from "@/components/OnedriveRowActionsMenu";
 import OneDriveRenameModal from "@/components/OneDriveRenameModal";
 import ReconnectSlotsModal from "@/components/ReconnectSlotsModal";
+import ContextMenu from "@/components/ContextMenu";
 
 export default function OneDriveFilesPage() {
   const params = useParams();
@@ -42,6 +43,27 @@ export default function OneDriveFilesPage() {
   // Abort controller for cancelling requests
   const fetchAbortRef = useRef<AbortController | null>(null);
   const fetchSeqRef = useRef(0);
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    fileId: string;
+    fileName: string;
+    mimeType: string;
+    webViewLink?: string;
+    isFolder: boolean;
+  } | null>(null);
+
+  // Close context menu
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
+  // Ref for files container (to prevent native context menu)
+  const filesContainerRef = useRef<HTMLDivElement>(null);
+
 
   // Check connection status before loading files
   useEffect(() => {
@@ -80,6 +102,30 @@ export default function OneDriveFilesPage() {
     checkConnection();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountId]);
+
+  // Global context menu blocker (capture phase) - prevents native menu in files container
+  useEffect(() => {
+    const handleContextMenu = (e: MouseEvent) => {
+      // Only block if click is inside files container
+      if (filesContainerRef.current?.contains(e.target as Node)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    // Register in capture phase (before bubbling)
+    document.addEventListener('contextmenu', handleContextMenu, true);
+
+    return () => {
+      document.removeEventListener('contextmenu', handleContextMenu, true);
+    };
+  }, []);
+
+  // Close context menu when account changes
+  useEffect(() => {
+    closeContextMenu();
+  }, [accountId, closeContextMenu]);
+
 
   // Fetch files from OneDrive
   const fetchFiles = async (parentId: string | null = null) => {
@@ -187,6 +233,40 @@ export default function OneDriveFilesPage() {
   const handleDownload = (itemId: string, itemName: string) => {
     const downloadUrl = getOneDriveDownloadUrl(accountId, itemId);
     window.open(downloadUrl, "_blank");
+  };
+
+  const handleRowContextMenu = (e: React.MouseEvent, file: OneDriveItem) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      fileId: file.id,
+      fileName: file.name,
+      mimeType: file.kind === "folder" ? "application/vnd.ms-onedrive.folder" : "application/octet-stream",
+      webViewLink: file.webViewLink,
+      isFolder: file.kind === "folder",
+    });
+  };
+
+  const handleOpenInProvider = (fileId: string, fileName: string) => {
+    const file = files.find(f => f.id === fileId);
+    const webViewLink = file?.webViewLink || contextMenu?.webViewLink;
+    
+    if (webViewLink) {
+      window.open(webViewLink, "_blank", "noopener,noreferrer");
+    }
+  };
+
+  const handleShareInProvider = (fileId: string, fileName: string) => {
+    const file = files.find(f => f.id === fileId);
+    const webViewLink = file?.webViewLink || contextMenu?.webViewLink;
+    
+    if (webViewLink) {
+      window.open(webViewLink, "_blank", "noopener,noreferrer");
+    }
   };
 
   const formatSize = (bytes: number): string => {
@@ -339,12 +419,18 @@ export default function OneDriveFilesPage() {
 
         {/* Files table */}
         {!loading && !error && (
-          <div className="bg-slate-800 rounded-lg shadow-lg overflow-hidden">
+          <div 
+            ref={filesContainerRef}
+            className="bg-slate-800 rounded-lg shadow-lg overflow-hidden"
+            onContextMenu={(e) => e.preventDefault()}
+            onContextMenuCapture={(e) => e.preventDefault()}
+          >
             {files.length === 0 ? (
               <div className="py-12 text-center text-slate-400">
                 <p>Esta carpeta está vacía</p>
               </div>
             ) : (
+              <div onClick={() => closeContextMenu()}>
               <table className="w-full">
                 <thead>
                   <tr className="text-left border-b border-slate-700">
@@ -360,6 +446,7 @@ export default function OneDriveFilesPage() {
                     <tr
                       key={file.id}
                       className="border-b border-slate-800 hover:bg-slate-700/40 transition"
+                      onContextMenuCapture={(e) => handleRowContextMenu(e, file)}
                     >
                       <td className="py-4 px-4">
                         <div className="flex items-center gap-2">
@@ -410,10 +497,32 @@ export default function OneDriveFilesPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </div>
         )}
         </div>
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <ContextMenu
+          visible={contextMenu.visible}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          fileId={contextMenu.fileId}
+          fileName={contextMenu.fileName}
+          mimeType={contextMenu.mimeType}
+          webViewLink={contextMenu.webViewLink}
+          isFolder={contextMenu.isFolder}
+          onClose={closeContextMenu}
+          onOpenFolder={contextMenu.isFolder ? (id, name) => { handleOpenFolder(id, name); closeContextMenu(); } : undefined}
+          onRename={(id, name) => { handleRename(id, name); closeContextMenu(); }}
+          onDownload={(id, name) => { handleDownload(id, name); closeContextMenu(); }}
+          onOpenInProvider={(id, name) => { handleOpenInProvider(id, name); closeContextMenu(); }}
+          onShareInProvider={(id, name) => { handleShareInProvider(id, name); closeContextMenu(); }}
+          copyDisabled={true}
+        />
       )}
 
       {/* Reconnect Modal */}

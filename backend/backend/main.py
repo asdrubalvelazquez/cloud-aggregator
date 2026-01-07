@@ -1496,7 +1496,19 @@ async def list_accounts(user_id: str = Depends(verify_supabase_jwt)):
 
 @app.get("/drive/{account_id}/copy-options")
 async def get_copy_options(account_id: int, user_id: str = Depends(verify_supabase_jwt)):
-    """Get list of target accounts for copying files (user-specific)"""
+    """
+    Get list of target accounts for copying files (user-specific).
+    Includes both Google Drive (cloud_accounts) and OneDrive (cloud_provider_accounts) targets.
+    
+    Returns:
+        {
+            "source_account": {"id": int, "email": str},
+            "target_accounts": [
+                {"provider": "google_drive", "account_id": "123", "email": "user@gmail.com"},
+                {"provider": "onedrive", "account_id": "uuid", "email": "user@outlook.com"}
+            ]
+        }
+    """
     try:
         # Verify source account exists and belongs to user
         source = (
@@ -1513,25 +1525,51 @@ async def get_copy_options(account_id: int, user_id: str = Depends(verify_supaba
                 detail=f"Account {account_id} not found or doesn't belong to you"
             )
         
-        # Get all other accounts belonging to the same user
-        all_accounts = (
+        # Get all other Google Drive accounts belonging to the same user
+        google_accounts = (
             supabase.table("cloud_accounts")
             .select("id, account_email")
             .eq("user_id", user_id)
+            .eq("is_active", True)
             .execute()
         )
-        targets = [
-            {"id": acc["id"], "email": acc["account_email"]}
-            for acc in all_accounts.data
+        google_targets = [
+            {
+                "provider": "google_drive",
+                "account_id": str(acc["id"]),
+                "email": acc["account_email"]
+            }
+            for acc in google_accounts.data
             if acc["id"] != account_id
         ]
+        
+        # Get all OneDrive accounts belonging to the same user
+        onedrive_accounts = (
+            supabase.table("cloud_provider_accounts")
+            .select("id, account_email")
+            .eq("user_id", user_id)
+            .eq("provider", "onedrive")
+            .eq("is_active", True)
+            .execute()
+        )
+        onedrive_targets = [
+            {
+                "provider": "onedrive",
+                "account_id": acc["id"],  # UUID as string
+                "email": acc["account_email"]
+            }
+            for acc in onedrive_accounts.data
+        ]
+        
+        # Combine all targets
+        all_targets = google_targets + onedrive_targets
         
         return {
             "source_account": {
                 "id": source.data["id"],
                 "email": source.data["account_email"]
             },
-            "target_accounts": targets
+            "target_accounts": all_targets
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

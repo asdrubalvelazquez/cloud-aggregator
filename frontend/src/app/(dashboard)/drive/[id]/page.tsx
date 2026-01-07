@@ -26,7 +26,8 @@ type File = {
 };
 
 type TargetAccount = {
-  id: number;
+  provider: "google_drive" | "onedrive";
+  account_id: string;
   email: string;
 };
 
@@ -90,7 +91,7 @@ export default function DriveFilesPage() {
   const [showCopyModal, setShowCopyModal] = useState(false);
   const [modalFileId, setModalFileId] = useState<string | null>(null);
   const [modalFileName, setModalFileName] = useState<string | null>(null);
-  const [selectedTarget, setSelectedTarget] = useState<number | null>(null);
+  const [selectedTarget, setSelectedTarget] = useState<string | null>(null); // Format: "provider:account_id"
 
   // Multi-select state
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
@@ -173,6 +174,9 @@ export default function DriveFilesPage() {
   const closeContextMenu = useCallback(() => {
     setContextMenu(null);
   }, []);
+
+  // Ref for files container (to prevent native context menu)
+  const filesContainerRef = useRef<HTMLDivElement>(null);
 
   // Google Picker selected files (user explicitly grants access to these files)
   const [pickerFiles, setPickerFiles] = useState<Array<{
@@ -315,6 +319,24 @@ export default function DriveFilesPage() {
     cleanupPolling();
   }, [accountId, closeContextMenu, cleanupPolling]);
 
+  // Global context menu blocker (capture phase) - prevents native menu in files container
+  useEffect(() => {
+    const handleContextMenu = (e: MouseEvent) => {
+      // Only block if click is inside files container
+      if (filesContainerRef.current?.contains(e.target as Node)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    // Register in capture phase (before bubbling)
+    document.addEventListener('contextmenu', handleContextMenu, true);
+
+    return () => {
+      document.removeEventListener('contextmenu', handleContextMenu, true);
+    };
+  }, []);
+
   // Check connection status before loading files
   useEffect(() => {
     const checkConnection = async () => {
@@ -412,20 +434,30 @@ export default function DriveFilesPage() {
     }
   };
 
-  const handleCopyFile = async (fileId: string, targetId: number, fileName: string) => {
-    if (!targetId || copying) {
+  const handleCopyFile = async (fileId: string, targetValue: string, fileName: string) => {
+    if (!targetValue || copying) {
+      return;
+    }
+
+    // Parse provider:account_id
+    const [provider, account_id] = targetValue.split(":");
+    if (!provider || !account_id) {
+      cancelCopyGlobal("❌ Formato de cuenta inválido");
       return;
     }
 
     try {
       startCopy(fileName);
 
-      const res = await authenticatedFetch("/drive/copy-file", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+      if (provider === "google_drive") {
+        // Google Drive → Google Drive (existing flow)
+        const targetId = parseInt(account_id);
+        const res = await authenticatedFetch("/drive/copy-file", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
           source_account_id: parseInt(accountId),
           target_account_id: targetId,
           file_id: fileId,
@@ -514,7 +546,7 @@ export default function DriveFilesPage() {
       if (result.duplicate) {
         completeCopy(`ℹ️ El archivo "${fileName}" ya existe en la cuenta destino. No se realizó copia ni se consumió cuota.`);
       } else {
-        const targetEmail = copyOptions?.target_accounts.find(a => a.id === targetId)?.email || "cuenta destino";
+        const targetEmail = copyOptions?.target_accounts.find(a => `${a.provider}:${a.account_id}` === targetValue)?.email || "cuenta destino";
         completeCopy(`✅ Archivo "${fileName}" copiado exitosamente a ${targetEmail}`);
       }
       
@@ -530,6 +562,75 @@ export default function DriveFilesPage() {
         setSelectedTarget(null);
         resetCopy();
       }, displayDuration);
+      } else if (provider === "onedrive") {
+        // Google Drive → OneDrive (transfer flow)
+        const createRes = await authenticatedFetch("/transfer/create", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            source_provider: "google_drive",
+            source_account_id: parseInt(accountId),
+            target_provider: "onedrive",
+            target_account_id: account_id,
+            files: [{ file_id: fileId, file_name: fileName }],
+          }),
+        });
+
+        if (!createRes.ok) {
+          const errorData = await createRes.json().catch(() => ({}));
+          throw new Error(errorData.detail || `Error ${createRes.status}: No se pudo crear la transferencia`);
+        }
+
+        const createResult = await createRes.json();
+        const job_id = createResult.job_id;
+
+        // Polling para transfer status
+        let polling = true;
+        const pollInterval = setInterval(async () => {
+          if (!polling) return;
+
+          try {
+            const statusRes = await authenticatedFetch(`/transfer/status/${job_id}`);
+            if (!statusRes.ok) {
+              polling = false;
+              clearInterval(pollInterval);
+              throw new Error(`Error polling transfer status`);
+            }
+
+            const status = await statusRes.json();
+            
+            if (status.status === "done") {
+              polling = false;
+              clearInterval(pollInterval);
+              const targetEmail = copyOptions?.target_accounts.find(a => `${a.provider}:${a.account_id}` === targetValue)?.email || "OneDrive";
+              completeCopy(`✅ Archivo "${fileName}" transferido exitosamente a ${targetEmail}`);
+              setQuotaRefreshKey(prev => prev + 1);
+              
+              setTimeout(() => {
+                setShowCopyModal(false);
+                setModalFileId(null);
+                setModalFileName(null);
+                setSelectedTarget(null);
+                resetCopy();
+              }, 3000);
+            } else if (status.status === "failed") {
+              polling = false;
+              clearInterval(pollInterval);
+              throw new Error(`Transfer failed: ${status.error_message || "Unknown error"}`);
+            } else {
+              // Update progress (status === "running")
+              const progress = Math.min((status.processed_count / status.total_count) * 100, 95);
+              updateProgress(progress);
+            }
+          } catch (pollErr: any) {
+            polling = false;
+            clearInterval(pollInterval);
+            throw pollErr;
+          }
+        }, 2000);
+      }
     } catch (e: any) {
       // Log exception to console
       console.error("[COPY EXCEPTION]", {
@@ -655,11 +756,26 @@ export default function DriveFilesPage() {
   };
 
   // Función unificada para ejecutar batch copy (desde botón o menú)
-  const executeBatchCopy = async (fileIds: string[], targetId: number) => {
+  const executeBatchCopy = async (fileIds: string[], targetValue: string) => {
     if (fileIds.length === 0) {
       alert("Selecciona archivos para copiar");
       return;
     }
+
+    // Parse provider:account_id
+    const [provider, account_id] = targetValue.split(":");
+    if (!provider || !account_id) {
+      alert("Formato de cuenta inválido");
+      return;
+    }
+
+    // Only Google→Google supported in batch for now
+    if (provider !== "google_drive") {
+      alert("Batch copy solo está disponible para Google Drive → Google Drive. Usa 'Copiar a OneDrive...' para transferencias OneDrive.");
+      return;
+    }
+
+    const targetId = parseInt(account_id);
 
     // Initialize copyJob
     setCopyJob({ status: "running", total: fileIds.length, completed: 0 });
@@ -906,7 +1022,7 @@ export default function DriveFilesPage() {
       alert("Selecciona archivos y una cuenta destino");
       return;
     }
-    await executeBatchCopy(Array.from(selectedFiles), selectedTarget);
+    await executeBatchCopy(Array.from(selectedFiles), selectedTarget); // selectedTarget is now string
   };
 
   const openRenameModal = (fileId: string, fileName: string) => {
@@ -1373,15 +1489,20 @@ export default function DriveFilesPage() {
                 <div className="flex items-center gap-3">
                   <select
                     value={selectedTarget || ""}
-                    onChange={(e) => setSelectedTarget(parseInt(e.target.value))}
+                    onChange={(e) => setSelectedTarget(e.target.value || null)}
                     className="px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   >
                     <option value="">Seleccionar cuenta destino...</option>
-                    {copyOptions.target_accounts.map((account) => (
-                      <option key={account.id} value={account.id}>
-                        {account.email}
-                      </option>
-                    ))}
+                    {copyOptions.target_accounts.map((account) => {
+                      const value = `${account.provider}:${account.account_id}`;
+                      const providerIcon = account.provider === "google_drive" ? "📁" : "🟦";
+                      return (
+                        <option key={value} value={value}>
+                          {providerIcon} {account.email}
+                        </option>
+                      );
+                    })}
+                  </select>
                   </select>
                   <button
                     type="button"
@@ -1445,9 +1566,11 @@ export default function DriveFilesPage() {
         {/* Files Table */}
         {!loading && !error && files.length > 0 && (
           <div 
+            ref={filesContainerRef}
             key={accountId} 
             className="bg-slate-800 rounded-xl p-4 shadow overflow-x-auto"
             onContextMenu={(e) => e.preventDefault()}
+            onContextMenuCapture={(e) => e.preventDefault()}
           >
             <div 
               onClick={() => setSelectedRowId(null)}
@@ -1634,17 +1757,21 @@ export default function DriveFilesPage() {
               <div className="mb-6">
                 <select
                   value={selectedTarget || ""}
-                  onChange={(e) => setSelectedTarget(e.target.value ? parseInt(e.target.value) : null)}
+                  onChange={(e) => setSelectedTarget(e.target.value || null)}
                   disabled={copyJob.status === "running"}
                   className="w-full bg-slate-700 text-slate-100 border border-slate-600 rounded-lg px-4 py-3 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <option value="">-- Selecciona una nube --</option>
                   {copyOptions?.target_accounts && copyOptions.target_accounts.length > 0 ? (
-                    copyOptions.target_accounts.map((account) => (
-                      <option key={account.id} value={account.id}>
-                        {account.email}
-                      </option>
-                    ))
+                    copyOptions.target_accounts.map((account) => {
+                      const value = `${account.provider}:${account.account_id}`;
+                      const providerIcon = account.provider === "google_drive" ? "📁" : "🟦";
+                      return (
+                        <option key={value} value={value}>
+                          {providerIcon} {account.email}
+                        </option>
+                      );
+                    })
                   ) : (
                     <option disabled>No hay cuentas destino disponibles</option>
                   )}
