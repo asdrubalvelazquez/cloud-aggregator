@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, type MouseEvent } from "react";
+import { createPortal } from "react-dom";
 import { getRowActions } from "@/lib/driveRowActions";
 
 type ContextMenuProps = {
@@ -17,6 +18,8 @@ type ContextMenuProps = {
   onCopy?: (fileId: string, fileName: string) => void;
   onRename?: (fileId: string, fileName: string) => void;
   onDownload?: (fileId: string, fileName: string) => void;
+  onOpenInProvider?: (fileId: string, fileName: string) => void;
+  onShareInProvider?: (fileId: string, fileName: string) => void;
   copyDisabled?: boolean;
 };
 
@@ -34,6 +37,8 @@ export default function ContextMenu({
   onCopy,
   onRename,
   onDownload,
+  onOpenInProvider,
+  onShareInProvider,
   copyDisabled = false,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -100,19 +105,27 @@ export default function ContextMenu({
     onCopy,
     onRename,
     onDownload,
+    onOpenInProvider,
+    onShareInProvider,
     copyDisabled,
   });
 
   // Adjust position to prevent overflow
+  const ITEM_HEIGHT = 40; // px per action item
+  const DIVIDER_HEIGHT = 9; // border-t + my-1 = ~9px
+  const MENU_PADDING = 20; // py-1 + buffer
+  
+  const dividerCount = actions.filter(a => a.dividerAfter).length;
   const menuWidth = 192; // w-48 = 12rem = 192px
-  const menuHeight = actions.length * 40 + 20; // Approximate
+  const menuHeight = actions.length * ITEM_HEIGHT + dividerCount * DIVIDER_HEIGHT + MENU_PADDING;
+  
   const adjustedX = Math.min(x, window.innerWidth - menuWidth - 10);
   const adjustedY = Math.min(y, window.innerHeight - menuHeight - 10);
 
-  return (
+  const menuContent = (
     <div
       ref={menuRef}
-      className="fixed bg-slate-700 border border-slate-600 rounded-lg shadow-xl py-1 w-48 z-50"
+      className="fixed bg-slate-700 border border-slate-600 rounded-lg shadow-xl py-1 w-48 z-[9999]"
       style={{
         left: `${adjustedX}px`,
         top: `${adjustedY}px`,
@@ -159,4 +172,9 @@ export default function ContextMenu({
       ))}
     </div>
   );
+
+  // Render in Portal to document.body (avoid z-index/overflow issues)
+  return typeof document !== "undefined" 
+    ? createPortal(menuContent, document.body)
+    : null;
 }
