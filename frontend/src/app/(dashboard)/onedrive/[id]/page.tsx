@@ -508,9 +508,7 @@ export default function OneDriveFilesPage() {
           onDownload={(id, name) => { handleDownload(id, name); closeContextMenu(); }}
           onOpenInProvider={(id, name) => { handleOpenInProvider(id, name); closeContextMenu(); }}
           onShareInProvider={(id, name) => { handleShareInProvider(id, name); closeContextMenu(); }}
-          copyDisabled={true} 
-          {/* Copy disabled: Backend /transfer/create only supports Google Drive → OneDrive (Phase 1).
-              OneDrive → Google Drive not available until Phase 2. */}
+          copyDisabled={true} // Backend /transfer/create only supports Google Drive → OneDrive (Phase 1)
         />
       )}
 
