@@ -69,6 +69,7 @@ export default function RowActionsMenu({
   };
 
   const handleToggleMenu = (e: ReactMouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
     e.stopPropagation();
     setIsOpen(!isOpen);
   };
@@ -97,6 +98,7 @@ export default function RowActionsMenu({
       <button
         type="button"
         onClick={handleToggleMenu}
+        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
         aria-label="Acciones"
         aria-haspopup="menu"
         aria-expanded={isOpen}

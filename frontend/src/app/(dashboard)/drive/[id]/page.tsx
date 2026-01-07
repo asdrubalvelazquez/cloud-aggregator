@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useCopyContext } from "@/context/CopyContext";
@@ -134,6 +134,28 @@ export default function DriveFilesPage() {
   
   // Failsafe timeout to prevent infinite loading
   const failsafeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Polling cleanup refs (to prevent ghost polling after modal close/navigation)
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyingRef = useRef(false);
+
+  // Sync copying state to ref for timeout checks
+  useEffect(() => {
+    copyingRef.current = copying;
+  }, [copying]);
+
+  // Centralized cleanup function for polling timers
+  const cleanupPolling = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    if (pollTimeoutRef.current) {
+      clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = null;
+    }
+  }, []);
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{
@@ -276,8 +298,17 @@ export default function DriveFilesPage() {
       loadingRef.current = false;
       // Ensure we don't restore this route with a cached "loading=true" state
       setLoading(false);
+      
+      // Cleanup polling timers on unmount
+      cleanupPolling();
     };
-  }, []);
+  }, [cleanupPolling]);
+
+  // Close context menu and cleanup polling when account changes (prevents stale menu after navigation)
+  useEffect(() => {
+    closeContextMenu();
+    cleanupPolling();
+  }, [accountId, closeContextMenu, cleanupPolling]);
 
   // Check connection status before loading files
   useEffect(() => {
@@ -548,6 +579,9 @@ export default function DriveFilesPage() {
 
   const closeCopyModal = () => {
     // Always allow closing (user can hide modal even during copy)
+    
+    // Cleanup any active polling
+    cleanupPolling();
     
     // Clear auto-close timer if exists
     if (autoCloseTimerRef.current) {
@@ -962,6 +996,33 @@ export default function DriveFilesPage() {
     }
   };
 
+  const handleOpenInProvider = (fileId: string, fileName: string) => {
+    // Find the file to get its webViewLink
+    const file = files.find(f => f.id === fileId);
+    const webViewLink = file?.webViewLink || contextMenu?.webViewLink;
+    
+    if (webViewLink) {
+      window.open(webViewLink, "_blank", "noopener,noreferrer");
+    } else {
+      // Fallback to generic Google Drive URL
+      window.open(`https://drive.google.com/file/d/${fileId}`, "_blank", "noopener,noreferrer");
+    }
+  };
+
+  const handleShareInProvider = (fileId: string, fileName: string) => {
+    // Find the file to get its webViewLink
+    const file = files.find(f => f.id === fileId);
+    const webViewLink = file?.webViewLink || contextMenu?.webViewLink;
+    
+    if (webViewLink) {
+      // Open webViewLink directly (user can access Share UI from Google Drive)
+      window.open(webViewLink, "_blank", "noopener,noreferrer");
+    } else {
+      // Fallback to generic Google Drive URL
+      window.open(`https://drive.google.com/file/d/${fileId}`, "_blank", "noopener,noreferrer");
+    }
+  };
+
   // Row click handlers
   const handleRowClick = (fileId: string) => {
     // Debounce to distinguish from double click
@@ -1008,9 +1069,9 @@ export default function DriveFilesPage() {
     });
   };
 
-  const closeContextMenu = () => {
+  const closeContextMenu = useCallback(() => {
     setContextMenu(null);
-  };
+  }, []);
 
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return "0 B";
@@ -1382,8 +1443,15 @@ export default function DriveFilesPage() {
 
         {/* Files Table */}
         {!loading && !error && files.length > 0 && (
-          <div className="bg-slate-800 rounded-xl p-4 shadow overflow-x-auto">
-            <div onClick={() => setSelectedRowId(null)}>
+          <div 
+            key={accountId} 
+            className="bg-slate-800 rounded-xl p-4 shadow overflow-x-auto"
+            onContextMenu={(e) => e.preventDefault()}
+          >
+            <div 
+              onClick={() => setSelectedRowId(null)}
+              onPointerDownCapture={() => contextMenu?.visible && closeContextMenu()}
+            >
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left border-b border-slate-700">
@@ -1464,7 +1532,7 @@ export default function DriveFilesPage() {
                       e.stopPropagation();
                       handleRowDoubleClick(file);
                     }}
-                    onContextMenu={(e) => handleRowContextMenu(e, file)}
+                    onContextMenuCapture={(e) => handleRowContextMenu(e, file)}
                   >
                     {/* Checkbox */}
                     <td className="px-2 py-3">
@@ -1750,6 +1818,8 @@ export default function DriveFilesPage() {
             onCopy={(id, name) => openCopyModal(id, name)}
             onRename={(id, name) => openRenameModal(id, name)}
             onDownload={(id, name) => handleDownloadFile(id, name)}
+            onOpenInProvider={(id, name) => handleOpenInProvider(id, name)}
+            onShareInProvider={(id, name) => handleShareInProvider(id, name)}
             copyDisabled={copying || !copyOptions || copyOptions.target_accounts.length === 0}
           />
         )}
