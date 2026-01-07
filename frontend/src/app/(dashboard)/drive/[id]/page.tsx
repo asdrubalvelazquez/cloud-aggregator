@@ -169,6 +169,11 @@ export default function DriveFilesPage() {
     isFolder: boolean;
   } | null>(null);
 
+  // Close context menu (declared early to avoid hoisting issues in useEffect)
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
   // Google Picker selected files (user explicitly grants access to these files)
   const [pickerFiles, setPickerFiles] = useState<Array<{
     id: string;
@@ -1068,10 +1073,6 @@ export default function DriveFilesPage() {
       isFolder: file.mimeType === "application/vnd.google-apps.folder",
     });
   };
-
-  const closeContextMenu = useCallback(() => {
-    setContextMenu(null);
-  }, []);
 
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return "0 B";
