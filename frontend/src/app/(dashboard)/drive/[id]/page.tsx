@@ -319,24 +319,6 @@ export default function DriveFilesPage() {
     cleanupPolling();
   }, [accountId, closeContextMenu, cleanupPolling]);
 
-  // Global context menu blocker (capture phase) - prevents native menu in files container
-  useEffect(() => {
-    const handleContextMenu = (e: MouseEvent) => {
-      // Only block if click is inside files container
-      if (filesContainerRef.current?.contains(e.target as Node)) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    };
-
-    // Register in capture phase (before bubbling)
-    document.addEventListener('contextmenu', handleContextMenu, true);
-
-    return () => {
-      document.removeEventListener('contextmenu', handleContextMenu, true);
-    };
-  }, []);
-
   // Check connection status before loading files
   useEffect(() => {
     const checkConnection = async () => {
@@ -573,8 +555,8 @@ export default function DriveFilesPage() {
             source_provider: "google_drive",
             source_account_id: parseInt(accountId),
             target_provider: "onedrive",
-            target_account_id: account_id,
-            files: [{ file_id: fileId, file_name: fileName }],
+            target_account_id: account_id, // UUID string
+            file_ids: [fileId], // CRITICAL: Backend expects file_ids: List[str], NOT files array
           }),
         });
 
@@ -1173,6 +1155,11 @@ export default function DriveFilesPage() {
   const handleRowContextMenu = (e: React.MouseEvent, file: File) => {
     e.preventDefault();
     e.stopPropagation();
+
+    // Debug counter for app context menu opens
+    if (typeof window !== "undefined") {
+      (window as any).__appCtxOpens = ((window as any).__appCtxOpens || 0) + 1;
+    }
 
     // Select the row
     setSelectedRowId(file.id);

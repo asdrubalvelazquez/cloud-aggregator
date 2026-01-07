@@ -103,24 +103,6 @@ export default function OneDriveFilesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountId]);
 
-  // Global context menu blocker (capture phase) - prevents native menu in files container
-  useEffect(() => {
-    const handleContextMenu = (e: MouseEvent) => {
-      // Only block if click is inside files container
-      if (filesContainerRef.current?.contains(e.target as Node)) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    };
-
-    // Register in capture phase (before bubbling)
-    document.addEventListener('contextmenu', handleContextMenu, true);
-
-    return () => {
-      document.removeEventListener('contextmenu', handleContextMenu, true);
-    };
-  }, []);
-
   // Close context menu when account changes
   useEffect(() => {
     closeContextMenu();
@@ -238,6 +220,11 @@ export default function OneDriveFilesPage() {
   const handleRowContextMenu = (e: React.MouseEvent, file: OneDriveItem) => {
     e.preventDefault();
     e.stopPropagation();
+
+    // Debug counter for app context menu opens
+    if (typeof window !== "undefined") {
+      (window as any).__appCtxOpens = ((window as any).__appCtxOpens || 0) + 1;
+    }
     
     setContextMenu({
       visible: true,
@@ -521,7 +508,9 @@ export default function OneDriveFilesPage() {
           onDownload={(id, name) => { handleDownload(id, name); closeContextMenu(); }}
           onOpenInProvider={(id, name) => { handleOpenInProvider(id, name); closeContextMenu(); }}
           onShareInProvider={(id, name) => { handleShareInProvider(id, name); closeContextMenu(); }}
-          copyDisabled={true}
+          copyDisabled={true} 
+          {/* Copy disabled: Backend /transfer/create only supports Google Drive → OneDrive (Phase 1).
+              OneDrive → Google Drive not available until Phase 2. */}
         />
       )}
 
