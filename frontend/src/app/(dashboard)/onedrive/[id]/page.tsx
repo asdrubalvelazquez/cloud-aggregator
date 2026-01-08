@@ -9,6 +9,7 @@ import OnedriveRowActionsMenu from "@/components/OnedriveRowActionsMenu";
 import OneDriveRenameModal from "@/components/OneDriveRenameModal";
 import ReconnectSlotsModal from "@/components/ReconnectSlotsModal";
 import ContextMenu from "@/components/ContextMenu";
+import FileActionBar from "@/components/FileActionBar";
 
 export default function OneDriveFilesPage() {
   const params = useParams();
@@ -63,6 +64,9 @@ export default function OneDriveFilesPage() {
 
   // Ref for files container (to prevent native context menu)
   const filesContainerRef = useRef<HTMLDivElement>(null);
+
+  // Multi-select state
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
 
 
   // Check connection status before loading files
@@ -404,13 +408,62 @@ export default function OneDriveFilesPage() {
           </div>
         )}
 
+        {/* File Action Bar - MultCloud style */}
+        <FileActionBar
+          provider="onedrive"
+          selectedCount={selectedFiles.size}
+          singleSelected={
+            selectedFiles.size === 1 
+              ? (() => {
+                  const fileId = Array.from(selectedFiles)[0];
+                  const file = files.find(f => f.id === fileId);
+                  return file ? {
+                    id: file.id,
+                    name: file.name,
+                    isFolder: file.kind === "folder"
+                  } : null;
+                })()
+              : null
+          }
+          onClearSelection={() => setSelectedFiles(new Set())}
+          onDownloadSelected={() => {
+            // Download all selected files
+            const fileIds = Array.from(selectedFiles);
+            fileIds.forEach(fileId => {
+              const file = files.find(f => f.id === fileId);
+              if (file) {
+                handleDownload(fileId, file.name);
+              }
+            });
+          }}
+          onRenameSingle={() => {
+            if (selectedFiles.size === 1) {
+              const fileId = Array.from(selectedFiles)[0];
+              const file = files.find(f => f.id === fileId);
+              if (file && file.kind !== "folder") {
+                handleRename(fileId, file.name);
+              }
+            }
+          }}
+          onPreviewSingle={() => {
+            if (selectedFiles.size === 1) {
+              const fileId = Array.from(selectedFiles)[0];
+              const file = files.find(f => f.id === fileId);
+              if (file && file.webViewLink) {
+                window.open(file.webViewLink, "_blank", "noopener,noreferrer");
+              }
+            }
+          }}
+          onRefresh={() => fetchFiles(currentFolderId)}
+          copyDisabled={true}
+          copyDisabledReason="OneDrive → otras nubes aún no disponible (solo Google Drive → OneDrive en Phase 1)"
+        />
+
         {/* Files table */}
         {!loading && !error && (
           <div 
             ref={filesContainerRef}
             className="bg-slate-800 rounded-lg shadow-lg overflow-hidden"
-            onContextMenu={(e) => e.preventDefault()}
-            onContextMenuCapture={(e) => e.preventDefault()}
           >
             {files.length === 0 ? (
               <div className="py-12 text-center text-slate-400">
@@ -421,6 +474,7 @@ export default function OneDriveFilesPage() {
               <table className="w-full">
                 <thead>
                   <tr className="text-left border-b border-slate-700">
+                    <th className="py-3 px-2 w-10"></th>
                     <th className="py-3 px-4 text-slate-300 font-semibold">Nombre</th>
                     <th className="py-3 px-4 text-slate-300 font-semibold">Tipo</th>
                     <th className="py-3 px-4 text-slate-300 font-semibold">Tamaño</th>
@@ -433,8 +487,29 @@ export default function OneDriveFilesPage() {
                     <tr
                       key={file.id}
                       className="border-b border-slate-800 hover:bg-slate-700/40 transition"
-                      onContextMenuCapture={(e) => handleRowContextMenu(e, file)}
+                      onContextMenu={(e) => handleRowContextMenu(e, file)}
                     >
+                      {/* Checkbox */}
+                      <td className="px-2 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedFiles.has(file.id)}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            setSelectedFiles(prev => {
+                              const newSet = new Set(prev);
+                              if (newSet.has(file.id)) {
+                                newSet.delete(file.id);
+                              } else {
+                                newSet.add(file.id);
+                              }
+                              return newSet;
+                            });
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-600 focus:ring-blue-500 focus:ring-offset-slate-900 cursor-pointer"
+                        />
+                      </td>
                       <td className="py-4 px-4">
                         <div className="flex items-center gap-2">
                           <span className="text-xl">

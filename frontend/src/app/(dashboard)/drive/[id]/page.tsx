@@ -14,6 +14,7 @@ import GooglePickerButton from "@/components/GooglePickerButton";
 import { DriveLoadingState } from "@/components/DriveLoadingState";
 import TransferModal from "@/components/TransferModal";
 import ReconnectSlotsModal from "@/components/ReconnectSlotsModal";
+import FileActionBar from "@/components/FileActionBar";
 
 type File = {
   id: string;
@@ -1529,6 +1530,80 @@ export default function DriveFilesPage() {
           </div>
         )}
 
+        {/* File Action Bar - MultCloud style */}
+        <FileActionBar
+          provider="google_drive"
+          selectedCount={selectedFiles.size}
+          singleSelected={
+            selectedFiles.size === 1 
+              ? (() => {
+                  const fileId = Array.from(selectedFiles)[0];
+                  const file = files.find(f => f.id === fileId);
+                  return file ? {
+                    id: file.id,
+                    name: file.name,
+                    isFolder: file.mimeType === "application/vnd.google-apps.folder"
+                  } : null;
+                })()
+              : null
+          }
+          onClearSelection={() => setSelectedFiles(new Set())}
+          onDownloadSelected={() => {
+            // Download all selected files
+            const fileIds = Array.from(selectedFiles);
+            fileIds.forEach(fileId => {
+              const file = files.find(f => f.id === fileId);
+              if (file) {
+                handleDownloadFile(fileId, file.name);
+              }
+            });
+          }}
+          onCopySelected={() => {
+            // Open copy modal for selected files
+            if (selectedFiles.size === 1) {
+              const fileId = Array.from(selectedFiles)[0];
+              const file = files.find(f => f.id === fileId);
+              if (file) {
+                openCopyModal(fileId, file.name);
+              }
+            } else if (selectedFiles.size > 1) {
+              // Batch copy
+              setModalFileId(null);
+              setModalFileName(`${selectedFiles.size} archivos seleccionados`);
+              setBatchCopyingFromMenu(true);
+              setSelectedTarget(null);
+              setShowCopyModal(true);
+            }
+          }}
+          onRenameSingle={() => {
+            if (selectedFiles.size === 1) {
+              const fileId = Array.from(selectedFiles)[0];
+              const file = files.find(f => f.id === fileId);
+              if (file && file.mimeType !== "application/vnd.google-apps.folder") {
+                openRenameModal(fileId, file.name);
+              }
+            }
+          }}
+          onPreviewSingle={() => {
+            if (selectedFiles.size === 1) {
+              const fileId = Array.from(selectedFiles)[0];
+              const file = files.find(f => f.id === fileId);
+              if (file && file.webViewLink) {
+                window.open(file.webViewLink, "_blank", "noopener,noreferrer");
+              }
+            }
+          }}
+          onRefresh={() => fetchFiles(currentFolderId)}
+          copyDisabled={copying || !copyOptions || copyOptions.target_accounts.length === 0}
+          copyDisabledReason={
+            !copyOptions 
+              ? "Cargando opciones..."
+              : copyOptions.target_accounts.length === 0
+              ? "Necesitas conectar al menos 2 cuentas"
+              : undefined
+          }
+        />
+
         {/* Batch Results Toast */}
         {batchResults && (
           <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
@@ -1555,8 +1630,6 @@ export default function DriveFilesPage() {
             ref={filesContainerRef}
             key={accountId} 
             className="bg-slate-800 rounded-xl p-4 shadow overflow-x-auto"
-            onContextMenu={(e) => e.preventDefault()}
-            onContextMenuCapture={(e) => e.preventDefault()}
           >
             <div 
               onClick={() => setSelectedRowId(null)}
@@ -1642,7 +1715,7 @@ export default function DriveFilesPage() {
                       e.stopPropagation();
                       handleRowDoubleClick(file);
                     }}
-                    onContextMenuCapture={(e) => handleRowContextMenu(e, file)}
+                    onContextMenu={(e) => handleRowContextMenu(e, file)}
                   >
                     {/* Checkbox */}
                     <td className="px-2 py-3">
@@ -1651,7 +1724,6 @@ export default function DriveFilesPage() {
                         checked={selectedFiles.has(file.id)}
                         onChange={() => toggleFileSelection(file.id, file.mimeType)}
                         onClick={(e) => e.stopPropagation()}
-                        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
                         disabled={file.mimeType === "application/vnd.google-apps.folder"}
                         title={file.mimeType === "application/vnd.google-apps.folder" ? "No se pueden copiar carpetas" : ""}
                         className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-emerald-500 focus:ring-2 focus:ring-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed"
