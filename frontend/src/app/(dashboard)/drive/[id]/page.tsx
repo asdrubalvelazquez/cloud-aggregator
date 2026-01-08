@@ -1740,7 +1740,7 @@ export default function DriveFilesPage() {
               <tbody>
                 {sortedFiles.map((file) => (
                   <tr
-                    key={file.id}
+                    key={`${accountId}:${file.id}`}
                     className={`
                       border-b border-slate-800 
                       transition-colors

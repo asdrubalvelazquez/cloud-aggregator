@@ -540,7 +540,7 @@ export default function OneDriveFilesPage() {
                 <tbody>
                   {displayFiles.map((file) => (
                     <tr
-                      key={file.id}
+                      key={`${accountId}:${file.id}`}
                       className="border-b border-slate-800 hover:bg-slate-700/40 transition"
                       onContextMenu={(e) => handleRowContextMenu(e, file)}
                     >
