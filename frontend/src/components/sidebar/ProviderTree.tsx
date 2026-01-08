@@ -88,6 +88,8 @@ export function ProviderTree({ title, icon, provider, accounts, onNavigate }: Pr
                 <Link
                   href={href}
                   onClick={onNavigate}
+                  scroll={false}
+                  prefetch
                   className={`
                     relative block pl-4 pr-3 py-2 rounded-md text-sm transition
                     ${

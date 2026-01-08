@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ExplorerSidebar } from "./ExplorerSidebar";
 
 /**
@@ -9,6 +9,36 @@ import { ExplorerSidebar } from "./ExplorerSidebar";
  */
 export function SidebarLayout({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  useEffect(() => {
+    const count = parseInt(sessionStorage.getItem("ca_sidebar_mounts") || "0") + 1;
+    sessionStorage.setItem("ca_sidebar_mounts", count.toString());
+    console.log(`[SIDEBAR_MOUNT] count=${count}`);
+    
+    return () => {
+      console.log(`[SIDEBAR_UNMOUNT]`);
+    };
+  }, []);
+
+  // HARD RELOAD detection
+  useEffect(() => {
+    // Initialize session ID (persists during client-side navigation)
+    let sessionId = sessionStorage.getItem("ca_session_id");
+    if (!sessionId) {
+      sessionId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      sessionStorage.setItem("ca_session_id", sessionId);
+      console.log(`[SESSION_START] session=${sessionId}`);
+    }
+
+    // Check navigation type
+    if (typeof window !== "undefined" && performance.getEntriesByType) {
+      const navEntries = performance.getEntriesByType("navigation") as PerformanceNavigationTiming[];
+      const navType = navEntries[0]?.type || "unknown";
+      const visibilityState = document.visibilityState;
+      
+      console.log(`[NAV_TYPE] type=${navType} session=${sessionId} visibility=${visibilityState}`);
+    }
+  }, []);
 
   return (
     <div className="flex min-h-screen bg-slate-900">

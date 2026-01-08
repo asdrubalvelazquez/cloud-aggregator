@@ -168,6 +168,8 @@ export default function DriveFilesPage() {
 
   // Reset UI state when cloud account changes (prevents stale menu/actionbar)
   useEffect(() => {
+    console.log(`[PAGE_MOUNT] drive accountId=${accountId}`);
+    
     setIsSwitchingAccount(true);  // Activate switching indicator
     
     setSelectedFiles(new Set());
@@ -179,6 +181,10 @@ export default function DriveFilesPage() {
     setShowRenameModal(false);
     setShowTransferModal(false);
     setShowReconnectModal(false);
+    
+    return () => {
+      console.log(`[PAGE_UNMOUNT] drive accountId=${accountId}`);
+    };
   }, [accountId]);
 
   // Update display files when new files arrive (smooth transition)

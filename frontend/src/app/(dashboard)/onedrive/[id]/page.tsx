@@ -169,7 +169,12 @@ export default function OneDriveFilesPage() {
 
   // Close context menu when account changes
   useEffect(() => {
+    console.log(`[PAGE_MOUNT] onedrive accountId=${accountId}`);
     closeContextMenu();
+    
+    return () => {
+      console.log(`[PAGE_UNMOUNT] onedrive accountId=${accountId}`);
+    };
   }, [accountId, closeContextMenu]);
 
 
