@@ -152,7 +152,24 @@ export default function DriveFilesPage() {
     setSelectedFiles(new Set());
     setContextMenu(null);
     setSelectedRowId(null);
+    
+    // Close any open overlays/modals on cloud switch
+    setShowCopyModal(false);
+    setShowRenameModal(false);
+    setShowTransferModal(false);
+    setShowReconnectModal(false);
   }, [accountId]);
+
+  // Clear stale selections when files list changes (after fetch)
+  useEffect(() => {
+    setSelectedFiles(prev => {
+      if (prev.size === 0) return prev;
+      // Remove selections for files that no longer exist
+      const currentFileIds = new Set(files.map(f => f.id));
+      const newSet = new Set([...prev].filter(id => currentFileIds.has(id)));
+      return newSet.size === prev.size ? prev : newSet;
+    });
+  }, [files]);
 
   // Centralized cleanup function for polling timers
   const cleanupPolling = useCallback(() => {
@@ -721,7 +738,7 @@ export default function DriveFilesPage() {
   };
 
   // Multi-select handlers
-  const toggleFileSelection = (fileId: string, mimeType: string) => {
+  const toggleFileSelection = useCallback((fileId: string, mimeType: string) => {
     // Only allow selection of files (not folders)
     if (mimeType === "application/vnd.google-apps.folder") return;
 
@@ -734,16 +751,16 @@ export default function DriveFilesPage() {
       }
       return newSet;
     });
-  };
+  }, []);
 
-  const selectAllFiles = () => {
+  const selectAllFiles = useCallback(() => {
     const selectableFiles = files.filter(f => f.mimeType !== "application/vnd.google-apps.folder");
     if (selectedFiles.size === selectableFiles.length) {
       setSelectedFiles(new Set());
     } else {
       setSelectedFiles(new Set(selectableFiles.map(f => f.id)));
     }
-  };
+  }, [files, selectedFiles]);
 
   // Función unificada para ejecutar batch copy (desde botón o menú)
   const executeBatchCopy = async (fileIds: string[], targetValue: string) => {

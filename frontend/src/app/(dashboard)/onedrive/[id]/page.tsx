@@ -68,11 +68,39 @@ export default function OneDriveFilesPage() {
   // Multi-select state
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
 
+  // Multi-select handler
+  const toggleFileSelection = useCallback((fileId: string) => {
+    setSelectedFiles(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(fileId)) {
+        newSet.delete(fileId);
+      } else {
+        newSet.add(fileId);
+      }
+      return newSet;
+    });
+  }, []);
+
   // Reset UI state when cloud account changes (prevents stale menu/actionbar)
   useEffect(() => {
     setSelectedFiles(new Set());
     setContextMenu(null);
+    
+    // Close any open overlays/modals on cloud switch
+    setShowRenameModal(false);
+    setShowReconnectModal(false);
   }, [accountId]);
+
+  // Clear stale selections when files list changes (after fetch)
+  useEffect(() => {
+    setSelectedFiles(prev => {
+      if (prev.size === 0) return prev;
+      // Remove selections for files that no longer exist
+      const currentFileIds = new Set(files.map(f => f.id));
+      const newSet = new Set([...prev].filter(id => currentFileIds.has(id)));
+      return newSet.size === prev.size ? prev : newSet;
+    });
+  }, [files]);
 
   // Check connection status before loading files
   useEffect(() => {
@@ -504,15 +532,7 @@ export default function OneDriveFilesPage() {
                           checked={selectedFiles.has(file.id)}
                           onChange={(e) => {
                             e.stopPropagation();
-                            setSelectedFiles(prev => {
-                              const newSet = new Set(prev);
-                              if (newSet.has(file.id)) {
-                                newSet.delete(file.id);
-                              } else {
-                                newSet.add(file.id);
-                              }
-                              return newSet;
-                            });
+                            toggleFileSelection(file.id);
                           }}
                           onClick={(e) => e.stopPropagation()}
                           className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-600 focus:ring-blue-500 focus:ring-offset-slate-900 cursor-pointer"
