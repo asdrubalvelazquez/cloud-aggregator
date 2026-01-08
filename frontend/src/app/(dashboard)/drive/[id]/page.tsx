@@ -56,10 +56,19 @@ export default function DriveFilesPage() {
   const searchParams = useSearchParams();
   const accountId = params.id as string;
 
-  // Debug mode
-  const debug = searchParams?.get("debug") === "1";
+  // Debug mode (persistent via localStorage)
+  const debug =
+    searchParams?.get("debug") === "1" ||
+    (typeof window !== "undefined" && localStorage.getItem("ca_debug") === "1");
   const [lastClickTarget, setLastClickTarget] = useState<string>("");
   const [lastCtxTarget, setLastCtxTarget] = useState<string>("");
+
+  // Save debug flag to localStorage when enabled via query param
+  useEffect(() => {
+    if (typeof window !== "undefined" && searchParams?.get("debug") === "1") {
+      localStorage.setItem("ca_debug", "1");
+    }
+  }, [searchParams]);
 
   // Connection status state
   const [accountStatus, setAccountStatus] = useState<CloudAccountStatus | null>(null);
@@ -1337,6 +1346,14 @@ export default function DriveFilesPage() {
     setIsSwitchingAccount(false);
   };
 
+  // Disable debug handler
+  const handleDisableDebug = () => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("ca_debug");
+      window.location.reload();
+    }
+  };
+
   return (
     <main 
       className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6"
@@ -1348,12 +1365,20 @@ export default function DriveFilesPage() {
         <div className="w-full max-w-6xl mb-4 rounded-lg border border-yellow-500/50 bg-slate-900/90 p-3 text-xs text-slate-200 font-mono">
           <div className="flex items-center justify-between mb-2">
             <span className="text-yellow-400 font-bold">🐛 DEBUG MODE</span>
-            <button
-              onClick={handleResetUI}
-              className="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-white font-semibold text-xs transition"
-            >
-              Reset UI
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handleResetUI}
+                className="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-white font-semibold text-xs transition"
+              >
+                Reset UI
+              </button>
+              <button
+                onClick={handleDisableDebug}
+                className="px-3 py-1 bg-red-600 hover:bg-red-700 rounded text-white font-semibold text-xs transition"
+              >
+                Disable Debug
+              </button>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-x-4 gap-y-1">
             <div>debug=1</div>
