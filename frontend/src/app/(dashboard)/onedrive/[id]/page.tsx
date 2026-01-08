@@ -68,6 +68,10 @@ export default function OneDriveFilesPage() {
   // Multi-select state
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
 
+  // Smooth switching: keep previous files visible while loading new account
+  const [displayFiles, setDisplayFiles] = useState<any[]>([]);
+  const [isSwitchingAccount, setIsSwitchingAccount] = useState(false);
+
   // Multi-select handler
   const toggleFileSelection = useCallback((fileId: string) => {
     setSelectedFiles(prev => {
@@ -83,6 +87,8 @@ export default function OneDriveFilesPage() {
 
   // Reset UI state when cloud account changes (prevents stale menu/actionbar)
   useEffect(() => {
+    setIsSwitchingAccount(true);  // Activate switching indicator
+    
     setSelectedFiles(new Set());
     setContextMenu(null);
     
@@ -90,6 +96,12 @@ export default function OneDriveFilesPage() {
     setShowRenameModal(false);
     setShowReconnectModal(false);
   }, [accountId]);
+
+  // Update display files when new files arrive (smooth transition)
+  useEffect(() => {
+    setDisplayFiles(files);
+    setIsSwitchingAccount(false);
+  }, [files, accountId]);
 
   // Clear stale selections when files list changes (after fetch)
   useEffect(() => {
@@ -311,11 +323,8 @@ export default function OneDriveFilesPage() {
     });
   };
 
-  // Force remount when cloud account changes (prevents stale menu/actionbar)
-  const routeKey = `onedrive-${params?.id ?? accountId ?? "unknown"}`;
-
   return (
-    <main key={routeKey} className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
+    <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
       {/* Checking connection state */}
       {checkingConnection && (
         <div className="w-full max-w-2xl mt-20">
@@ -387,8 +396,17 @@ export default function OneDriveFilesPage() {
           </header>
 
         {/* Breadcrumb */}
-        <nav className="flex items-center gap-2 text-sm text-slate-300">
-          {breadcrumb.map((crumb, index) => (
+        <div className="relative">
+          {/* Switching account indicator */}
+          {isSwitchingAccount && (
+            <div className="absolute top-0 right-0 flex items-center gap-2 text-xs text-slate-400">
+              <div className="animate-spin rounded-full h-3 w-3 border-b border-blue-500"></div>
+              <span>Cargando cuenta...</span>
+            </div>
+          )}
+          
+          <nav className="flex items-center gap-2 text-sm text-slate-300">
+            {breadcrumb.map((crumb, index) => (
             <div key={index} className="flex items-center gap-2">
               {index > 0 && <span className="text-slate-500">/</span>}
               <button
@@ -402,6 +420,7 @@ export default function OneDriveFilesPage() {
             </div>
           ))}
         </nav>
+        </div>
 
         {/* Back button */}
         {breadcrumb.length > 1 && (
@@ -501,7 +520,7 @@ export default function OneDriveFilesPage() {
             ref={filesContainerRef}
             className="bg-slate-800 rounded-lg shadow-lg overflow-hidden"
           >
-            {files.length === 0 ? (
+            {displayFiles.length === 0 ? (
               <div className="py-12 text-center text-slate-400">
                 <p>Esta carpeta está vacía</p>
               </div>
@@ -519,7 +538,7 @@ export default function OneDriveFilesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {files.map((file) => (
+                  {displayFiles.map((file) => (
                     <tr
                       key={file.id}
                       className="border-b border-slate-800 hover:bg-slate-700/40 transition"

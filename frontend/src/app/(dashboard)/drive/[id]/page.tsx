@@ -122,6 +122,10 @@ export default function DriveFilesPage() {
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const clickTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Smooth switching: keep previous files visible while loading new account
+  const [displayFiles, setDisplayFiles] = useState<any[]>([]);
+  const [isSwitchingAccount, setIsSwitchingAccount] = useState(false);
+
   // Copy lock ref (synchronous guard against double submit)
   const copyLockRef = useRef(false);
   
@@ -149,6 +153,8 @@ export default function DriveFilesPage() {
 
   // Reset UI state when cloud account changes (prevents stale menu/actionbar)
   useEffect(() => {
+    setIsSwitchingAccount(true);  // Activate switching indicator
+    
     setSelectedFiles(new Set());
     setContextMenu(null);
     setSelectedRowId(null);
@@ -159,6 +165,12 @@ export default function DriveFilesPage() {
     setShowTransferModal(false);
     setShowReconnectModal(false);
   }, [accountId]);
+
+  // Update display files when new files arrive (smooth transition)
+  useEffect(() => {
+    setDisplayFiles(files);
+    setIsSwitchingAccount(false);
+  }, [files, accountId]);
 
   // Clear stale selections when files list changes (after fetch)
   useEffect(() => {
@@ -1254,11 +1266,11 @@ export default function DriveFilesPage() {
     return parts[parts.length - 1].toUpperCase();
   };
 
-  // Derived sorted files
+  // Derived sorted files (use displayFiles for smooth transitions)
   const sortedFiles = (() => {
-    if (!files || !sortBy) return files;
+    if (!displayFiles || !sortBy) return displayFiles;
     const collator = new Intl.Collator("es", { sensitivity: "base", numeric: true });
-    const arr = [...files];
+    const arr = [...displayFiles];
     arr.sort((a, b) => {
       let av: any;
       let bv: any;
@@ -1294,11 +1306,8 @@ export default function DriveFilesPage() {
     }
   };
 
-  // Force remount when cloud account changes (prevents stale menu/actionbar)
-  const routeKey = `drive-${params?.id ?? accountId ?? "unknown"}`;
-
   return (
-    <main key={routeKey} className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
+    <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
       {/* Checking connection state */}
       {checkingConnection && (
         <div className="w-full max-w-2xl mt-20">
@@ -1415,8 +1424,15 @@ export default function DriveFilesPage() {
 
         {/* Breadcrumb Navigation con botón Atrás */}
         <div className="flex items-center justify-between bg-slate-800 rounded-lg p-4 border border-slate-700">
-          <nav className="flex items-center gap-2 text-sm">
-            {breadcrumb.map((crumb, idx) => (
+          {/* Switching account indicator */}
+          {isSwitchingAccount && (
+            <div className="absolute top-2 right-4 flex items-center gap-2 text-xs text-slate-400">
+              <div className="animate-spin rounded-full h-3 w-3 border-b border-emerald-500"></div>
+              <span>Cargando cuenta...</span>
+            </div>
+          )}
+          
+          <nav className="flex items-center gap-2 text-sm">\n            {breadcrumb.map((crumb, idx) => (
               <span key={crumb.id} className="flex items-center gap-2">
                 {idx > 0 && <span className="text-slate-600">›</span>}
                 <button
