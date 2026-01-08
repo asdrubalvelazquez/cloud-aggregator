@@ -68,6 +68,11 @@ export default function OneDriveFilesPage() {
   // Multi-select state
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
 
+  // Reset UI state when cloud account changes (prevents stale menu/actionbar)
+  useEffect(() => {
+    setSelectedFiles(new Set());
+    setContextMenu(null);
+  }, [accountId]);
 
   // Check connection status before loading files
   useEffect(() => {
@@ -278,8 +283,11 @@ export default function OneDriveFilesPage() {
     });
   };
 
+  // Force remount when cloud account changes (prevents stale menu/actionbar)
+  const routeKey = `onedrive-${params?.id ?? accountId ?? "unknown"}`;
+
   return (
-    <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
+    <main key={routeKey} className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
       {/* Checking connection state */}
       {checkingConnection && (
         <div className="w-full max-w-2xl mt-20">

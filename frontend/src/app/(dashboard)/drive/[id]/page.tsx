@@ -147,6 +147,13 @@ export default function DriveFilesPage() {
     copyingRef.current = copying;
   }, [copying]);
 
+  // Reset UI state when cloud account changes (prevents stale menu/actionbar)
+  useEffect(() => {
+    setSelectedFiles(new Set());
+    setContextMenu(null);
+    setSelectedRowId(null);
+  }, [accountId]);
+
   // Centralized cleanup function for polling timers
   const cleanupPolling = useCallback(() => {
     if (pollIntervalRef.current) {
@@ -1270,8 +1277,11 @@ export default function DriveFilesPage() {
     }
   };
 
+  // Force remount when cloud account changes (prevents stale menu/actionbar)
+  const routeKey = `drive-${params?.id ?? accountId ?? "unknown"}`;
+
   return (
-    <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
+    <main key={routeKey} className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
       {/* Checking connection state */}
       {checkingConnection && (
         <div className="w-full max-w-2xl mt-20">
