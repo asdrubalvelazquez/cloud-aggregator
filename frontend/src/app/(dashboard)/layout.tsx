@@ -1,9 +1,6 @@
-"use client";
-
 import { SidebarLayout } from "@/components/sidebar/SidebarLayout";
 import DashboardContextMenuBlocker from "@/components/DashboardContextMenuBlocker";
-import { useEffect } from "react";
-import { usePathname } from "next/navigation";
+import { ClientNavProbe } from "@/components/debug/ClientNavProbe";
 
 /**
  * Layout for authenticated dashboard routes
@@ -13,22 +10,6 @@ import { usePathname } from "next/navigation";
  * CRITICAL: Global context menu blocker wraps content to prevent native menu
  */
 
-function LayoutMountProbe() {
-  const pathname = usePathname();
-  
-  useEffect(() => {
-    const count = parseInt(sessionStorage.getItem("ca_layout_mounts") || "0") + 1;
-    sessionStorage.setItem("ca_layout_mounts", count.toString());
-    console.log(`[LAYOUT_MOUNT] count=${count} path=${pathname}`);
-    
-    return () => {
-      console.log(`[LAYOUT_UNMOUNT] path=${pathname}`);
-    };
-  }, [pathname]);
-  
-  return null;
-}
-
 export default function DashboardLayout({
   children,
 }: {
@@ -36,7 +17,7 @@ export default function DashboardLayout({
 }) {
   return (
     <DashboardContextMenuBlocker>
-      <LayoutMountProbe />
+      <ClientNavProbe />
       <SidebarLayout>{children}</SidebarLayout>
     </DashboardContextMenuBlocker>
   );

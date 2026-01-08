@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { ExplorerSidebar } from "./ExplorerSidebar";
 
 /**
@@ -10,41 +10,21 @@ import { ExplorerSidebar } from "./ExplorerSidebar";
 export function SidebarLayout({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  useEffect(() => {
-    const count = parseInt(sessionStorage.getItem("ca_sidebar_mounts") || "0") + 1;
-    sessionStorage.setItem("ca_sidebar_mounts", count.toString());
-    console.log(`[SIDEBAR_MOUNT] count=${count}`);
-    
-    return () => {
-      console.log(`[SIDEBAR_UNMOUNT]`);
-    };
-  }, []);
-
-  // HARD RELOAD detection
-  useEffect(() => {
-    // Initialize session ID (persists during client-side navigation)
-    let sessionId = sessionStorage.getItem("ca_session_id");
-    if (!sessionId) {
-      sessionId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      sessionStorage.setItem("ca_session_id", sessionId);
-      console.log(`[SESSION_START] session=${sessionId}`);
-    }
-
-    // Check navigation type
-    if (typeof window !== "undefined" && performance.getEntriesByType) {
-      const navEntries = performance.getEntriesByType("navigation") as PerformanceNavigationTiming[];
-      const navType = navEntries[0]?.type || "unknown";
-      const visibilityState = document.visibilityState;
-      
-      console.log(`[NAV_TYPE] type=${navType} session=${sessionId} visibility=${visibilityState}`);
-    }
-  }, []);
+  const buildId =
+    process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ||
+    process.env.NEXT_PUBLIC_COMMIT_SHA?.slice(0, 7) ||
+    "dev";
 
   return (
     <div className="flex min-h-screen bg-slate-900">
       {/* Desktop Sidebar - Fixed */}
       <aside className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 md:z-30">
-        <ExplorerSidebar />
+        <div className="flex-1 flex flex-col">
+          <ExplorerSidebar />
+        </div>
+        <div className="mt-4 px-4 py-2 text-[10px] text-slate-500 select-none">
+          build: {buildId}
+        </div>
       </aside>
 
       {/* Mobile Drawer Backdrop */}
