@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { fetchOneDriveFiles, fetchOneDriveAccountInfo, renameOneDriveItem, getOneDriveDownloadUrl, fetchCloudStatus } from "@/lib/api";
 import type { OneDriveListResponse, OneDriveItem, CloudAccountStatus } from "@/lib/api";
@@ -14,7 +14,13 @@ import FileActionBar from "@/components/FileActionBar";
 export default function OneDriveFilesPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const accountId = params.id as string;
+
+  // Debug mode
+  const debug = searchParams?.get("debug") === "1";
+  const [lastClickTarget, setLastClickTarget] = useState<string>("");
+  const [lastCtxTarget, setLastCtxTarget] = useState<string>("");
 
   // Connection status state
   const [accountStatus, setAccountStatus] = useState<CloudAccountStatus | null>(null);
@@ -323,8 +329,62 @@ export default function OneDriveFilesPage() {
     });
   };
 
+  // Reset UI handler (debug only)
+  const handleResetUI = async () => {
+    if (!debug) return;
+    
+    // Close all modals
+    setShowRenameModal(false);
+    setShowReconnectModal(false);
+    
+    // Clear selections and menus
+    setSelectedFiles(new Set());
+    setContextMenu(null);
+    
+    // Activate switching indicator
+    setIsSwitchingAccount(true);
+    
+    // Reload files
+    await fetchFiles(currentFolderId);
+    
+    // Deactivate switching indicator
+    setIsSwitchingAccount(false);
+  };
+
   return (
-    <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
+    <main 
+      className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6"
+      onClickCapture={(e) => debug && setLastClickTarget((e.target as HTMLElement)?.tagName + "." + ((e.target as HTMLElement)?.className || ""))}
+      onContextMenuCapture={(e) => debug && setLastCtxTarget((e.target as HTMLElement)?.tagName + "." + ((e.target as HTMLElement)?.className || ""))}
+    >
+      {/* Debug Panel */}
+      {debug && (
+        <div className="w-full max-w-6xl mb-4 rounded-lg border border-yellow-500/50 bg-slate-900/90 p-3 text-xs text-slate-200 font-mono">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-yellow-400 font-bold">🐛 DEBUG MODE</span>
+            <button
+              onClick={handleResetUI}
+              className="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-white font-semibold text-xs transition"
+            >
+              Reset UI
+            </button>
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+            <div>debug=1</div>
+            <div>accountId: {accountId}</div>
+            <div>isSwitchingAccount: {String(isSwitchingAccount)}</div>
+            <div>files: {files.length}, displayFiles: {displayFiles.length}</div>
+            <div>selectedFiles.size: {selectedFiles.size}</div>
+            <div>contextMenu: {contextMenu?.visible ? "open" : "closed"}</div>
+            <div>modals: rename={String(showRenameModal)} reconnect={String(showReconnectModal)}</div>
+            <div>loading: {String(loading)}, error: {error || "null"}</div>
+            <div>currentFolderId: {currentFolderId || "root"}</div>
+            <div className="col-span-2">lastClickTarget: {lastClickTarget}</div>
+            <div className="col-span-2">lastCtxTarget: {lastCtxTarget}</div>
+          </div>
+        </div>
+      )}
+
       {/* Checking connection state */}
       {checkingConnection && (
         <div className="w-full max-w-2xl mt-20">
