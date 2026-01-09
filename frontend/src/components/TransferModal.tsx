@@ -182,7 +182,7 @@ export default function TransferModal({
           <button
             onClick={handleClose}
             className="text-slate-400 hover:text-white transition"
-            title={transferState === "running" || transferState === "preparing" ? "Ocultar (la transferencia continuará)" : "Cerrar"}
+            title={isTransferring ? "Ocultar (la transferencia continuará)" : "Cerrar"}
           >
             ✕
           </button>
