@@ -2,6 +2,7 @@ import os
 import hashlib
 import logging
 import uuid
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 
@@ -2598,7 +2599,23 @@ async def run_transfer_job_endpoint(
                 onedrive_access_token = token_data["access_token"]
         
         # Process each item
+        last_cancel_check_at = 0.0
         for item in items:
+            # Throttle cancel checks to avoid hammering Supabase (every 2 seconds)
+            now = time.time()
+            if now - last_cancel_check_at >= 2.0:
+                last_cancel_check_at = now
+                job_row = (
+                    supabase.table("transfer_jobs")
+                    .select("status")
+                    .eq("id", job_id)
+                    .single()
+                    .execute()
+                )
+                if job_row.data and job_row.data.get("status") == "cancelled":
+                    logging.info(f"[TRANSFER] Job {job_id} cancelled -> stop item loop")
+                    break
+            
             file_name = item.get("source_name") or item.get("source_item_id") or "unknown"
             try:
                 # Mark item as running (sets started_at)
@@ -2669,7 +2686,9 @@ async def run_transfer_job_endpoint(
                     access_token=onedrive_access_token,
                     file_name=file_name,
                     file_data=file_data,
-                    folder_path=target_folder_path
+                    folder_path=target_folder_path,
+                    job_id=job_id,
+                    supabase_client=supabase
                 )
                 
                 # Mark item as done (with webUrl)
@@ -2691,6 +2710,24 @@ async def run_transfer_job_endpoint(
                 )
                 
                 logging.info(f"[TRANSFER] Item {item['id']} transferred successfully: {file_name}")
+                
+            except transfer.TransferCancelled:
+                logging.info(f"[TRANSFER] Cancel detected during upload. job={job_id}")
+                # Mark current item as skipped/cancelled
+                await transfer.update_item_status(
+                    supabase,
+                    item["id"],
+                    status="skipped",
+                    error_message="Cancelled by user"
+                )
+                
+                # Ensure job is cancelled (idempotent)
+                supabase.table("transfer_jobs").update({
+                    "status": "cancelled",
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", job_id).execute()
+                
+                break
                 
             except Exception as e:
                 # CRITICAL: Any failure must update counters to prevent zombie job
@@ -2786,6 +2823,74 @@ async def get_transfer_status_endpoint(
     except Exception as e:
         logging.exception(f"[TRANSFER] Failed to get status for job {job_id}")
         raise HTTPException(status_code=500, detail=f"Failed to get transfer status: {str(e)}")
+
+
+@app.post("/transfer/cancel/{job_id}")
+async def cancel_transfer_job_endpoint(
+    job_id: str,
+    user_id: str = Depends(verify_supabase_jwt),
+):
+    """
+    Cancel a transfer job in progress.
+    
+    BEHAVIOR:
+    - Marks job as 'cancelled'
+    - Stops further item processing
+    - Already completed items remain done
+    - Queued items are marked as 'skipped'
+    
+    SECURITY:
+    - Validates job belongs to user
+    """
+    try:
+        # Verify ownership
+        job_result = (
+            supabase.table("transfer_jobs")
+            .select("*")
+            .eq("id", job_id)
+            .eq("user_id", user_id)
+            .single()
+            .execute()
+        )
+        
+        if not job_result.data:
+            raise HTTPException(status_code=404, detail="Transfer job not found")
+        
+        job = job_result.data
+        
+        # Only cancel if not already terminal
+        if job["status"] in ["done", "failed", "partial", "cancelled"]:
+            return {
+                "job_id": job_id,
+                "status": job["status"],
+                "message": "Job already in terminal state"
+            }
+        
+        # Mark job as cancelled
+        supabase.table("transfer_jobs").update({
+            "status": "cancelled",
+            "completed_at": datetime.now(timezone.utc).isoformat()
+        }).eq("id", job_id).execute()
+        
+        # Mark remaining queued items as skipped
+        supabase.table("transfer_job_items").update({
+            "status": "skipped",
+            "error_message": "Cancelled by user"
+        }).eq("job_id", job_id).eq("status", "queued").execute()
+        
+        logging.info(f"[TRANSFER] Job {job_id} cancelled by user {user_id}")
+        
+        return {
+            "job_id": job_id,
+            "status": "cancelled",
+            "message": "Transfer cancelled successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"[TRANSFER] Failed to cancel job {job_id}")
+        raise HTTPException(status_code=500, detail=f"Failed to cancel transfer: {str(e)}")
 
 
 @app.get("/transfer/targets/onedrive")

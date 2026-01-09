@@ -6,15 +6,22 @@ Handles file transfers between different cloud providers with progress tracking
 import logging
 import httpx
 import asyncio
+import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from fastapi import HTTPException
 from supabase import Client
 
+
+class TransferCancelled(Exception):
+    """Raised when a transfer is cancelled by the user"""
+    pass
+
 logger = logging.getLogger(__name__)
 
-# OneDrive upload chunk size (recommended: 5-10MB for optimal performance)
-ONEDRIVE_CHUNK_SIZE = 10 * 1024 * 1024  # 10MB
+# OneDrive upload chunk size (MUST be multiple of 327680 for optimal performance)
+# Recommended: 327680 * 32 = 10485760 bytes (~10MB)
+ONEDRIVE_CHUNK_SIZE = 327680 * 32  # 10485760 bytes
 
 
 async def create_transfer_job(
@@ -150,15 +157,22 @@ async def get_transfer_job_status(supabase: Client, job_id: str, user_id: str) -
         transferred_bytes = job_data.get("transferred_bytes", 0) or 0
         total_bytes = job_data.get("total_bytes", 0) or 0
     
+    # Calculate progress percentage (None if no total, clamped 0-100)
+    if total_bytes > 0:
+        progress = max(0, min(100, int((transferred_bytes / total_bytes) * 100)))
+    else:
+        progress = None
+    
     return {
         "job": job_data,
         "items": items,
-        "total_items": total_count,
-        "completed_items": completed_count,
-        "failed_items": failed_count,
-        "skipped_items": skipped_count,
-        "transferred_bytes": transferred_bytes,
-        "total_bytes": total_bytes,
+        "total_items": int(total_count),
+        "completed_items": int(completed_count),
+        "failed_items": int(failed_count),
+        "skipped_items": int(skipped_count),
+        "transferred_bytes": int(transferred_bytes),
+        "total_bytes": int(total_bytes),
+        "progress": progress,
     }
 
 
@@ -270,7 +284,9 @@ async def upload_to_onedrive_chunked(
     access_token: str,
     file_name: str,
     file_data: bytes,
-    folder_path: str = "root"
+    folder_path: str = "root",
+    job_id: Optional[str] = None,
+    supabase_client: Optional[Client] = None
 ) -> Dict[str, Any]:
     """
     Upload file to OneDrive using chunked upload session.
@@ -281,6 +297,8 @@ async def upload_to_onedrive_chunked(
         file_name: Target file name
         file_data: File content as bytes
         folder_path: Target folder (default "root")
+        job_id: Transfer job ID for cancel checks (optional)
+        supabase_client: Supabase client for cancel checks (optional)
         
     Returns:
         {
@@ -325,8 +343,23 @@ async def upload_to_onedrive_chunked(
         upload_url = session_data["uploadUrl"]
         
         # Step 2: Upload chunks
+        last_cancel_check_at = 0.0
         offset = 0
         while offset < file_size:
+            # Throttle cancel checks to avoid hammering Supabase (every 2 seconds)
+            now = time.time()
+            if job_id and supabase_client and (now - last_cancel_check_at >= 2.0):
+                last_cancel_check_at = now
+                job_row = (
+                    supabase_client.table("transfer_jobs")
+                    .select("status")
+                    .eq("id", job_id)
+                    .single()
+                    .execute()
+                )
+                if job_row.data and job_row.data.get("status") == "cancelled":
+                    raise TransferCancelled("cancelled by user")
+            
             chunk_end = min(offset + ONEDRIVE_CHUNK_SIZE, file_size)
             chunk = file_data[offset:chunk_end]
             
