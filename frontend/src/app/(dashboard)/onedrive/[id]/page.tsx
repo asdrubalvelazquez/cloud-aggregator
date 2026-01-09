@@ -131,7 +131,7 @@ export default function OneDriveFilesPage() {
   }, [files]);
 
   // Consume cloud status from shared context (no redundant fetch)
-  const { cloudStatus, error: cloudError } = useCloudStatus();
+  const { cloudStatus, error: cloudError, refreshAccounts } = useCloudStatus();
 
   // Track last loaded account to prevent re-fetch when cloudStatus refreshes
   const lastLoadedAccountRef = useRef<string | null>(null);
@@ -148,7 +148,14 @@ export default function OneDriveFilesPage() {
         console.error("[OneDrive] CloudStatus error:", cloudError);
         return;
       }
+      
+      // Request cloudStatus if not loaded yet (prevents infinite loading)
+      console.log("[OneDrive] CloudStatus not loaded, requesting refresh...");
       setCheckingConnection(true);
+      refreshAccounts(false).catch(err => {
+        console.error("[OneDrive] Failed to refresh cloudStatus:", err);
+        setCheckingConnection(false);
+      });
       return;
     }
 
@@ -157,8 +164,18 @@ export default function OneDriveFilesPage() {
       (acc) => acc.provider_account_uuid === accountId
     );
     
-    setAccountStatus(account || null);
+    // Always stop checking spinner
     setCheckingConnection(false);
+    
+    // Handle account not found
+    if (!account) {
+      console.warn("[OneDrive] Account not found in cloudStatus:", accountId);
+      setAccountStatus(null);
+      setError("Cuenta no encontrada o no disponible");
+      return;
+    }
+    
+    setAccountStatus(account);
 
     const isConnected = account && account.connection_status === "connected";
     const hasLoadedThisAccount = lastLoadedAccountRef.current === accountId;

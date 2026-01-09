@@ -379,7 +379,7 @@ export default function DriveFilesPage() {
   }, [accountId, closeContextMenu, cleanupPolling]);
 
   // Consume cloud status from shared context (no redundant fetch)
-  const { cloudStatus, error: cloudError } = useCloudStatus();
+  const { cloudStatus, error: cloudError, refreshAccounts } = useCloudStatus();
 
   // Track last loaded account to prevent re-fetch when cloudStatus refreshes
   const lastLoadedAccountRef = useRef<string | null>(null);
@@ -396,7 +396,14 @@ export default function DriveFilesPage() {
         console.error("[Drive] CloudStatus error:", cloudError);
         return;
       }
+      
+      // Request cloudStatus if not loaded yet (prevents infinite loading)
+      console.log("[Drive] CloudStatus not loaded, requesting refresh...");
       setCheckingConnection(true);
+      refreshAccounts(false).catch(err => {
+        console.error("[Drive] Failed to refresh cloudStatus:", err);
+        setCheckingConnection(false);
+      });
       return;
     }
 
@@ -405,7 +412,9 @@ export default function DriveFilesPage() {
     // Validate accountId is a valid number
     if (isNaN(accountIdNum)) {
       console.error("[Drive] Invalid accountId (not a number):", accountId);
+      setAccountStatus(null);
       setCheckingConnection(false);
+      setError("ID de cuenta inválido");
       return;
     }
     
@@ -414,10 +423,20 @@ export default function DriveFilesPage() {
       (acc) => acc.cloud_account_id === accountIdNum
     );
     
-    setAccountStatus(account || null);
+    // Always stop checking spinner
     setCheckingConnection(false);
+    
+    // Handle account not found
+    if (!account) {
+      console.warn("[Drive] Account not found in cloudStatus:", accountId);
+      setAccountStatus(null);
+      setError("Cuenta no encontrada o no disponible");
+      return;
+    }
+    
+    setAccountStatus(account);
 
-    const isConnected = account && account.connection_status === "connected";
+    const isConnected = account.connection_status === "connected";
     const hasLoadedThisAccount = lastLoadedAccountRef.current === accountId;
     
     // Only proceed if account exists, is connected, and we haven't loaded it yet

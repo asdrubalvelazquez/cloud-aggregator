@@ -1,23 +1,16 @@
 "use client";
 
-import { CloudStatusProvider } from "@/context/CloudStatusContext";
-
 /**
- * Drive Layout (Defensive Provider Wrapper)
+ * Drive Layout (Passthrough)
  * 
- * HOTFIX: Ensures CloudStatusProvider wraps /drive/[id] routes.
- * This layout is a defensive measure to prevent "useCloudStatusContext 
- * must be used within CloudStatusProvider" errors in production.
- * 
- * The parent (dashboard)/layout.tsx already provides CloudStatusProvider,
- * but this ensures it's available even if there's a build/hydration issue.
- * 
- * Nested providers are safe in React - the innermost provider wins.
+ * HOTFIX: Originally had nested CloudStatusProvider which caused provider split.
+ * Now just a passthrough to ensure parent (dashboard)/layout.tsx provider is used.
+ * This prevents isolated state and infinite loading issues.
  */
 export default function DriveLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  return <CloudStatusProvider>{children}</CloudStatusProvider>;
+  return <>{children}</>;
 }
