@@ -3,7 +3,8 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { fetchOneDriveFiles, fetchOneDriveAccountInfo, renameOneDriveItem, getOneDriveDownloadUrl, fetchCloudStatus } from "@/lib/api";
+import { useCloudStatus } from "@/hooks/useCloudStatus";
+import { fetchOneDriveFiles, fetchOneDriveAccountInfo, renameOneDriveItem, getOneDriveDownloadUrl } from "@/lib/api";
 import type { OneDriveListResponse, OneDriveItem, CloudAccountStatus } from "@/lib/api";
 import OnedriveRowActionsMenu from "@/components/OnedriveRowActionsMenu";
 import OneDriveRenameModal from "@/components/OneDriveRenameModal";
@@ -129,43 +130,58 @@ export default function OneDriveFilesPage() {
     });
   }, [files]);
 
+  // Consume cloud status from shared context (no redundant fetch)
+  const { cloudStatus, error: cloudError } = useCloudStatus();
+
+  // Track last loaded account to prevent re-fetch when cloudStatus refreshes
+  const lastLoadedAccountRef = useRef<string | null>(null);
+
   // Check connection status before loading files
   useEffect(() => {
-    const checkConnection = async () => {
-      if (!accountId) return;
-
-      setCheckingConnection(true);
-      try {
-        const cloudStatus = await fetchCloudStatus(true);
-        
-        // Find account by provider_account_uuid (OneDrive uses UUID, not numeric ID)
-        const account = cloudStatus.accounts.find(
-          (acc) => acc.provider_account_uuid === accountId
-        );
-        
-        setAccountStatus(account || null);
-        
-        // Only proceed if account exists and is connected
-        if (account && account.connection_status === "connected") {
-          // Fetch account info
-          fetchOneDriveAccountInfo(accountId)
-            .then((info) => setAccountEmail(info.account_email))
-            .catch((err) => console.error("Failed to fetch account info:", err));
-          
-          // Fetch files
-          fetchFiles(null);
-        }
-      } catch (err) {
-        console.error("Failed to check connection status:", err);
-        setError("Error al verificar estado de conexión");
-      } finally {
+    if (!accountId) return;
+    
+    // Wait for cloudStatus to load from context
+    if (!cloudStatus) {
+      // Stop spinner if there's an error loading cloudStatus
+      if (cloudError) {
         setCheckingConnection(false);
+        console.error("[OneDrive] CloudStatus error:", cloudError);
+        return;
       }
-    };
+      setCheckingConnection(true);
+      return;
+    }
 
-    checkConnection();
+    // Find account by provider_account_uuid (OneDrive uses UUID, not numeric ID)
+    const account = cloudStatus.accounts.find(
+      (acc) => acc.provider_account_uuid === accountId
+    );
+    
+    setAccountStatus(account || null);
+    setCheckingConnection(false);
+
+    const isConnected = account && account.connection_status === "connected";
+    const hasLoadedThisAccount = lastLoadedAccountRef.current === accountId;
+    
+    // Only proceed if account exists, is connected, and we haven't loaded it yet
+    if (isConnected && !hasLoadedThisAccount) {
+      lastLoadedAccountRef.current = accountId;
+      
+      // Fetch account info
+      fetchOneDriveAccountInfo(accountId)
+        .then((info) => setAccountEmail(info.account_email))
+        .catch((err) => console.error("Failed to fetch account info:", err));
+      
+      // Fetch files
+      fetchFiles(null);
+    }
+
+    // Reset ref if account disconnected (allow reload after reconnection)
+    if (!isConnected && hasLoadedThisAccount) {
+      lastLoadedAccountRef.current = null;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accountId]);
+  }, [accountId, cloudStatus]);
 
   // Close context menu when account changes
   useEffect(() => {

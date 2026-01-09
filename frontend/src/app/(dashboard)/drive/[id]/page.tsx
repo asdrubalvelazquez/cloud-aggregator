@@ -4,7 +4,8 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useCopyContext } from "@/context/CopyContext";
-import { authenticatedFetch, fetchCloudStatus } from "@/lib/api";
+import { useCloudStatus } from "@/hooks/useCloudStatus";
+import { authenticatedFetch } from "@/lib/api";
 import type { CloudAccountStatus } from "@/lib/api";
 import QuotaBadge from "@/components/QuotaBadge";
 import RowActionsMenu from "@/components/RowActionsMenu";
@@ -377,39 +378,61 @@ export default function DriveFilesPage() {
     cleanupPolling();
   }, [accountId, closeContextMenu, cleanupPolling]);
 
+  // Consume cloud status from shared context (no redundant fetch)
+  const { cloudStatus, error: cloudError } = useCloudStatus();
+
+  // Track last loaded account to prevent re-fetch when cloudStatus refreshes
+  const lastLoadedAccountRef = useRef<string | null>(null);
+
   // Check connection status before loading files
   useEffect(() => {
-    const checkConnection = async () => {
-      if (!accountId) return;
-
-      setCheckingConnection(true);
-      try {
-        const cloudStatus = await fetchCloudStatus(true);
-        const accountIdNum = parseInt(accountId, 10);
-        
-        // Find account by cloud_account_id
-        const account = cloudStatus.accounts.find(
-          (acc) => acc.cloud_account_id === accountIdNum
-        );
-        
-        setAccountStatus(account || null);
-        
-        // Only proceed if account exists and is connected
-        if (account && account.connection_status === "connected") {
-          fetchFiles("root", null);
-          fetchCopyOptions();
-        }
-      } catch (err) {
-        console.error("Failed to check connection status:", err);
-        setError("Error al verificar estado de conexión");
-      } finally {
+    if (!accountId) return;
+    
+    // Wait for cloudStatus to load from context
+    if (!cloudStatus) {
+      // Stop spinner if there's an error loading cloudStatus
+      if (cloudError) {
         setCheckingConnection(false);
+        console.error("[Drive] CloudStatus error:", cloudError);
+        return;
       }
-    };
+      setCheckingConnection(true);
+      return;
+    }
 
-    checkConnection();
+    const accountIdNum = parseInt(accountId, 10);
+    
+    // Validate accountId is a valid number
+    if (isNaN(accountIdNum)) {
+      console.error("[Drive] Invalid accountId (not a number):", accountId);
+      setCheckingConnection(false);
+      return;
+    }
+    
+    // Find account by cloud_account_id
+    const account = cloudStatus.accounts.find(
+      (acc) => acc.cloud_account_id === accountIdNum
+    );
+    
+    setAccountStatus(account || null);
+    setCheckingConnection(false);
+
+    const isConnected = account && account.connection_status === "connected";
+    const hasLoadedThisAccount = lastLoadedAccountRef.current === accountId;
+    
+    // Only proceed if account exists, is connected, and we haven't loaded it yet
+    if (isConnected && !hasLoadedThisAccount) {
+      lastLoadedAccountRef.current = accountId;
+      fetchFiles("root", null);
+      fetchCopyOptions();
+    }
+
+    // Reset ref if account disconnected (allow reload after reconnection)
+    if (!isConnected && hasLoadedThisAccount) {
+      lastLoadedAccountRef.current = null;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accountId]);
+  }, [accountId, cloudStatus]);
 
   // Auto-close modal when copyJob completes successfully
   useEffect(() => {
