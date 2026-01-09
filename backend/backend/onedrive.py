@@ -162,7 +162,7 @@ async def find_duplicate_in_onedrive(
 
 async def refresh_onedrive_token(refresh_token: str) -> Dict[str, Any]:
     """
-    Refresh OneDrive access token using refresh_token.
+    Refresh OneDrive access token using refresh_token with retry logic.
     
     Args:
         refresh_token: Valid refresh token from cloud_provider_accounts (DECRYPTED)
@@ -176,7 +176,12 @@ async def refresh_onedrive_token(refresh_token: str) -> Dict[str, Any]:
         }
         
     Raises:
-        HTTPException: If token refresh fails
+        HTTPException: If token refresh fails after all retries
+        
+    Retry strategy:
+        - 3 attempts with exponential backoff (1s, 2s, 4s)
+        - Permanent errors (invalid_grant, interaction_required) fail immediately
+        - Transient errors (network, 5xx) are retried
     """
     if not refresh_token or not refresh_token.strip():
         logger.warning("[ONEDRIVE] Refresh token missing")
@@ -189,6 +194,32 @@ async def refresh_onedrive_token(refresh_token: str) -> Dict[str, Any]:
             }
         )
     
+    # Helper: Determine if Microsoft error is permanent
+    def is_permanent_error(error_code: str) -> bool:
+        """
+        Classify Microsoft OAuth errors as permanent vs transient.
+        
+        Permanent (user must reconnect):
+        - invalid_grant: refresh token expired/revoked
+        - interaction_required: user consent required (MFA, policy change)
+        - invalid_client: OAuth app misconfigured
+        - unauthorized_client: App not authorized for tenant
+        
+        Transient (retry eligible):
+        - Network errors, timeouts
+        - 5xx server errors
+        - Rate limiting (429)
+        
+        Ref: https://learn.microsoft.com/en-us/azure/active-directory/develop/reference-aadsts-error-codes
+        """
+        permanent_codes = [
+            "invalid_grant",
+            "interaction_required",
+            "invalid_client",
+            "unauthorized_client"
+        ]
+        return error_code.lower() in permanent_codes
+    
     payload = {
         "client_id": MICROSOFT_CLIENT_ID,
         "client_secret": MICROSOFT_CLIENT_SECRET,
@@ -198,42 +229,113 @@ async def refresh_onedrive_token(refresh_token: str) -> Dict[str, Any]:
         "scope": "offline_access Files.ReadWrite.All User.Read"
     }
     
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(MICROSOFT_TOKEN_URL, data=payload, timeout=30.0)
+    max_attempts = 3
+    backoff_delays = [1.0, 2.0, 4.0]
+    last_error_detail = "Unknown error"
+    
+    for attempt in range(1, max_attempts + 1):
+        try:
+            logger.info(f"[ONEDRIVE_RETRY] attempt={attempt}/{max_attempts}")
             
-            if response.status_code != 200:
-                error_data = response.json() if response.text else {}
-                error_desc = error_data.get("error_description", error_data.get("error", "Unknown error"))
-                logger.error(f"[ONEDRIVE] Token refresh failed: {response.status_code} - {error_desc}")
+            async with httpx.AsyncClient() as client:
+                response = await client.post(MICROSOFT_TOKEN_URL, data=payload, timeout=30.0)
+                
+                if response.status_code != 200:
+                    error_data = response.json() if response.text else {}
+                    error_code = error_data.get("error", "unknown")
+                    error_desc = error_data.get("error_description", error_code)
+                    last_error_detail = error_desc
+                    
+                    # Check if error is permanent
+                    if is_permanent_error(error_code):
+                        logger.error(
+                            f"[ONEDRIVE_RETRY] PERMANENT ERROR attempt={attempt}/{max_attempts} "
+                            f"status={response.status_code} error={error_code}"
+                        )
+                        raise HTTPException(
+                            status_code=401,
+                            detail={
+                                "error_code": "TOKEN_REFRESH_FAILED_PERMANENT",
+                                "message": "OneDrive needs reconnect",
+                                "detail": error_desc,
+                                "error": error_code
+                            }
+                        )
+                    
+                    # Transient error - log and retry
+                    logger.warning(
+                        f"[ONEDRIVE_RETRY] TRANSIENT ERROR attempt={attempt}/{max_attempts} "
+                        f"status={response.status_code} error={error_code}"
+                    )
+                    
+                    if attempt < max_attempts:
+                        import asyncio
+                        delay = backoff_delays[attempt - 1]
+                        logger.info(f"[ONEDRIVE_RETRY] Waiting {delay}s before retry...")
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        # All attempts exhausted
+                        logger.error(
+                            f"[ONEDRIVE_RETRY] ALL ATTEMPTS FAILED "
+                            f"final_status={response.status_code} final_error={error_code}"
+                        )
+                        raise HTTPException(
+                            status_code=401,
+                            detail={
+                                "error_code": "TOKEN_REFRESH_FAILED",
+                                "message": f"OneDrive token refresh failed after {max_attempts} attempts",
+                                "detail": error_desc,
+                                "error": error_code
+                            }
+                        )
+                
+                # SUCCESS - parse response
+                data = response.json()
+                expires_in = data.get("expires_in", 3600)
+                token_expiry = datetime.utcnow() + timedelta(seconds=expires_in)
+                
+                logger.info(f"[ONEDRIVE_RETRY] SUCCESS attempt={attempt}/{max_attempts}")
+                
+                return {
+                    "access_token": data["access_token"],
+                    "refresh_token": data.get("refresh_token", refresh_token),  # Microsoft may not return new one
+                    "expires_in": expires_in,
+                    "token_expiry": token_expiry
+                }
+                
+        except httpx.RequestError as e:
+            # Network errors - retryable
+            logger.warning(f"[ONEDRIVE_RETRY] NETWORK ERROR attempt={attempt}/{max_attempts}: {e}")
+            last_error_detail = str(e)
+            
+            if attempt < max_attempts:
+                import asyncio
+                delay = backoff_delays[attempt - 1]
+                logger.info(f"[ONEDRIVE_RETRY] Waiting {delay}s before retry...")
+                await asyncio.sleep(delay)
+                continue
+            else:
+                # All network attempts failed
+                logger.error(f"[ONEDRIVE_RETRY] NETWORK FAILURE after {max_attempts} attempts")
                 raise HTTPException(
-                    status_code=401,
+                    status_code=503,
                     detail={
-                        "error_code": "TOKEN_REFRESH_FAILED",
-                        "message": "OneDrive needs reconnect",
-                        "detail": error_desc
+                        "error_code": "NETWORK_ERROR",
+                        "message": f"Failed to connect to Microsoft after {max_attempts} attempts",
+                        "detail": last_error_detail
                     }
                 )
-            
-            data = response.json()
-            expires_in = data.get("expires_in", 3600)
-            token_expiry = datetime.utcnow() + timedelta(seconds=expires_in)
-            
-            return {
-                "access_token": data["access_token"],
-                "refresh_token": data.get("refresh_token", refresh_token),  # Microsoft may not return new one
-                "expires_in": expires_in,
-                "token_expiry": token_expiry
-            }
-    except httpx.RequestError as e:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error_code": "NETWORK_ERROR",
-                "message": "Failed to connect to Microsoft token endpoint",
-                "detail": str(e)
-            }
-        )
+    
+    # Should never reach here
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "error_code": "UNEXPECTED_ERROR",
+            "message": "Token refresh failed unexpectedly",
+            "detail": last_error_detail
+        }
+    )
 
 
 async def list_onedrive_files(

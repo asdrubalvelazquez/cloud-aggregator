@@ -88,94 +88,213 @@ async def get_valid_token(account_id: int) -> str:
             }
         )
 
-    # Request new access token
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            token_res = await client.post(
-                GOOGLE_TOKEN_ENDPOINT,
-                data={
-                    "client_id": os.getenv("GOOGLE_CLIENT_ID"),
-                    "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
-                    "refresh_token": refresh_token,
-                    "grant_type": "refresh_token",
-                }
-            )
+    # ============================================================================
+    # RETRY LOGIC: 3 attempts with exponential backoff (1s, 2s, 4s)
+    # Prevents marking account inactive due to transient network/API errors
+    # Only marks inactive if all attempts fail OR error is definitively permanent
+    # ============================================================================
+    
+    # Helper: Determine if error is definitively permanent (no retry)
+    def is_permanent_error(error_type: str) -> bool:
+        """
+        Classify OAuth errors as permanent (user must reconnect) vs transient (retry).
+        
+        Permanent errors (immediate reconnect required):
+        - invalid_grant: refresh token revoked/expired (user revoked access, password changed)
+        - invalid_token: malformed/tampered token
+        - unauthorized_client: OAuth client misconfigured
+        
+        Transient errors (retry eligible):
+        - Network timeouts, DNS failures
+        - Google API 5xx (temporary server errors)
+        - Rate limiting (429)
+        - Temporary unavailability
+        
+        Ref: https://developers.google.com/identity/protocols/oauth2/web-server#offline
+        """
+        permanent_errors = [
+            "invalid_grant",      # Token revoked by user or expired
+            "invalid_token",      # Token malformed
+            "unauthorized_client" # OAuth client issue (config error)
+        ]
+        return error_type.lower() in permanent_errors
+    
+    max_attempts = 3
+    backoff_delays = [1.0, 2.0, 4.0]  # seconds
+    last_error = None
+    last_error_type = "unknown"
+    
+    for attempt in range(1, max_attempts + 1):
+        try:
+            logger.info(f"[TOKEN_RETRY] account_id={account_id} attempt={attempt}/{max_attempts}")
             
-            # Handle refresh errors (invalid_grant, revoked token, etc.)
-            if token_res.status_code != 200:
-                error_data = token_res.json() if token_res.headers.get("content-type", "").startswith("application/json") else {}
-                error_type = error_data.get("error", "unknown")
-                
-                logger.error(
-                    f"[TOKEN REFRESH FAILED] account_id={account_id} email={account_email} "
-                    f"status={token_res.status_code} error={error_type}"
-                )
-                
-                # Mark account as needing reconnection
-                supabase.table("cloud_accounts").update({
-                    "is_active": False,
-                    "disconnected_at": datetime.now(timezone.utc).isoformat()
-                }).eq("id", account_id).execute()
-                
-                raise HTTPException(
-                    status_code=401,
-                    detail={
-                        "message": f"Google Drive token expired or revoked. Please reconnect your account. (Error: {error_type})",
-                        "account_email": account_email,
-                        "needs_reconnect": True,
-                        "error_type": error_type
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                token_res = await client.post(
+                    GOOGLE_TOKEN_ENDPOINT,
+                    data={
+                        "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+                        "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+                        "refresh_token": refresh_token,
+                        "grant_type": "refresh_token",
                     }
                 )
+                
+                # Handle refresh errors (invalid_grant, revoked token, etc.)
+                if token_res.status_code != 200:
+                    error_data = token_res.json() if token_res.headers.get("content-type", "").startswith("application/json") else {}
+                    error_type = error_data.get("error", "unknown")
+                    last_error_type = error_type
+                    
+                    # Check if error is permanent (no point in retrying)
+                    if is_permanent_error(error_type):
+                        logger.error(
+                            f"[TOKEN_RETRY] PERMANENT ERROR account_id={account_id} "
+                            f"attempt={attempt}/{max_attempts} error={error_type} - marking inactive"
+                        )
+                        # Mark account as needing reconnection
+                        supabase.table("cloud_accounts").update({
+                            "is_active": False,
+                            "disconnected_at": datetime.now(timezone.utc).isoformat()
+                        }).eq("id", account_id).execute()
+                        
+                        raise HTTPException(
+                            status_code=401,
+                            detail={
+                                "message": f"Google Drive token expired or revoked. Please reconnect your account. (Error: {error_type})",
+                                "account_email": account_email,
+                                "needs_reconnect": True,
+                                "error_type": error_type
+                            }
+                        )
+                    
+                    # Transient error - log and retry
+                    logger.warning(
+                        f"[TOKEN_RETRY] TRANSIENT ERROR account_id={account_id} "
+                        f"attempt={attempt}/{max_attempts} status={token_res.status_code} error={error_type}"
+                    )
+                    last_error = f"HTTP {token_res.status_code}: {error_type}"
+                    
+                    # If not last attempt, wait and retry
+                    if attempt < max_attempts:
+                        import asyncio
+                        delay = backoff_delays[attempt - 1]
+                        logger.info(f"[TOKEN_RETRY] Waiting {delay}s before retry...")
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        # All attempts exhausted - mark inactive
+                        logger.error(
+                            f"[TOKEN_RETRY] ALL ATTEMPTS FAILED account_id={account_id} "
+                            f"final_error={error_type} - marking inactive"
+                        )
+                        supabase.table("cloud_accounts").update({
+                            "is_active": False,
+                            "disconnected_at": datetime.now(timezone.utc).isoformat()
+                        }).eq("id", account_id).execute()
+                        
+                        raise HTTPException(
+                            status_code=401,
+                            detail={
+                                "message": f"Google Drive token refresh failed after {max_attempts} attempts. Please reconnect. (Error: {error_type})",
+                                "account_email": account_email,
+                                "needs_reconnect": True,
+                                "error_type": error_type
+                            }
+                        )
+                
+                # Parse JSON response (success case)
+                try:
+                    token_json = token_res.json()
+                except Exception as json_err:
+                    logger.warning(f"[TOKEN_RETRY] JSON PARSE ERROR account_id={account_id} attempt={attempt}/{max_attempts}: {json_err}")
+                    last_error = f"Invalid JSON: {str(json_err)}"
+                    
+                    if attempt < max_attempts:
+                        import asyncio
+                        delay = backoff_delays[attempt - 1]
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        # All attempts failed - raise error
+                        raise HTTPException(
+                            status_code=503,
+                            detail={
+                                "message": "Invalid token refresh response",
+                                "account_email": account_email
+                            }
+                        )
+                
+                # SUCCESS - extract token
+                new_access_token = token_json.get("access_token")
+                expires_in = token_json.get("expires_in", 3600)
+                
+                if not new_access_token:
+                    logger.warning(f"[TOKEN_RETRY] NO ACCESS TOKEN account_id={account_id} attempt={attempt}/{max_attempts}")
+                    last_error = "No access_token in response"
+                    
+                    if attempt < max_attempts:
+                        import asyncio
+                        delay = backoff_delays[attempt - 1]
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        raise HTTPException(
+                            status_code=401,
+                            detail={
+                                "message": "Google Drive token refresh failed. Please reconnect your account.",
+                                "account_email": account_email,
+                                "needs_reconnect": True
+                            }
+                        )
+                
+                # Calculate new expiry
+                new_expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+                
+                # Update database with new token and expiry
+                # SECURITY: Encrypt token before storage
+                supabase.table("cloud_accounts").update({
+                    "access_token": encrypt_token(new_access_token),
+                    "token_expiry": new_expiry.isoformat(),
+                    "is_active": True,  # Reactivate if was marked inactive
+                }).eq("id", account_id).execute()
+                
+                logger.info(
+                    f"[TOKEN_RETRY] SUCCESS account_id={account_id} "
+                    f"attempt={attempt}/{max_attempts} new_expiry={new_expiry.isoformat()}"
+                )
+                return new_access_token
+                
+        except httpx.HTTPError as e:
+            # Network errors - retryable
+            logger.warning(f"[TOKEN_RETRY] NETWORK ERROR account_id={account_id} attempt={attempt}/{max_attempts}: {e}")
+            last_error = f"Network error: {str(e)}"
             
-            # Parse JSON response (success case)
-            try:
-                token_json = token_res.json()
-            except Exception as json_err:
-                logger.error(f"[TOKEN REFRESH ERROR] account_id={account_id} invalid JSON response: {str(json_err)}")
+            if attempt < max_attempts:
+                import asyncio
+                delay = backoff_delays[attempt - 1]
+                logger.info(f"[TOKEN_RETRY] Waiting {delay}s before retry...")
+                await asyncio.sleep(delay)
+                continue
+            else:
+                # All network attempts failed - do NOT mark inactive (might be temporary)
+                # Let user retry later without forced reconnect
+                logger.error(f"[TOKEN_RETRY] NETWORK FAILURE account_id={account_id} after {max_attempts} attempts")
                 raise HTTPException(
                     status_code=503,
                     detail={
-                        "message": "Invalid token refresh response",
+                        "message": "Failed to refresh Google Drive token. Network error. Please try again.",
                         "account_email": account_email
                     }
                 )
-    except httpx.HTTPError as e:
-        logger.error(f"[TOKEN REFRESH ERROR] account_id={account_id} network error: {str(e)}")
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "message": "Failed to refresh Google Drive token. Network error.",
-                "account_email": account_email
-            }
-        )
-
-    new_access_token = token_json.get("access_token")
-    expires_in = token_json.get("expires_in", 3600)
-
-    if not new_access_token:
-        logger.error(f"[TOKEN REFRESH FAILED] account_id={account_id} no access_token in response")
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "message": "Google Drive token refresh failed. Please reconnect your account.",
-                "account_email": account_email,
-                "needs_reconnect": True
-            }
-        )
-
-    # Calculate new expiry
-    new_expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
-
-    # Update database with new token and expiry
-    # SECURITY: Encrypt token before storage
-    supabase.table("cloud_accounts").update({
-        "access_token": encrypt_token(new_access_token),
-        "token_expiry": new_expiry.isoformat(),
-        "is_active": True,  # Reactivate if was marked inactive
-    }).eq("id", account_id).execute()
-
-    logger.info(f"[TOKEN REFRESH SUCCESS] account_id={account_id} new_expiry={new_expiry.isoformat()}")
-    return new_access_token
+    
+    # Should never reach here (loop always returns or raises)
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "message": "Token refresh failed unexpectedly",
+            "account_email": account_email
+        }
+    )
 
 
 async def get_storage_quota(account_id: int) -> dict:
