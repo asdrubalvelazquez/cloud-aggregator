@@ -4,7 +4,7 @@
  */
 
 export type TransferItemStatus = "queued" | "running" | "done" | "failed" | "skipped";
-export type TransferJobStatus = "pending" | "preparing" | "queued" | "running" | "done" | "failed" | "partial" | "blocked_quota";
+export type TransferJobStatus = "pending" | "preparing" | "queued" | "running" | "done" | "failed" | "partial" | "blocked_quota" | "cancelled";
 
 export interface TransferItem {
   id: string;
@@ -26,6 +26,7 @@ export interface JobWithItems {
   skipped_items?: number;
   total_bytes: number;
   transferred_bytes: number;
+  progress?: number | null;  // Backend-calculated progress (0-100 or null)
   created_at: string;
   started_at?: string;
   completed_at?: string;
@@ -43,10 +44,10 @@ export interface PersistedQueue {
 }
 
 /**
- * Helper: Check if job is in terminal state (done, failed, partial)
+ * Helper: Check if job is in terminal state (done, failed, partial, cancelled)
  */
 export function isTerminalState(job: JobWithItems): boolean {
-  const terminalStatuses: TransferJobStatus[] = ["done", "failed", "partial"];
+  const terminalStatuses: TransferJobStatus[] = ["done", "failed", "partial", "cancelled"];
   if (terminalStatuses.includes(job.status)) return true;
 
   // Check if all items are processed
@@ -56,9 +57,24 @@ export function isTerminalState(job: JobWithItems): boolean {
 }
 
 /**
- * Helper: Calculate overall progress percentage
+ * Helper: Calculate overall progress percentage (with NaN prevention)
  */
 export function calculateProgress(job: JobWithItems): number {
+  // Prefer backend-calculated progress if available
+  if (job.progress !== undefined && job.progress !== null && Number.isFinite(job.progress)) {
+    return Math.max(0, Math.min(100, job.progress));
+  }
+  
+  // Fallback: Calculate from bytes if available
+  const totalBytes = job.total_bytes || 0;
+  const transferredBytes = job.transferred_bytes || 0;
+  
+  if (totalBytes > 0 && Number.isFinite(totalBytes) && Number.isFinite(transferredBytes)) {
+    const progress = (transferredBytes / totalBytes) * 100;
+    return Math.max(0, Math.min(100, Math.round(progress)));
+  }
+  
+  // Fallback: Calculate from item count
   const total = job.total_items || 0;
   if (total === 0) return 0;
 
@@ -138,6 +154,8 @@ export function getStatusColor(status: TransferJobStatus): string {
       return "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300";
     case "partial":
       return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300";
+    case "cancelled":
+      return "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-300";
     case "running":
       return "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300";
     case "preparing":
@@ -171,6 +189,8 @@ export function getStatusDisplayText(status: TransferJobStatus): string {
       return "Partial";
     case "blocked_quota":
       return "Quota Exceeded";
+    case "cancelled":
+      return "Cancelled";
     default:
       return status;
   }

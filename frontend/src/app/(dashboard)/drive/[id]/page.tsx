@@ -1888,10 +1888,30 @@ export default function DriveFilesPage() {
                       }
                     `}
                     onClick={(e) => {
+                      // Ignore clicks from interactive elements (checkboxes, buttons, inputs)
+                      const target = e.target as HTMLElement;
+                      if (
+                        target.tagName === 'INPUT' ||
+                        target.tagName === 'BUTTON' ||
+                        target.closest('button') ||
+                        target.closest('input')
+                      ) {
+                        return;
+                      }
                       e.stopPropagation();
                       handleRowClick(file.id);
                     }}
                     onDoubleClick={(e) => {
+                      // Ignore double clicks from interactive elements
+                      const target = e.target as HTMLElement;
+                      if (
+                        target.tagName === 'INPUT' ||
+                        target.tagName === 'BUTTON' ||
+                        target.closest('button') ||
+                        target.closest('input')
+                      ) {
+                        return;
+                      }
                       e.stopPropagation();
                       handleRowDoubleClick(file);
                     }}
@@ -1903,6 +1923,7 @@ export default function DriveFilesPage() {
                         type="checkbox"
                         checked={selectedFiles.has(file.id)}
                         onChange={() => toggleFileSelection(file.id, file.mimeType)}
+                        onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
                         disabled={file.mimeType === "application/vnd.google-apps.folder"}
                         title={file.mimeType === "application/vnd.google-apps.folder" ? "No se pueden copiar carpetas" : ""}

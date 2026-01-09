@@ -1,16 +1,33 @@
 "use client";
 
 import { useState } from "react";
-import { JobWithItems, calculateProgress, getStatusColor, getStatusDisplayText, getProviderDisplayName, formatRelativeTime } from "@/types/transfer-queue";
+import { JobWithItems, calculateProgress, getStatusColor, getStatusDisplayText, getProviderDisplayName, formatRelativeTime, isTerminalState } from "@/types/transfer-queue";
 import { TransferItemRow } from "./TransferItemRow";
+import { useTransferQueue } from "@/hooks/useTransferQueue";
 
 interface TransferJobCardProps {
   job: JobWithItems;
 }
 
 export function TransferJobCard({ job }: TransferJobCardProps) {
+  const { cancelJob } = useTransferQueue();
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const progress = calculateProgress(job);
+  const isJobTerminal = isTerminalState(job);
+
+  // Validate progress to prevent NaN display
+  const displayProgress = Number.isFinite(progress) ? progress : 0;
+
+  const handleCancel = async () => {
+    if (isCancelling || isJobTerminal) return;
+    setIsCancelling(true);
+    try {
+      await cancelJob(job.id);
+    } finally {
+      setIsCancelling(false);
+    }
+  };
 
   const getProviderIcon = (provider?: string) => {
     if (!provider) return "📁";
@@ -58,6 +75,21 @@ export function TransferJobCard({ job }: TransferJobCardProps) {
             </div>
           </div>
 
+          {/* Cancel button (only show for non-terminal jobs) */}
+          {!isJobTerminal && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleCancel();
+              }}
+              disabled={isCancelling}
+              className="px-3 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+              title="Cancel transfer"
+            >
+              {isCancelling ? "Cancelling..." : "Cancel"}
+            </button>
+          )}
+
           {/* Expand indicator */}
           <svg
             className={`w-5 h-5 text-gray-400 transition-transform ${isExpanded ? "rotate-180" : ""}`}
@@ -81,13 +113,15 @@ export function TransferJobCard({ job }: TransferJobCardProps) {
                 ? "bg-yellow-500"
                 : job.status === "done"
                 ? "bg-green-500"
+                : job.status === "cancelled"
+                ? "bg-gray-400"
                 : "bg-blue-500"
             }`}
-            style={{ width: `${progress}%` }}
+            style={{ width: `${displayProgress}%` }}
           />
         </div>
         <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 text-right">
-          {progress}%
+          {Number.isFinite(displayProgress) ? `${displayProgress}%` : "Calculating..."}
         </p>
       </div>
 

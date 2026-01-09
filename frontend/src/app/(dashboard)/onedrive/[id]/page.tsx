@@ -676,6 +676,7 @@ export default function OneDriveFilesPage() {
                             e.stopPropagation();
                             toggleFileSelection(file.id);
                           }}
+                          onMouseDown={(e) => e.stopPropagation()}
                           onClick={(e) => e.stopPropagation()}
                           className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-600 focus:ring-blue-500 focus:ring-offset-slate-900 cursor-pointer"
                         />
@@ -688,6 +689,7 @@ export default function OneDriveFilesPage() {
                           {file.kind === "folder" ? (
                             <button
                               onClick={() => handleOpenFolder(file.id, file.name)}
+                              onMouseDown={(e) => e.stopPropagation()}
                               className="font-medium text-blue-400 hover:text-blue-300 hover:underline transition"
                             >
                               {file.name}

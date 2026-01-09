@@ -60,7 +60,10 @@ export default function GooglePickerButton({
     document.body.appendChild(script);
 
     return () => {
-      document.body.removeChild(script);
+      // Validate parentNode exists before removing (prevent "parentNode is null" error)
+      if (script.parentNode) {
+        document.body.removeChild(script);
+      }
     };
   }, []);
 

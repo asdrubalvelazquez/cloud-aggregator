@@ -23,6 +23,7 @@ interface TransferQueueContextValue {
   isPanelOpen: boolean;
   addJob: (job: JobWithItems) => void;
   removeJob: (jobId: string) => void;
+  cancelJob: (jobId: string) => Promise<void>;
   clearCompleted: () => void;
   openPanel: () => void;
   closePanel: () => void;
@@ -215,6 +216,53 @@ export function TransferQueueProvider({ children }: TransferQueueProviderProps) 
     console.log(`[TransferQueue] Removed job ${jobId}`);
   }, []);
 
+  const cancelJob = useCallback(async (jobId: string) => {
+    try {
+      // Optimistic update: mark as cancelled immediately
+      setJobs((prev) => {
+        const updated = new Map(prev);
+        const job = updated.get(jobId);
+        if (job) {
+          updated.set(jobId, { ...job, status: "cancelled" });
+        }
+        return updated;
+      });
+
+      // Call backend to cancel
+      const response = await authenticatedFetch(`/transfer/cancel/${jobId}`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        console.error(`[TransferQueue] Failed to cancel job ${jobId}: ${response.status}`);
+        // Revert optimistic update on failure
+        const statusData = await fetchJobStatus(jobId);
+        if (statusData) {
+          setJobs((prev) => {
+            const updated = new Map(prev);
+            updated.set(jobId, statusData);
+            return updated;
+          });
+        }
+        return;
+      }
+
+      // Fetch final status
+      const statusData = await fetchJobStatus(jobId);
+      if (statusData) {
+        setJobs((prev) => {
+          const updated = new Map(prev);
+          updated.set(jobId, statusData);
+          return updated;
+        });
+      }
+
+      console.log(`[TransferQueue] Cancelled job ${jobId}`);
+    } catch (error) {
+      console.error(`[TransferQueue] Error cancelling job ${jobId}:`, error);
+    }
+  }, [fetchJobStatus]);
+
   const clearCompleted = useCallback(() => {
     setJobs((prev) => {
       const updated = new Map(prev);
@@ -238,6 +286,7 @@ export function TransferQueueProvider({ children }: TransferQueueProviderProps) 
     isPanelOpen,
     addJob,
     removeJob,
+    cancelJob,
     clearCompleted,
     openPanel,
     closePanel,
