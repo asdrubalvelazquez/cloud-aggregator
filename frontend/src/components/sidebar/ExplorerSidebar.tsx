@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { fetchCloudStatus, type CloudStatusResponse } from "@/lib/api";
+import { type CloudStatusResponse } from "@/lib/api";
 import { onCloudStatusRefresh } from "@/lib/cloudStatusEvents";
+import { useCloudStatus } from "@/context/CloudStatusContext";
 import { ProviderTree } from "./ProviderTree";
 
 type Props = {
@@ -15,47 +16,35 @@ type Props = {
  * Shows: Add Cloud button + grouped cloud accounts by provider
  */
 export function ExplorerSidebar({ onNavigate }: Props) {
-  const [cloudStatus, setCloudStatus] = useState<CloudStatusResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Use shared context cache instead of local state
+  const { cloudStatus, loading, error, refreshAccounts } = useCloudStatus();
+  
+  // Local UI state for manual refresh spinner (independent from loading)
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  const loadClouds = async (forceRefresh = false) => {
-    try {
-      if (forceRefresh) {
-        setRefreshing(true);
-        setLoading(false);  // Clear loading state on manual refresh
-      } else {
-        setLoading(true);
-        setRefreshing(false);  // Clear refreshing state on initial load
-      }
-      const data = await fetchCloudStatus(forceRefresh);
-      setCloudStatus(data);
-      setError(null);
-    } catch (err: any) {
-      console.error("Failed to load cloud status:", err);
-      setError(err.message || "Failed to load clouds");
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
-
+  // Effect 1: Subscribe to refresh events (runs once, stable subscription)
   useEffect(() => {
-    loadClouds();
-    
-    // Subscribe to cloud status refresh events
     const unsubscribe = onCloudStatusRefresh(() => {
       console.log("[ExplorerSidebar] Cloud status refresh event received");
-      loadClouds(true);  // Force refresh to avoid stale cache
+      refreshAccounts(true);  // Force refresh to bypass cache
     });
-    
-    // Cleanup subscription on unmount
     return unsubscribe;
-  }, []);
+  }, [refreshAccounts]);
 
-  const handleRefresh = () => {
-    loadClouds(true);
+  // Effect 2: Initial load if cache is empty (only triggers on cloudStatus change)
+  useEffect(() => {
+    if (cloudStatus === null) {
+      refreshAccounts(false);  // Respects cache TTL
+    }
+  }, [cloudStatus, refreshAccounts]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await refreshAccounts(true);  // Force refresh bypasses cache
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   /**

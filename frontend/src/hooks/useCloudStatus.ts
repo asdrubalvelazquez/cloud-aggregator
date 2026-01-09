@@ -1,34 +1,11 @@
-import { useCloudStatusContext } from "@/context/CloudStatusContext";
-
 /**
- * useCloudStatus
+ * Re-export of useCloudStatus from CloudStatusContext
  * 
- * Convenient hook to access global cloud status cache.
+ * CRITICAL: This file exists only for backward compatibility.
+ * It re-exports the hook from @/context/CloudStatusContext to ensure
+ * a single context instance across the entire bundle.
  * 
- * Features:
- * - Shares cache across all consumers (120s TTL by default)
- * - Deduplicates concurrent requests automatically
- * - refreshAccounts(force=false): respects cache TTL
- * - refreshAccounts(force=true): bypasses cache (cache:'no-store')
- * - invalidateCache(): resets lastFetch to force next fetch
- * 
- * Example usage:
- * 
- * ```tsx
- * const { cloudStatus, loading, error, refreshAccounts } = useCloudStatus();
- * 
- * useEffect(() => {
- *   // Initial load (respects cache)
- *   refreshAccounts();
- * }, []);
- * 
- * const handleReconnect = async () => {
- *   // Force refresh after state change
- *   await reconnectAccount();
- *   await refreshAccounts(true);
- * };
- * ```
+ * PREFERRED: Import directly from @/context/CloudStatusContext
+ * AVOID: Creating wrapper hooks that import from different paths
  */
-export function useCloudStatus() {
-  return useCloudStatusContext();
-}
+export { useCloudStatus } from "@/context/CloudStatusContext";

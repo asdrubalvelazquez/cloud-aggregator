@@ -131,17 +131,47 @@ export function CloudStatusProvider({
 }
 
 /**
- * useCloudStatusContext (internal)
+ * useCloudStatus
  * 
- * Low-level hook to access context.
- * Prefer using useCloudStatus() from hooks/useCloudStatus.ts instead.
+ * Hook to access global cloud status cache.
+ * 
+ * CRITICAL: Import ONLY from this file to ensure single context instance.
+ * Do NOT import from @/hooks/useCloudStatus to avoid module duplication.
+ * 
+ * Production Safety: Returns safe fallback if provider missing (prevents crash).
+ * Development: Throws error to catch missing provider early.
  */
-export function useCloudStatusContext(): CloudStatusContextValue {
+export function useCloudStatus(): CloudStatusContextValue {
   const context = useContext(CloudStatusContext);
+  
   if (!context) {
-    throw new Error(
-      "useCloudStatusContext must be used within CloudStatusProvider"
+    // In development: throw to catch bugs early
+    if (process.env.NODE_ENV !== "production") {
+      throw new Error(
+        "useCloudStatus must be used within CloudStatusProvider. " +
+        "Wrap your component tree with <CloudStatusProvider>."
+      );
+    }
+    
+    // In production: safe fallback to prevent crash
+    console.error(
+      "[CloudStatus] CRITICAL: useCloudStatus called outside CloudStatusProvider. " +
+      "Returning safe fallback. Check your component tree."
     );
+    
+    return {
+      cloudStatus: null,
+      loading: false,
+      error: "Cloud status provider missing",
+      lastFetch: null,
+      refreshAccounts: async () => {
+        console.warn("[CloudStatus] refreshAccounts called without provider");
+      },
+      invalidateCache: () => {
+        console.warn("[CloudStatus] invalidateCache called without provider");
+      },
+    };
   }
+  
   return context;
 }

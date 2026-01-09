@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useCopyContext } from "@/context/CopyContext";
-import { useCloudStatus } from "@/hooks/useCloudStatus";
+import { useCloudStatus } from "@/context/CloudStatusContext";
 import { authenticatedFetch } from "@/lib/api";
 import type { CloudAccountStatus } from "@/lib/api";
 import QuotaBadge from "@/components/QuotaBadge";
