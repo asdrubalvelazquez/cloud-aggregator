@@ -13,7 +13,7 @@ import RenameModal from "@/components/RenameModal";
 import ContextMenu from "@/components/ContextMenu";
 import GooglePickerButton from "@/components/GooglePickerButton";
 import { DriveLoadingState } from "@/components/DriveLoadingState";
-import TransferModal from "@/components/TransferModal";
+import UnifiedCopyModal from "@/components/UnifiedCopyModal";
 import ReconnectSlotsModal from "@/components/ReconnectSlotsModal";
 import FileActionBar from "@/components/FileActionBar";
 
@@ -131,9 +131,6 @@ export default function DriveFilesPage() {
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameStatus, setRenameStatus] = useState<string | null>(null);
 
-  // Transfer modal state (Google Drive → OneDrive)
-  const [showTransferModal, setShowTransferModal] = useState(false);
-
   // Row selection state (visual highlight)
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const clickTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -180,7 +177,6 @@ export default function DriveFilesPage() {
     // Close any open overlays/modals on cloud switch
     setShowCopyModal(false);
     setShowRenameModal(false);
-    setShowTransferModal(false);
     setShowReconnectModal(false);
     
     return () => {
@@ -829,13 +825,15 @@ export default function DriveFilesPage() {
   }, []);
 
   const selectAllFiles = useCallback(() => {
-    const selectableFiles = files.filter(f => f.mimeType !== "application/vnd.google-apps.folder");
-    if (selectedFiles.size === selectableFiles.length) {
-      setSelectedFiles(new Set());
-    } else {
-      setSelectedFiles(new Set(selectableFiles.map(f => f.id)));
-    }
-  }, [files, selectedFiles]);
+    const selectable = files.filter(f => f.mimeType !== "application/vnd.google-apps.folder");
+    const selectableIds = new Set(selectable.map(f => f.id));
+
+    setSelectedFiles(prev => {
+      const allSelected = selectable.every(f => prev.has(f.id));
+      if (allSelected) return new Set();
+      return new Set(selectableIds);
+    });
+  }, [files]);
 
   // Función unificada para ejecutar batch copy (desde botón o menú)
   const executeBatchCopy = async (fileIds: string[], targetValue: string) => {
@@ -1376,7 +1374,6 @@ export default function DriveFilesPage() {
     // Close all modals
     setShowCopyModal(false);
     setShowRenameModal(false);
-    setShowTransferModal(false);
     setShowReconnectModal(false);
     
     // Clear selections and menus
@@ -1436,7 +1433,7 @@ export default function DriveFilesPage() {
             <div>selectedFiles.size: {selectedFiles.size}</div>
             <div>selectedRowId: {selectedRowId || "null"}</div>
             <div>contextMenu: {contextMenu?.visible ? "open" : "closed"}</div>
-            <div>modals: copy={String(showCopyModal)} rename={String(showRenameModal)} transfer={String(showTransferModal)} reconnect={String(showReconnectModal)}</div>
+            <div>modals: copy={String(showCopyModal)} rename={String(showRenameModal)} reconnect={String(showReconnectModal)}</div>
             <div>loading: {String(loading)}, error: {error || "null"}</div>
             <div>currentFolderId: {currentFolderId || "root"}</div>
             <div className="col-span-2">lastClickTarget: {lastClickTarget}</div>
@@ -1633,74 +1630,25 @@ export default function DriveFilesPage() {
           </p>
         )}
 
-        {/* Batch Copy Toolbar */}
+        {/* Selection Controls - Minimal UI */}
         {!loading && !error && files.length > 0 && (
-          <div className="bg-slate-800 rounded-lg p-4 border border-slate-700 space-y-3">
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-4">
-                <button
-                  type="button"
-                  onClick={selectAllFiles}
-                  className="text-sm text-emerald-400 hover:text-emerald-300 transition"
-                >
-                  {selectedFiles.size === files.filter(f => f.mimeType !== "application/vnd.google-apps.folder").length && selectedFiles.size > 0
-                    ? "Deseleccionar todos"
-                    : "Seleccionar todos"}
-                </button>
-                {selectedFiles.size > 0 && (
-                  <span className="text-sm text-slate-400">
-                    {selectedFiles.size} archivo{selectedFiles.size > 1 ? "s" : ""} seleccionado{selectedFiles.size > 1 ? "s" : ""}
-                  </span>
-                )}
-              </div>
-              {selectedFiles.size > 0 && copyOptions && (
-                <div className="flex items-center gap-3">
-                  <select
-                    value={selectedTarget || ""}
-                    onChange={(e) => setSelectedTarget(e.target.value || null)}
-                    className="px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  >
-                    <option value="">Seleccionar cuenta destino...</option>
-                    {copyOptions.target_accounts.map((account) => {
-                      const value = `${account.provider}:${account.account_id}`;
-                      const providerIcon = account.provider === "google_drive" ? "📁" : "🟦";
-                      return (
-                        <option key={value} value={value}>
-                          {providerIcon} {account.email}
-                        </option>
-                      );
-                    })}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={handleBatchCopy}
-                    disabled={!selectedTarget || batchCopying}
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition"
-                    title={batchCopying && batchProgress.currentFileName ? `Procesando: ${batchProgress.currentFileName}` : ""}
-                  >
-                    {batchCopying ? (
-                      <div className="flex flex-col items-center">
-                        <span>Copiando {batchProgress.current}/{batchProgress.total}</span>
-                        {batchProgress.currentFileName && (
-                          <span className="text-xs opacity-75 truncate max-w-[200px]">{batchProgress.currentFileName}</span>
-                        )}
-                      </div>
-                    ) : "Copiar seleccionados"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowTransferModal(true)}
-                    disabled={batchCopying}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition"
-                    title="Copiar archivos seleccionados a OneDrive"
-                  >
-                    Copiar a OneDrive...
-                  </button>
-                </div>
+          <div className="mb-3 flex items-center justify-between text-sm">
+            <div className="flex items-center gap-4">
+              <button
+                type="button"
+                onClick={selectAllFiles}
+                className="text-emerald-400 hover:text-emerald-300 transition font-medium"
+              >
+                {selectedFiles.size === files.filter(f => f.mimeType !== "application/vnd.google-apps.folder").length && selectedFiles.size > 0
+                  ? "Deseleccionar todos"
+                  : "Seleccionar todos"}
+              </button>
+              {selectedFiles.size > 0 && (
+                <span className="text-slate-400">
+                  {selectedFiles.size} archivo{selectedFiles.size > 1 ? "s" : ""} seleccionado{selectedFiles.size > 1 ? "s" : ""}
+                </span>
               )}
             </div>
-            
-            {/* Rate limit warning */}
             {selectedFiles.size > 0 && (
               <div className="text-xs text-slate-400 flex items-center gap-1.5">
                 <span>⏱️</span>
@@ -1739,21 +1687,19 @@ export default function DriveFilesPage() {
             });
           }}
           onCopySelected={() => {
-            // Open copy modal for selected files
+            // Open unified copy modal for selected files
             if (selectedFiles.size === 1) {
               const fileId = Array.from(selectedFiles)[0];
               const file = files.find(f => f.id === fileId);
               if (file) {
-                openCopyModal(fileId, file.name);
+                setModalFileId(fileId);
+                setModalFileName(file.name);
               }
             } else if (selectedFiles.size > 1) {
-              // Batch copy
               setModalFileId(null);
               setModalFileName(`${selectedFiles.size} archivos seleccionados`);
-              setBatchCopyingFromMenu(true);
-              setSelectedTarget(null);
-              setShowCopyModal(true);
             }
+            setShowCopyModal(true);
           }}
           onRenameSingle={() => {
             if (selectedFiles.size === 1) {
@@ -1993,182 +1939,6 @@ export default function DriveFilesPage() {
           </div>
         )}
 
-        {/* Copy Modal */}
-        {showCopyModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-slate-800 rounded-lg shadow-xl w-full max-w-md p-6 border border-slate-700">
-              <h2 className="text-xl font-bold text-white mb-4">
-                {batchCopyingFromMenu ? "Copiar archivos seleccionados" : `Copiar: ${modalFileName}`}
-              </h2>
-              
-              <p className="text-slate-300 mb-4">
-                {batchCopyingFromMenu 
-                  ? `Copiar ${selectedFiles.size} archivo${selectedFiles.size > 1 ? 's' : ''} a:` 
-                  : "Selecciona la cuenta destino donde deseas copiar este archivo:"}
-              </p>
-
-              {/* Disclaimer */}
-              <p className="text-xs text-slate-400 italic mb-4 border-l-2 border-slate-600 pl-3">
-                Manual action — requires confirmation.
-              </p>
-
-              {/* Dropdown Select */}
-              <div className="mb-6">
-                <select
-                  value={selectedTarget || ""}
-                  onChange={(e) => setSelectedTarget(e.target.value || null)}
-                  disabled={copyJob.status === "running"}
-                  className="w-full bg-slate-700 text-slate-100 border border-slate-600 rounded-lg px-4 py-3 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <option value="">-- Selecciona una nube --</option>
-                  {copyOptions?.target_accounts && copyOptions.target_accounts.length > 0 ? (
-                    copyOptions.target_accounts.map((account) => {
-                      const value = `${account.provider}:${account.account_id}`;
-                      const providerIcon = account.provider === "google_drive" ? "📁" : "🟦";
-                      return (
-                        <option key={value} value={value}>
-                          {providerIcon} {account.email}
-                        </option>
-                      );
-                    })
-                  ) : (
-                    <option disabled>No hay cuentas destino disponibles</option>
-                  )}
-                </select>
-              </div>
-
-              {/* Progress (unified view using copyJob for batch) */}
-              {copyJob.status === "running" && (
-                <div className="mb-6 space-y-3">
-                  {copyJob.total > 0 ? (
-                    <>
-                      <div className="flex items-center justify-between">
-                        <p className="text-sm text-slate-300 font-semibold">
-                          Copiando {copyJob.completed} / {copyJob.total}
-                        </p>
-                        <span className="text-sm text-emerald-400">
-                          {Math.round((copyJob.completed / copyJob.total) * 100)}%
-                        </span>
-                      </div>
-                      {copyJob.currentFile && (
-                        <p className="text-xs text-slate-400 truncate">
-                          Archivo actual: <span className="text-slate-300">{copyJob.currentFile}</span>
-                        </p>
-                      )}
-                      <div className="w-full h-3 bg-slate-700 rounded-full overflow-hidden border border-slate-600">
-                        <div
-                          className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300"
-                          style={{ width: `${(copyJob.completed / copyJob.total) * 100}%` }}
-                        />
-                      </div>
-                      <p className="text-xs text-slate-400 flex items-center gap-1.5">
-                        <span>⏱️</span>
-                        <span>En cola: {copyJob.total - copyJob.completed} archivo(s)</span>
-                      </p>
-                    </>
-                  ) : (
-                    <div className="flex items-center gap-3 text-slate-300">
-                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-emerald-400"></div>
-                      <p className="text-sm">Preparando copia...</p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Progress Bar (shown during single file copy) */}
-              {!batchCopyingFromMenu && copying && (
-                <div className="mb-6">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm text-slate-300">{copyStatus}</p>
-                    <span className="text-sm font-semibold text-emerald-400">{Math.round(copyProgress)}%</span>
-                  </div>
-                  <div className="w-full h-3 bg-slate-700 rounded-full overflow-hidden border border-slate-600">
-                    <div
-                      className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300"
-                      style={{ width: `${copyProgress}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Status Message (single file) */}
-              {!batchCopyingFromMenu && copyStatus && !copying && (
-                <div className={`mb-6 p-3 rounded-lg text-sm font-medium ${
-                  copyStatus.includes("✅")
-                    ? "bg-emerald-500/20 border border-emerald-500 text-emerald-100"
-                    : copyStatus.includes("ℹ️")
-                    ? "bg-blue-500/20 border border-blue-500 text-blue-100"
-                    : "bg-red-500/20 border border-red-500 text-red-100"
-                }`}>
-                  {copyStatus}
-                </div>
-              )}
-
-              {/* Results (success or partial) */}
-              {copyJob.status === "done" && (
-                <div className="mb-6 p-4 bg-slate-700/50 rounded-lg border border-slate-600">
-                  {batchResults ? (
-                    <>
-                      <h3 className="font-semibold text-white mb-2">Resultado:</h3>
-                      <div className="space-y-1 text-sm">
-                        <div className="flex items-center gap-2">
-                          <span className="text-emerald-400">✅ Éxito:</span>
-                          <span className="text-white font-semibold">{batchResults.success}</span>
-                        </div>
-                        {batchResults.skipped > 0 && (
-                          <div className="flex items-center gap-2">
-                            <span className="text-blue-400">ℹ️ Omitidos (ya existían):</span>
-                            <span className="text-white font-semibold">{batchResults.skipped}</span>
-                          </div>
-                        )}
-                        {batchResults.failed > 0 && (
-                          <div className="flex items-center gap-2">
-                            <span className="text-red-400">❌ Fallidos:</span>
-                            <span className="text-white font-semibold">{batchResults.failed}</span>
-                          </div>
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <p className="text-sm text-emerald-300">✅ Copia completada</p>
-                  )}
-                </div>
-              )}
-
-              {/* Error state */}
-              {copyJob.status === "error" && copyJob.error && (
-                <div className="mb-6 p-4 bg-red-500/20 rounded-lg border border-red-500">
-                  <h3 className="font-semibold text-red-100 mb-2">❌ Error:</h3>
-                  <p className="text-sm text-red-200">{copyJob.error}</p>
-                </div>
-              )}
-
-              {/* Action Buttons */}
-              <div className="flex gap-3 justify-end">
-                <button
-                  type="button"
-                  onClick={closeCopyModal}
-                  className="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg text-sm font-semibold transition"
-                >
-                  {copyJob.status === "running" ? "Ocultar" : "Cerrar"}
-                </button>
-                <button
-                  type="button"
-                  onClick={confirmCopy}
-                  disabled={!selectedTarget || copyJob.status === "running" || copyJob.status === "done"}
-                  className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold transition"
-                >
-                  {copyJob.status === "running" 
-                    ? `Copiando... (${copyJob.completed}/${copyJob.total})` 
-                    : copyJob.status === "done"
-                    ? "Completado"
-                    : "Copiar"}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Rename Modal */}
         <RenameModal
           isOpen={showRenameModal}
@@ -2211,15 +1981,26 @@ export default function DriveFilesPage() {
           />
         )}
 
-        {/* Transfer Modal (Google Drive → OneDrive) */}
-        <TransferModal
-          isOpen={showTransferModal}
-          onClose={() => setShowTransferModal(false)}
+        {/* Unified Copy Modal (Google Drive → Google or OneDrive) */}
+        <UnifiedCopyModal
+          isOpen={showCopyModal}
+          onClose={() => {
+            setShowCopyModal(false);
+            setModalFileId(null);
+            setModalFileName(null);
+          }}
           sourceAccountId={parseInt(accountId)}
           selectedFileIds={Array.from(selectedFiles)}
-          onTransferComplete={() => {
-            // Optionally refresh files or show success message
+          selectedFileLabel={modalFileName || "archivo"}
+          copyOptions={copyOptions}
+          onSuccess={() => {
+            // Refresh files and quota
+            fetchFiles(currentFolderId, null);
             setQuotaRefreshKey(prev => prev + 1);
+            setSelectedFiles(new Set());
+          }}
+          onViewInDestination={(targetAccountId, folderId) => {
+            router.push(`/onedrive/${targetAccountId}/${folderId || "root"}`);
           }}
         />
       </div>
