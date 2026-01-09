@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { useCloudStatus } from "@/context/CloudStatusContext";
+import { useCloudStatusQuery } from "@/queries/useCloudStatusQuery";
 import { fetchOneDriveFiles, fetchOneDriveAccountInfo, renameOneDriveItem, getOneDriveDownloadUrl } from "@/lib/api";
 import type { OneDriveListResponse, OneDriveItem, CloudAccountStatus } from "@/lib/api";
 import OnedriveRowActionsMenu from "@/components/OnedriveRowActionsMenu";
@@ -130,8 +130,8 @@ export default function OneDriveFilesPage() {
     });
   }, [files]);
 
-  // Consume cloud status from shared context (no redundant fetch)
-  const { cloudStatus, error: cloudError, refreshAccounts } = useCloudStatus();
+  // Consume cloud status from React Query (replaces CloudStatusContext)
+  const { data: cloudStatus, error: cloudError, refetch: refetchCloudStatus } = useCloudStatusQuery();
 
   // Track last loaded account to prevent re-fetch when cloudStatus refreshes
   const lastLoadedAccountRef = useRef<string | null>(null);
@@ -140,7 +140,7 @@ export default function OneDriveFilesPage() {
   useEffect(() => {
     if (!accountId) return;
     
-    // Wait for cloudStatus to load from context
+    // Wait for cloudStatus to load from React Query
     if (!cloudStatus) {
       // Stop spinner if there's an error loading cloudStatus
       if (cloudError) {
@@ -152,7 +152,7 @@ export default function OneDriveFilesPage() {
       // Request cloudStatus if not loaded yet (prevents infinite loading)
       console.log("[OneDrive] CloudStatus not loaded, requesting refresh...");
       setCheckingConnection(true);
-      refreshAccounts(false).catch(err => {
+      refetchCloudStatus().catch(err => {
         console.error("[OneDrive] Failed to refresh cloudStatus:", err);
         setCheckingConnection(false);
       });

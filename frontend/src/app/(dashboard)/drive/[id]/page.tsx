@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useCopyContext } from "@/context/CopyContext";
-import { useCloudStatus } from "@/context/CloudStatusContext";
+import { useCloudStatusQuery } from "@/queries/useCloudStatusQuery";
 import { authenticatedFetch } from "@/lib/api";
 import type { CloudAccountStatus } from "@/lib/api";
 import QuotaBadge from "@/components/QuotaBadge";
@@ -378,8 +378,8 @@ export default function DriveFilesPage() {
     cleanupPolling();
   }, [accountId, closeContextMenu, cleanupPolling]);
 
-  // Consume cloud status from shared context (no redundant fetch)
-  const { cloudStatus, error: cloudError, refreshAccounts } = useCloudStatus();
+  // Consume cloud status from React Query (replaces CloudStatusContext)
+  const { data: cloudStatus, error: cloudError, refetch: refetchCloudStatus } = useCloudStatusQuery();
 
   // Track last loaded account to prevent re-fetch when cloudStatus refreshes
   const lastLoadedAccountRef = useRef<string | null>(null);
@@ -388,7 +388,7 @@ export default function DriveFilesPage() {
   useEffect(() => {
     if (!accountId) return;
     
-    // Wait for cloudStatus to load from context
+    // Wait for cloudStatus to load from React Query
     if (!cloudStatus) {
       // Stop spinner if there's an error loading cloudStatus
       if (cloudError) {
@@ -400,7 +400,7 @@ export default function DriveFilesPage() {
       // Request cloudStatus if not loaded yet (prevents infinite loading)
       console.log("[Drive] CloudStatus not loaded, requesting refresh...");
       setCheckingConnection(true);
-      refreshAccounts(false).catch(err => {
+      refetchCloudStatus().catch(err => {
         console.error("[Drive] Failed to refresh cloudStatus:", err);
         setCheckingConnection(false);
       });

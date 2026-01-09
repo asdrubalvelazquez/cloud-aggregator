@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { CLOUD_STATUS_KEY } from "@/queries/useCloudStatusQuery";
 import { CloudAccountStatus, fetchCloudStatus, fetchGoogleLoginUrl, fetchOneDriveLoginUrl, authenticatedFetch } from "@/lib/api";
 import { supabase } from "@/lib/supabaseClient";
-import { emitCloudStatusRefresh } from "@/lib/cloudStatusEvents";
 
 type ReconnectSlotsModalProps = {
   isOpen: boolean;
@@ -28,6 +29,7 @@ export default function ReconnectSlotsModal({
   onReconnect,
   onDisconnect,
 }: ReconnectSlotsModalProps) {
+  const queryClient = useQueryClient();
   const [accounts, setAccounts] = useState<CloudAccountStatus[]>([]);
   const [summary, setSummary] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -299,8 +301,8 @@ export default function ReconnectSlotsModal({
                                   console.log("[DISCONNECT] Success");
                                   await loadCloudStatus();
                                   
-                                  // Emit event to refresh sidebar
-                                  emitCloudStatusRefresh();
+                                  // Refetch React Query cache to refresh sidebar (awaits completion)
+                                  await queryClient.refetchQueries({ queryKey: CLOUD_STATUS_KEY });
                                   
                                   if (onDisconnect) {
                                     onDisconnect(account);

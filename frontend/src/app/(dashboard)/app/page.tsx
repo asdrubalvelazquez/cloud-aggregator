@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState, Suspense } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { CLOUD_STATUS_KEY, useCloudStatusQuery } from "@/queries/useCloudStatusQuery";
 import { DashboardLoadingState } from "@/components/LoadingState";
 import { supabase } from "@/lib/supabaseClient";
 import { authenticatedFetch, fetchCloudStatus } from "@/lib/api";
 import type { CloudStatusResponse } from "@/lib/api";
-import { emitCloudStatusRefresh } from "@/lib/cloudStatusEvents";
 import { useRouter, useSearchParams } from "next/navigation";
 import Toast from "@/components/Toast";
 import ProgressBar from "@/components/ProgressBar";
@@ -126,6 +127,7 @@ function DashboardContent({
   routeParams: DashboardRouteParams;
   routeParamsKey: string | null;
 }) {
+  const queryClient = useQueryClient();
   const [data, setData] = useState<StorageSummary | null>(null);
   const [cloudStorage, setCloudStorage] = useState<CloudStorageSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -139,9 +141,11 @@ function DashboardContent({
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const [quota, setQuota] = useState<QuotaInfo>(null);
   const [billingQuota, setBillingQuota] = useState<BillingQuota>(null);
-  const [cloudStatus, setCloudStatus] = useState<CloudStatusResponse | null>(null);
   const [showReconnectModal, setShowReconnectModal] = useState(false);
   const router = useRouter();
+  
+  // Use React Query for cloudStatus (single source of truth)
+  const { data: cloudStatus } = useCloudStatusQuery();
 
   const withTimeout = async <T,>(promise: Promise<T>, ms: number): Promise<T> => {
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -242,7 +246,8 @@ function DashboardContent({
           reason: a.reason,
         }))
       });
-      setCloudStatus(data);
+      // Note: cloudStatus now comes from React Query (useCloudStatusQuery)
+      // No need to setCloudStatus here - refetchQueries handles it
     } catch (e) {
       console.error("Failed to fetch cloud status:", e);
     }
@@ -306,8 +311,8 @@ function DashboardContent({
           fetchBillingQuota(abortController.signal);
           fetchCloudStatusData();
           
-          // Emit event to refresh sidebar
-          emitCloudStatusRefresh();
+          // Refetch React Query cache to refresh sidebar (awaits completion)
+          await queryClient.refetchQueries({ queryKey: CLOUD_STATUS_KEY });
         } catch (err) {
           console.error("[OAUTH] Exception refreshing session:", err);
           setToast({
@@ -376,13 +381,12 @@ function DashboardContent({
           }
           
           // Update all data
-          setCloudStatus(data);
           fetchSummary(abortController.signal);
           fetchQuota(abortController.signal);
           fetchBillingQuota(abortController.signal);
           
-          // Emit event to refresh sidebar
-          emitCloudStatusRefresh();
+          // Refetch React Query cache to refresh sidebar AND local cloudStatus (awaits completion)
+          await queryClient.refetchQueries({ queryKey: CLOUD_STATUS_KEY });
         } catch (error) {
           console.error("Failed to validate reconnect:", error);
           const message =

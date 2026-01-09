@@ -1,10 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
-import { type CloudStatusResponse } from "@/lib/api";
-import { onCloudStatusRefresh } from "@/lib/cloudStatusEvents";
-import { useCloudStatus } from "@/context/CloudStatusContext";
+import { useCloudStatusQuery } from "@/queries/useCloudStatusQuery";
 import { ProviderTree } from "./ProviderTree";
 
 type Props = {
@@ -14,34 +12,23 @@ type Props = {
 /**
  * Main sidebar with Windows Explorer-style tree navigation
  * Shows: Add Cloud button + grouped cloud accounts by provider
+ * 
+ * REFACTORED: Now uses React Query (useCloudStatusQuery) instead of CloudStatusContext
+ * - Shared cache across all components
+ * - No more event bus (onCloudStatusRefresh)
+ * - Manual refresh via refetch()
  */
 export function ExplorerSidebar({ onNavigate }: Props) {
-  // Use shared context cache instead of local state
-  const { cloudStatus, loading, error, refreshAccounts } = useCloudStatus();
+  // Use React Query for cloud status (replaces CloudStatusContext)
+  const { data: cloudStatus, isLoading, error, refetch } = useCloudStatusQuery();
   
-  // Local UI state for manual refresh spinner (independent from loading)
+  // Local UI state for manual refresh spinner
   const [refreshing, setRefreshing] = useState(false);
-
-  // Effect 1: Subscribe to refresh events (runs once, stable subscription)
-  useEffect(() => {
-    const unsubscribe = onCloudStatusRefresh(() => {
-      console.log("[ExplorerSidebar] Cloud status refresh event received");
-      refreshAccounts(true);  // Force refresh to bypass cache
-    });
-    return unsubscribe;
-  }, [refreshAccounts]);
-
-  // Effect 2: Initial load if cache is empty (only triggers on cloudStatus change)
-  useEffect(() => {
-    if (cloudStatus === null) {
-      refreshAccounts(false);  // Respects cache TTL
-    }
-  }, [cloudStatus, refreshAccounts]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      await refreshAccounts(true);  // Force refresh bypasses cache
+      await refetch();
     } finally {
       setRefreshing(false);
     }
@@ -58,7 +45,7 @@ export function ExplorerSidebar({ onNavigate }: Props) {
     return null;
   };
 
-  // Group accounts by normalized provider
+  // Group accounts by normalized provider (safe: cloudStatus can be undefined)
   const accounts = cloudStatus?.accounts ?? [];
   
   // Debug log (temporary - helps diagnose provider mismatches)
@@ -118,10 +105,10 @@ export function ExplorerSidebar({ onNavigate }: Props) {
 
       {/* Clouds Tree */}
       <div className="flex-1 overflow-y-auto p-4">
-        {loading ? (
+        {isLoading ? (
           <div className="text-sm text-slate-400 animate-pulse">Loading clouds...</div>
         ) : error ? (
-          <div className="text-sm text-red-400">⚠️ {error}</div>
+          <div className="text-sm text-red-400">⚠️ {error instanceof Error ? error.message : 'Failed to load clouds'}</div>
         ) : (
           <div className="space-y-6">
             {/* Single Section: TUS NUBES */}
