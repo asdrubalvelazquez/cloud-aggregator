@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Image from "next/image";
 import { authenticatedFetch } from "@/lib/api";
 import { formatStorageFromGB } from "@/lib/formatStorage";
 import { supabase } from "@/lib/supabaseClient";
@@ -64,40 +63,42 @@ export function DashboardTopBar() {
     : "Traffic: —";
 
   return (
-    <div className="fixed top-0 left-0 right-0 z-40 backdrop-blur-md bg-slate-900/80 border-b border-slate-700/50">
-      <div className="flex items-center justify-between px-6 py-3">
-        {/* Brand Section */}
-        <div className="flex items-center gap-3">
-          <Image
+    <div className="fixed top-0 left-0 right-0 z-40 bg-slate-900/80 backdrop-blur-md border-b border-slate-700/50">
+      <div className="h-[52px] px-5 flex items-center justify-between gap-6">
+        {/* LEFT: Brand */}
+        <div className="flex items-center gap-3 min-w-[260px]">
+          <img
             src="/logo.png"
             alt="Cloud Aggregator"
-            width={28}
-            height={28}
-            className="rounded-md"
-            priority
+            className="h-7 w-7 rounded-md object-contain"
           />
-          <div className="flex flex-col leading-tight">
-            <span className="text-sm font-semibold text-white">Cloud Aggregator</span>
-            {userEmail && <span className="text-xs text-slate-400">{userEmail}</span>}
+          <div className="leading-tight">
+            <div className="text-sm font-semibold text-white">Cloud Aggregator</div>
+            {userEmail ? (
+              <div className="text-xs text-slate-400">{userEmail}</div>
+            ) : (
+              <div className="text-xs text-slate-500"> </div>
+            )}
           </div>
         </div>
 
-        {/* Tabs */}
-        <div className="flex items-center gap-1">
+        {/* CENTER: Tabs (placeholders) */}
+        <nav className="hidden md:flex items-center gap-6 text-sm text-slate-400">
           {TABS.map((tab) => (
-            <button
+            <span
               key={tab.id}
-              disabled
-              className="px-4 py-1.5 text-sm text-slate-400 hover:text-slate-300 hover:bg-slate-800/50 rounded transition cursor-not-allowed"
+              className="hover:text-slate-200 transition-colors cursor-default"
             >
               {tab.label}
-            </button>
+            </span>
           ))}
-        </div>
+        </nav>
 
-        {/* Traffic Pill */}
-        <div className="px-3 py-1 bg-slate-800/60 border border-slate-700/50 rounded-full text-xs text-slate-300 font-medium">
-          {trafficText}
+        {/* RIGHT: Traffic pill */}
+        <div className="flex items-center justify-end min-w-[220px]">
+          <div className="px-3 py-1 bg-slate-800/60 border border-slate-700/50 rounded-full text-xs text-slate-200 font-medium">
+            {trafficText}
+          </div>
         </div>
       </div>
     </div>
