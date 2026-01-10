@@ -212,28 +212,28 @@ export function getStatusColor(status: TransferJobStatus): string {
 }
 
 /**
- * Helper: Get status display text
+ * Helper: Get status display text (humanized, Spanish)
  */
 export function getStatusDisplayText(status: TransferJobStatus): string {
   switch (status) {
     case "pending":
-      return "Pending";
+      return "Pendiente";
     case "preparing":
-      return "Preparing";
+      return "Preparando";
     case "queued":
-      return "Queued";
+      return "En cola";
     case "running":
-      return "Running";
+      return "Copiando";
     case "done":
-      return "Completed";
+      return "Completado";
     case "failed":
-      return "Failed";
+      return "Error";
     case "partial":
-      return "Partial";
+      return "Parcial";
     case "blocked_quota":
-      return "Quota Exceeded";
+      return "Cuota excedida";
     case "cancelled":
-      return "Cancelled";
+      return "Cancelado";
     default:
       return status;
   }

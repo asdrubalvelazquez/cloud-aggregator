@@ -69,7 +69,11 @@ export function TransferJobCard({ job }: TransferJobCardProps) {
               </span>
             </div>
             <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 mt-1">
-              <span>{job.completed_items}/{job.total_items} files</span>
+              <span>
+                {job.status === "queued" || job.status === "pending" 
+                  ? `${job.total_items} ${job.total_items === 1 ? "archivo" : "archivos"}` 
+                  : `${job.completed_items}/${job.total_items} ${job.total_items === 1 ? "archivo" : "archivos"}`}
+              </span>
               <span>•</span>
               <span>{formatRelativeTime(job.created_at)}</span>
             </div>
@@ -84,9 +88,9 @@ export function TransferJobCard({ job }: TransferJobCardProps) {
               }}
               disabled={isCancelling}
               className="px-3 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-              title="Cancel transfer"
+              title="Cancelar transferencia"
             >
-              {isCancelling ? "Cancelling..." : "Cancel"}
+              {isCancelling ? "Cancelando..." : "Cancelar"}
             </button>
           )}
 
@@ -121,7 +125,7 @@ export function TransferJobCard({ job }: TransferJobCardProps) {
           />
         </div>
         <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 text-right">
-          {Number.isFinite(displayProgress) ? `${displayProgress}%` : "Calculating..."}
+          {Number.isFinite(displayProgress) ? `${displayProgress}%` : "Calculando..."}
         </p>
       </div>
 
