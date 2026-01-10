@@ -3,6 +3,7 @@ import DashboardContextMenuBlocker from "@/components/DashboardContextMenuBlocke
 import { ClientNavProbe } from "@/components/debug/ClientNavProbe";
 import { TransferQueuePanel } from "@/components/transfer-queue/TransferQueuePanel";
 import { TransferQueueButton } from "@/components/transfer-queue/TransferQueueButton";
+import { DashboardTopBar } from "@/components/DashboardTopBar";
 import { Providers } from "./providers";
 
 /**
@@ -14,6 +15,7 @@ import { Providers } from "./providers";
  * - This layout is a Server Component (no "use client")
  * - <Providers> wrapper contains QueryClientProvider and other client-side providers
  * - Global context menu blocker wraps content to prevent native menu
+ * - DashboardTopBar is fixed at top (requires pt-[56px] offset on main content)
  */
 
 export default function DashboardLayout({
@@ -25,7 +27,10 @@ export default function DashboardLayout({
     <Providers>
       <DashboardContextMenuBlocker>
         <ClientNavProbe />
-        <SidebarLayout>{children}</SidebarLayout>
+        <DashboardTopBar />
+        <div className="pt-[56px]">
+          <SidebarLayout>{children}</SidebarLayout>
+        </div>
         <TransferQueuePanel />
         <TransferQueueButton />
       </DashboardContextMenuBlocker>
