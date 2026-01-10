@@ -77,52 +77,31 @@ def get_or_create_user_plan(supabase: Client, user_id: str) -> Dict:
 def check_quota_available(supabase: Client, user_id: str) -> Dict:
     """
     Check if user has copy quota available.
-    FREE: Check total_lifetime_copies vs limit (20)
-    PAID: Check copies_used_month vs copies_limit_month
     
-    Raises HTTPException(402) if quota exceeded.
+    UNLIMITED COPIES MODE (Phase 2):
+    - NO HTTPException raised
+    - Returns real usage data from plan
+    - limit is always None (unlimited)
+    - Only transfer_bytes limits enforced via check_transfer_bytes_available()
     
     Returns:
-        Dict with used, limit, remaining
+        Dict with used, limit=None, remaining=None
     """
     plan = get_or_create_user_plan(supabase, user_id)
     plan_name = plan.get("plan", "free")
     
     if plan_name == "free":
-        # FREE: Lifetime copies
+        # FREE: Return lifetime copies data (informational only)
         used = plan.get("total_lifetime_copies", 0)
-        limit = 20  # FREE limit
-        
-        if used >= limit:
-            raise HTTPException(
-                status_code=402,
-                detail={
-                    "error": "quota_exceeded",
-                    "message": "Has alcanzado el límite de 20 copias de por vida para el plan FREE. Actualiza a un plan PAID para más copias.",
-                    "used": used,
-                    "limit": limit
-                }
-            )
     else:
-        # PAID: Monthly copies
+        # PAID: Return monthly copies data (informational only)
         used = plan.get("copies_used_month", 0)
-        limit = plan.get("copies_limit_month", 1000)
-        
-        if used >= limit:
-            raise HTTPException(
-                status_code=402,
-                detail={
-                    "error": "quota_exceeded",
-                    "message": f"Has alcanzado el límite de {limit} copias este mes.",
-                    "used": used,
-                    "limit": limit
-                }
-            )
     
+    # UNLIMITED: No blocking, no exceptions
     return {
         "used": used,
-        "limit": limit,
-        "remaining": limit - used
+        "limit": None,  # Unlimited copies
+        "remaining": None  # Unlimited
     }
 
 
@@ -676,19 +655,14 @@ def check_quota_available_hybrid(supabase: Client, user_id: str) -> Dict:
     """
     Check quota availability with FREE/PAID differentiation.
     
-    FREE users:
-    - Check total_lifetime_copies against 20 (no reset)
-    - Raises 402 if >= 20 lifetime copies
-    
-    PAID users:
-    - Check copies_used_month against copies_limit_month (monthly reset)
-    - Raises 402 if monthly limit exceeded
-    
-    Raises:
-        HTTPException(402) if quota exceeded
+    UNLIMITED COPIES MODE (Phase 2):
+    - NO HTTPException raised for copy limits
+    - Returns real usage data from plan
+    - limit is always None (unlimited)
+    - Only transfer_bytes limits enforced via check_transfer_bytes_available()
     
     Returns:
-        Dict with used, limit, remaining, plan_type
+        Dict with used, limit=None, remaining=None, plan_type, plan
     """
     plan = get_or_create_user_plan(supabase, user_id)
     
@@ -696,52 +670,24 @@ def check_quota_available_hybrid(supabase: Client, user_id: str) -> Dict:
     plan_name = plan.get("plan", "free")
     
     if plan_type == "FREE":
-        # FREE: Check lifetime copies (no reset)
+        # FREE: Return lifetime copies data (informational only)
         used = plan.get("total_lifetime_copies", 0)
-        limit = 20  # Hardcoded limit for FREE
-        remaining = limit - used
-        
-        if used >= limit:
-            raise HTTPException(
-                status_code=402,
-                detail={
-                    "error": "quota_exceeded",
-                    "message": "Has alcanzado el límite de 20 copias de por vida para el plan FREE. Actualiza a un plan PAID para copias ilimitadas.",
-                    "used": used,
-                    "limit": limit,
-                    "plan_type": "FREE"
-                }
-            )
         
         return {
             "used": used,
-            "limit": limit,
-            "remaining": remaining,
+            "limit": None,  # Unlimited copies
+            "remaining": None,  # Unlimited
             "plan_type": "FREE",
             "plan": plan_name
         }
     else:
-        # PAID: Check monthly copies (with reset)
+        # PAID: Return monthly copies data (informational only)
         used = plan.get("copies_used_month", 0)
-        limit = plan.get("copies_limit_month", 999999)  # Unlimited for PAID
-        remaining = limit - used
-        
-        if used >= limit:
-            raise HTTPException(
-                status_code=402,
-                detail={
-                    "error": "quota_exceeded",
-                    "message": f"Has alcanzado el límite de {limit} copias este mes.",
-                    "used": used,
-                    "limit": limit,
-                    "plan_type": "PAID"
-                }
-            )
         
         return {
             "used": used,
-            "limit": limit,
-            "remaining": remaining,
+            "limit": None,  # Unlimited copies
+            "remaining": None,  # Unlimited
             "plan_type": "PAID",
             "plan": plan_name
         }

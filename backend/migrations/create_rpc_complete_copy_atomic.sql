@@ -109,19 +109,19 @@ BEGIN
     
     -- STEP 3: Increment counters based on plan (not plan_type)
     IF v_plan = 'free' THEN
-        -- FREE: Increment lifetime counters only
+        -- FREE: Increment ONLY transfer_bytes (UNLIMITED COPIES Phase 2)
         UPDATE user_plans
         SET 
-            total_lifetime_copies = COALESCE(total_lifetime_copies, 0) + 1,
+            -- total_lifetime_copies = COALESCE(total_lifetime_copies, 0) + 1,  -- DISABLED: Unlimited copies
             transfer_bytes_used_lifetime = COALESCE(transfer_bytes_used_lifetime, 0) + p_bytes_copied,
             updated_at = v_now
         WHERE user_id = p_user_id;
         
     ELSIF v_plan IN ('plus', 'pro') THEN
-        -- PAID: Increment monthly counters only
+        -- PAID: Increment ONLY transfer_bytes (UNLIMITED COPIES Phase 2)
         UPDATE user_plans
         SET 
-            copies_used_month = COALESCE(copies_used_month, 0) + 1,
+            -- copies_used_month = COALESCE(copies_used_month, 0) + 1,  -- DISABLED: Unlimited copies
             transfer_bytes_used_month = COALESCE(transfer_bytes_used_month, 0) + p_bytes_copied,
             updated_at = v_now
         WHERE user_id = p_user_id;
@@ -129,10 +129,10 @@ BEGIN
     ELSE
         RAISE WARNING 'Unknown plan type: %. Defaulting to lifetime counters.', v_plan;
         
-        -- Fallback: Use lifetime counters for unknown plans
+        -- Fallback: ONLY transfer_bytes (UNLIMITED COPIES Phase 2)
         UPDATE user_plans
         SET 
-            total_lifetime_copies = COALESCE(total_lifetime_copies, 0) + 1,
+            -- total_lifetime_copies = COALESCE(total_lifetime_copies, 0) + 1,  -- DISABLED: Unlimited copies
             transfer_bytes_used_lifetime = COALESCE(transfer_bytes_used_lifetime, 0) + p_bytes_copied,
             updated_at = v_now
         WHERE user_id = p_user_id;
