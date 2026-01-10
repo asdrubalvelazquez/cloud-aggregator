@@ -99,32 +99,37 @@ export function DashboardTopBar() {
     <div className="fixed top-0 left-0 right-0 z-40 bg-slate-900/80 backdrop-blur-md border-b border-slate-700/50">
       <div className="h-[64px] px-5 flex items-center justify-between gap-6">
         {/* LEFT: Brand + Email + Traffic */}
-        <div className="flex flex-col justify-center min-w-[280px]">
-          <Link href="/app" className="flex items-center gap-3 hover:opacity-80 transition">
+        <div className="min-w-[320px] grid grid-cols-[48px_1fr] grid-rows-2 items-center gap-x-3">
+          {/* Logo: spans 2 rows */}
+          <Link href="/app" className="row-span-2 self-center hover:opacity-80 transition">
             <img
               src="/732fa691-7a06-42d0-acf2-4b6e300e8953.png"
               alt="Cloud Aggregator"
               className="w-12 h-12 object-contain"
             />
-            <span className="text-[18px] font-semibold text-white leading-none">Cloud Aggregator</span>
           </Link>
 
-          <div className="relative ml-[52px] mt-1" ref={dropdownRef}>
+          {/* Title: row 1 col 2 */}
+          <Link href="/app" className="self-end hover:opacity-80 transition">
+            <div className="text-[20px] font-semibold text-white leading-none">Cloud Aggregator</div>
+          </Link>
+
+          {/* Email + Traffic: row 2 col 2 */}
+          <div className="self-start relative" ref={dropdownRef}>
             <button
-              onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-              className="flex flex-col items-start hover:bg-slate-800/50 px-2 py-1 rounded transition"
+              onClick={() => setIsDropdownOpen((v) => !v)}
+              className="text-[12.5px] text-slate-400 hover:text-slate-200 transition"
             >
-              <span className="text-[12.5px] text-slate-400">
-                {userEmail || ' '}
-              </span>
-              <span className="text-[11px] text-slate-500">
-                {trafficText}
-              </span>
+              {userEmail || "Loading..."}
             </button>
+
+            <div className="text-[11px] text-slate-500 leading-none mt-1">
+              {trafficText}
+            </div>
 
             {/* Dropdown Menu */}
             {isDropdownOpen && (
-              <div className="absolute top-full mt-2 left-0 w-48 bg-slate-800 border border-slate-700 rounded-lg shadow-xl py-1 z-50">
+              <div className="absolute top-full left-0 mt-2 w-60 bg-slate-800 border border-slate-700 rounded-lg shadow-xl py-1 z-50">
                 <button className="w-full text-left px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 transition">
                   Settings
                 </button>
