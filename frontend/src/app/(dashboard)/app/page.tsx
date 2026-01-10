@@ -508,18 +508,26 @@ function DashboardContent({
   };
 
   const handleLogout = async () => {
-    // Ensure no lingering loading/error UI survives after sign-out
+    // CRITICAL: Clear UI state BEFORE sign-out to prevent visual glitches
     setLoading(false);
     setHardError(null);
     setSoftTimeout(false);
     setToast(null);
 
     try {
+      // Sign out from Supabase (clears session/cookies)
       await supabase.auth.signOut();
-    } finally {
-      // Use replace so back button doesn't land on /app with stale state
-      router.replace("/");
+    } catch (error) {
+      // Even if signOut fails, force navigation (handles network errors)
+      console.error("[LOGOUT] SignOut error (forcing navigation):", error);
     }
+    
+    // ALWAYS navigate, regardless of signOut success
+    // Use replace() to prevent back button returning to authenticated view
+    router.replace("/");
+    
+    // Force refresh to clear any cached authenticated state
+    router.refresh();
   };
 
   const getRelativeTime = (timestamp: number): string => {
