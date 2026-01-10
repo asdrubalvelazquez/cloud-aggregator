@@ -166,14 +166,21 @@ export default function UnifiedCopyModal({
     setError(null);
 
     try {
+      // Derive source provider from API endpoint context:
+      // Backend endpoint /drive/{account_id}/copy-options queries cloud_accounts table (Google Drive only)
+      // Therefore: source is always google_drive when this modal is invoked with valid copyOptions
+      // Target: destinationType is real user selection from UI dropdown
+      const requestedSourceProvider = "google_drive"; // Derived from /drive/ API endpoint (backend constraint)
+      const requestedTargetProvider = destinationType; // Real: user-selected "google_drive" or "onedrive"
+      
       // PHASE 1: Create empty job
       const createRes = await authenticatedFetch("/transfer/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          source_provider: "google_drive",
+          source_provider: requestedSourceProvider,
           source_account_id: sourceAccountId,
-          target_provider: "onedrive",
+          target_provider: requestedTargetProvider,
           target_account_id: selectedTarget, // UUID string
           file_ids: selectedFileIds,
           target_folder_id: null,
@@ -217,8 +224,15 @@ export default function UnifiedCopyModal({
       if (statusRes.ok) {
         const jobData: JobWithItems = await statusRes.json();
         
+        // CRITICAL: Merge backend response with requested providers (backend may not return them)
+        const jobWithProviders: JobWithItems = {
+          ...jobData,
+          source_provider: jobData.source_provider || requestedSourceProvider,
+          target_provider: jobData.target_provider || requestedTargetProvider,
+        };
+        
         // Add job to queue
-        addJob(jobData);
+        addJob(jobWithProviders);
         
         // Open transfer panel
         openPanel();

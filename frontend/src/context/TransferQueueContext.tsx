@@ -170,7 +170,17 @@ export function TransferQueueProvider({ children }: TransferQueueProviderProps) 
           results.forEach((result, index) => {
             if (result.status === "fulfilled" && result.value) {
               const jobId = jobIds[index];
-              updated.set(jobId, result.value);
+              const existingJob = updated.get(jobId);
+              const newJob = result.value;
+              
+              // CRITICAL: Merge intelligently - preserve local providers if backend doesn't send them
+              const mergedJob: JobWithItems = {
+                ...newJob,
+                source_provider: newJob.source_provider || existingJob?.source_provider,
+                target_provider: newJob.target_provider || existingJob?.target_provider,
+              };
+              
+              updated.set(jobId, mergedJob);
             }
           });
           return updated;
@@ -240,7 +250,16 @@ export function TransferQueueProvider({ children }: TransferQueueProviderProps) 
         if (statusData) {
           setJobs((prev) => {
             const updated = new Map(prev);
-            updated.set(jobId, statusData);
+            const existingJob = updated.get(jobId);
+            
+            // Preserve providers from existing job
+            const mergedJob: JobWithItems = {
+              ...statusData,
+              source_provider: statusData.source_provider || existingJob?.source_provider,
+              target_provider: statusData.target_provider || existingJob?.target_provider,
+            };
+            
+            updated.set(jobId, mergedJob);
             return updated;
           });
         }
@@ -252,7 +271,16 @@ export function TransferQueueProvider({ children }: TransferQueueProviderProps) 
       if (statusData) {
         setJobs((prev) => {
           const updated = new Map(prev);
-          updated.set(jobId, statusData);
+          const existingJob = updated.get(jobId);
+          
+          // Preserve providers from existing job
+          const mergedJob: JobWithItems = {
+            ...statusData,
+            source_provider: statusData.source_provider || existingJob?.source_provider,
+            target_provider: statusData.target_provider || existingJob?.target_provider,
+          };
+          
+          updated.set(jobId, mergedJob);
           return updated;
         });
       }
