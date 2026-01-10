@@ -73,11 +73,8 @@ async def get_valid_token(account_id: int) -> str:
     refresh_token = decrypt_token(account.get("refresh_token"))
     if not refresh_token:
         logger.error(f"[TOKEN ERROR] account_id={account_id} email={account_email} has no refresh_token")
-        # Mark account as needing reconnection
-        supabase.table("cloud_accounts").update({
-            "is_active": False,
-            "disconnected_at": datetime.now(timezone.utc).isoformat()
-        }).eq("id", account_id).execute()
+        # Don't auto-disconnect - let classify_account_status() detect needs_reconnect
+        # Only manual disconnect (/auth/revoke-account) should set is_active=false
         
         raise HTTPException(
             status_code=401,
@@ -149,13 +146,10 @@ async def get_valid_token(account_id: int) -> str:
                     if is_permanent_error(error_type):
                         logger.error(
                             f"[TOKEN_RETRY] PERMANENT ERROR account_id={account_id} "
-                            f"attempt={attempt}/{max_attempts} error={error_type} - marking inactive"
+                            f"attempt={attempt}/{max_attempts} error={error_type} - requires user reconnection"
                         )
-                        # Mark account as needing reconnection
-                        supabase.table("cloud_accounts").update({
-                            "is_active": False,
-                            "disconnected_at": datetime.now(timezone.utc).isoformat()
-                        }).eq("id", account_id).execute()
+                        # Don't auto-disconnect - only raise error
+                        # Account stays "alive" but inoperable until user reconnects
                         
                         raise HTTPException(
                             status_code=401,
@@ -182,15 +176,11 @@ async def get_valid_token(account_id: int) -> str:
                         await asyncio.sleep(delay)
                         continue
                     else:
-                        # All attempts exhausted - mark inactive
+                        # All attempts exhausted - don't auto-disconnect, just raise error
                         logger.error(
                             f"[TOKEN_RETRY] ALL ATTEMPTS FAILED account_id={account_id} "
-                            f"final_error={error_type} - marking inactive"
+                            f"final_error={error_type} - requires user reconnection"
                         )
-                        supabase.table("cloud_accounts").update({
-                            "is_active": False,
-                            "disconnected_at": datetime.now(timezone.utc).isoformat()
-                        }).eq("id", account_id).execute()
                         
                         raise HTTPException(
                             status_code=401,

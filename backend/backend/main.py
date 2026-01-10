@@ -3325,6 +3325,15 @@ def classify_account_status(slot: dict, cloud_account: dict) -> dict:
     """
     Determina el estado de conexión de una cuenta basado en slot y cloud_account.
     
+    REGLAS DE ESTADO (MultCloud-style):
+    1. "disconnected": Usuario desconectó manualmente (is_active=false en SLOT)
+    2. "needs_reconnect": Tokens inválidos/expirados (soft state, NO modifica is_active)
+    3. "connected": Tokens válidos y operacionales
+    
+    IMPORTANTE: Esta función NO modifica datos - solo lee y clasifica.
+    La única forma de pasar a "disconnected" es usuario llamando /auth/revoke-account.
+    Los errores OAuth (invalid_grant, etc) solo causan "needs_reconnect".
+    
     Args:
         slot: Row de cloud_slots_log
         cloud_account: Row de cloud_accounts (puede ser None)
