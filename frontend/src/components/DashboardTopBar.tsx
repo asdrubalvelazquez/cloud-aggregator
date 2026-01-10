@@ -97,7 +97,7 @@ export function DashboardTopBar() {
 
   return (
     <div className="fixed top-0 left-0 right-0 z-40 bg-slate-900/80 backdrop-blur-md border-b border-slate-700/50">
-      <div className="h-[64px] px-5 flex items-center justify-between gap-6">
+      <div className="h-[72px] px-5 flex items-center justify-between gap-6">
         {/* LEFT: Brand + Email + Traffic */}
         <div className="min-w-[320px] grid grid-cols-[48px_1fr] grid-rows-2 items-center gap-x-3">
           {/* Logo: spans 2 rows */}

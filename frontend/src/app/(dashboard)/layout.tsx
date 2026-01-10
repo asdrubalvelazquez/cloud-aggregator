@@ -1,6 +1,5 @@
 import { SidebarLayout } from "@/components/sidebar/SidebarLayout";
 import DashboardContextMenuBlocker from "@/components/DashboardContextMenuBlocker";
-import { ClientNavProbe } from "@/components/debug/ClientNavProbe";
 import { TransferQueuePanel } from "@/components/transfer-queue/TransferQueuePanel";
 import { TransferQueueButton } from "@/components/transfer-queue/TransferQueueButton";
 import { DashboardTopBar } from "@/components/DashboardTopBar";
@@ -26,9 +25,8 @@ export default function DashboardLayout({
   return (
     <Providers>
       <DashboardContextMenuBlocker>
-        <ClientNavProbe />
         <DashboardTopBar />
-        <div className="pt-[64px]">
+        <div className="pt-[72px]">
           <SidebarLayout>{children}</SidebarLayout>
         </div>
         <TransferQueuePanel />
