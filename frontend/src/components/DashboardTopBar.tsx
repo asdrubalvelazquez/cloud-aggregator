@@ -97,19 +97,19 @@ export function DashboardTopBar() {
 
   return (
     <div className="fixed top-0 left-0 right-0 z-40 bg-slate-900/80 backdrop-blur-md border-b border-slate-700/50">
-      <div className="h-[64px] px-5 flex items-center justify-between gap-6">
+      <div className="h-[64px] px-5 pb-[2px] flex items-center justify-between gap-6">
         {/* LEFT: Brand + Email + Traffic */}
-        <div className="flex flex-col leading-tight min-w-[280px] h-full justify-center">
+        <div className="flex flex-col min-w-[280px] h-full justify-center pt-[4px]">
           <Link href="/app" className="flex items-center gap-3 hover:opacity-80 transition">
             <img
               src="/732fa691-7a06-42d0-acf2-4b6e300e8953.png"
               alt="Cloud Aggregator"
-              className="w-10 h-10 rounded-md object-contain"
+              className="w-12 h-12 rounded-md object-contain mt-[2px]"
             />
-            <span className="text-[16px] font-semibold text-white">Cloud Aggregator</span>
+            <span className="text-[18px] font-semibold text-white leading-tight">Cloud Aggregator</span>
           </Link>
 
-          <div className="relative ml-[52px]" ref={dropdownRef}>
+          <div className="relative ml-[52px] mt-[2px]" ref={dropdownRef}>
             <button
               onClick={() => setIsDropdownOpen(!isDropdownOpen)}
               className="flex flex-col leading-tight hover:bg-slate-800/50 px-2 py-1 rounded transition"
@@ -120,7 +120,7 @@ export function DashboardTopBar() {
                 <div className="text-[12.5px] text-slate-500"> </div>
               )}
             </button>
-            <div className="text-[11px] text-slate-500 px-2">{trafficText}</div>
+            <div className="text-[11px] text-slate-500 px-2 mt-[2px]">{trafficText}</div>
 
             {/* Dropdown Menu */}
             {isDropdownOpen && (
