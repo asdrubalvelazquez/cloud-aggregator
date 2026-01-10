@@ -36,6 +36,7 @@ export default function ReconnectSlotsModal({
   const [error, setError] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
+  const [isReconnecting, setIsReconnecting] = useState(false);
 
   // Normalizar provider para manejar variaciones
   function normalizeProvider(p?: string): string {
@@ -98,8 +99,13 @@ export default function ReconnectSlotsModal({
         return;
       }
       
+      // CRITICAL: Setear flags ANTES de redirect para prevenir flash de error
       setReconnecting(account.slot_log_id);
+      setIsReconnecting(true);
       setError(null);
+      
+      // Set sessionStorage flag to suppress success toast after OAuth redirect
+      sessionStorage.setItem('isReconnecting', 'true');
       
       const normalizedProvider = normalizeProvider(account.provider);
       console.log("[RECONNECT] Fetching OAuth URL for:", account.provider_email, "| Original provider:", account.provider, "| Normalized:", normalizedProvider, "| Account ID:", account.provider_account_id);
@@ -175,8 +181,17 @@ export default function ReconnectSlotsModal({
       }
       console.error("[RECONNECT] Error:", err);
       setReconnecting(null);
+      setIsReconnecting(false);
     }
   };
+
+  // Reset state cuando el modal se cierra
+  useEffect(() => {
+    if (!isOpen) {
+      setIsReconnecting(false);
+      setError(null);
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -215,7 +230,7 @@ export default function ReconnectSlotsModal({
             </div>
           )}
 
-          {error && (
+          {error && !isReconnecting && (
             <div className="bg-red-500/20 border border-red-500 rounded-lg p-4 text-red-100 mb-4">
               <p className="font-semibold">Error</p>
               <p className="text-sm mt-1">{error}</p>

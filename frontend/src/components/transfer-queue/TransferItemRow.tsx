@@ -1,6 +1,6 @@
 "use client";
 
-import { TransferItem, formatFileSize } from "@/types/transfer-queue";
+import { TransferItem, formatFileSize, toSafeName } from "@/types/transfer-queue";
 
 interface TransferItemRowProps {
   item: TransferItem;
@@ -31,7 +31,7 @@ export function TransferItemRow({ item }: TransferItemRowProps) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-2">
           <span className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
-            {item.source_name}
+            {toSafeName(item.source_name)}
           </span>
           <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">
             {formatFileSize(item.size_bytes)}

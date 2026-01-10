@@ -112,15 +112,33 @@ export function formatFileSize(bytes: number): string {
 }
 
 /**
- * Helper: Format timestamp to relative time
+ * Helper: Format timestamp to relative time (with NaN prevention)
+ * @param isoString - ISO 8601 timestamp (nullable)
+ * @returns Human-readable relative time or "—" if invalid
  */
-export function formatRelativeTime(isoString: string): string {
+export function formatRelativeTime(isoString?: string | null): string {
+  // Guard: Validate input is not empty/null/undefined
+  if (!isoString || typeof isoString !== 'string') {
+    return "—";
+  }
+  
   const date = new Date(isoString);
   const now = new Date();
+  
+  // Guard: Validate date is valid (not NaN)
+  if (!Number.isFinite(date.getTime())) {
+    return "—";
+  }
+  
   const diffMs = now.getTime() - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);
+  
+  // Guard: Validate diffMins is finite
+  if (!Number.isFinite(diffMins)) {
+    return "—";
+  }
 
-  if (diffMins < 1) return "Just now";
+  if (diffMins < 1) return "just now";
   if (diffMins < 60) return `${diffMins}m ago`;
   
   const diffHours = Math.floor(diffMins / 60);
@@ -131,16 +149,41 @@ export function formatRelativeTime(isoString: string): string {
 }
 
 /**
- * Helper: Get provider display name
+ * Helper: Get provider display name (with null/empty prevention)
  */
 export function getProviderDisplayName(provider?: string): string {
-  if (!provider) return "Unknown";
+  // Guard: Return fallback for null/undefined/empty
+  if (!provider || typeof provider !== 'string') return "—";
+  
+  const trimmed = provider.trim();
+  if (trimmed === '') return "—";
+  
   const map: Record<string, string> = {
     google_drive: "Google Drive",
     onedrive: "OneDrive",
     dropbox: "Dropbox",
   };
-  return map[provider.toLowerCase()] || provider;
+  return map[trimmed.toLowerCase()] || trimmed;
+}
+
+/**
+ * Helper: Safely format folder/file names (prevent empty/null display)
+ * @param name - Folder or file name (nullable)
+ * @returns Sanitized name or "—" if empty/null
+ */
+export function toSafeName(name?: string | null): string {
+  // Guard: Return fallback for null/undefined
+  if (name === null || name === undefined) return "—";
+  
+  // Guard: Return fallback for non-string types
+  if (typeof name !== 'string') return "—";
+  
+  const trimmed = name.trim();
+  
+  // Guard: Return fallback for empty string after trim
+  if (trimmed === '') return "—";
+  
+  return trimmed;
 }
 
 /**

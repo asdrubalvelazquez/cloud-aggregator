@@ -327,6 +327,10 @@ function DashboardContent({
     } else if (reconnectStatus === "success") {
       const slotId = routeParams.slotId;
       
+      // Clear sessionStorage flag (set before OAuth redirect)
+      const wasReconnecting = sessionStorage.getItem('isReconnecting') === 'true';
+      sessionStorage.removeItem('isReconnecting');
+      
       // Clear URL immediately
       window.history.replaceState({}, "", window.location.pathname);
       
@@ -361,12 +365,15 @@ function DashboardContent({
             );
             
             if (reconnectedSlot) {
-              setToast({
-                message: `✅ Cuenta ${reconnectedSlot.provider_email} reconectada exitosamente`,
-                type: "success",
-              });
+              // Only show success toast if not suppressed by reconnection flow
+              if (!wasReconnecting) {
+                setToast({
+                  message: `✅ Cuenta ${reconnectedSlot.provider_email} reconectada exitosamente`,
+                  type: "success",
+                });
+              }
             } else {
-              // Slot not found or not connected - show warning
+              // Slot not found or not connected - show warning (always show warnings)
               setToast({
                 message: "⚠️ La reconexión no se completó correctamente. Intenta nuevamente.",
                 type: "warning",
@@ -374,10 +381,12 @@ function DashboardContent({
             }
           } else {
             // No slot_id provided, use generic success message
-            setToast({
-              message: "✅ Cuenta reconectada exitosamente",
-              type: "success",
-            });
+            if (!wasReconnecting) {
+              setToast({
+                message: "✅ Cuenta reconectada exitosamente",
+                type: "success",
+              });
+            }
           }
           
           // Update all data
