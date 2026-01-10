@@ -28,7 +28,7 @@ export default function DashboardLayout({
       <DashboardContextMenuBlocker>
         <ClientNavProbe />
         <DashboardTopBar />
-        <div className="pt-[52px]">
+        <div className="pt-[64px]">
           <SidebarLayout>{children}</SidebarLayout>
         </div>
         <TransferQueuePanel />

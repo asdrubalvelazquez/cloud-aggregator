@@ -97,9 +97,9 @@ export function DashboardTopBar() {
 
   return (
     <div className="fixed top-0 left-0 right-0 z-40 bg-slate-900/80 backdrop-blur-md border-b border-slate-700/50">
-      <div className="h-[52px] px-5 flex items-center justify-between gap-6">
+      <div className="h-[64px] px-5 flex items-center justify-between gap-6">
         {/* LEFT: Brand + Email + Traffic */}
-        <div className="flex flex-col leading-tight min-w-[280px]">
+        <div className="flex flex-col leading-tight min-w-[280px] h-full justify-center">
           <Link href="/app" className="flex items-center gap-3 hover:opacity-80 transition">
             <img
               src="/732fa691-7a06-42d0-acf2-4b6e300e8953.png"
