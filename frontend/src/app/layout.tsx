@@ -4,7 +4,6 @@ import "./globals.css";
 import { Suspense } from "react";
 import { CopyProvider } from "@/context/CopyContext";
 import { CopyProgressBar } from "@/components/CopyProgressBar";
-import { CanonicalURL } from "@/components/CanonicalURL";
 import { CanonicalHostGuard } from "@/components/CanonicalHostGuard";
 import GoogleAnalytics from "@/components/GoogleAnalytics";
 import PageViewTracker from "@/components/PageViewTracker";
@@ -107,7 +106,6 @@ export default function RootLayout({
             <PageViewTracker />
           </Suspense>
           <CanonicalHostGuard />
-          <CanonicalURL />
           {children}
           <CopyProgressBar />
         </CopyProvider>
