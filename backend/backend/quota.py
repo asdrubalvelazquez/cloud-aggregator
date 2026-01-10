@@ -496,27 +496,13 @@ def check_cloud_limit_with_slots(supabase: Client, user_id: str, provider: str, 
     
     logging.info(f"[SLOT VALIDATION] Plan={plan_name}, slots_used={clouds_slots_used}, slots_total={clouds_slots_total} (derived from PLAN_LIMITS)")
     
-    # Nueva cuenta - verificar disponibilidad de slots
-    if clouds_slots_used >= clouds_slots_total:
-        logging.warning(f"[SLOT LIMIT ✗] Usuario {user_id} ha excedido el límite de slots: {clouds_slots_used}/{clouds_slots_total}")
-        
-        # Mensaje diferenciado para FREE vs PAID (sin exponer PII en respuesta)
-        if plan_name == "free":
-            message = f"Has usado tus {clouds_slots_total} slots históricos. Puedes reconectar tus cuentas anteriores en cualquier momento, pero no puedes agregar cuentas nuevas en plan FREE. Actualiza a un plan PAID para conectar más cuentas."
-        else:
-            message = f"Has alcanzado el límite de {clouds_slots_total} cuenta(s) únicas para tu plan {plan_name}."
-        
-        raise HTTPException(
-            status_code=402,
-            detail={
-                "error": "cloud_limit_reached",
-                "message": message,
-                "allowed": clouds_slots_total,
-                "used": clouds_slots_used
-            }
-        )
+    # UNLIMITED ACCOUNTS MODE (Phase 3): No slot limit enforcement
+    # OAuth callbacks (Google Drive, OneDrive) NEVER fail due to account limits
+    # MultCloud model: Users can connect unlimited accounts regardless of plan
+    logging.info(f"[UNLIMITED ACCOUNTS] Slot limit validation bypassed - user_id={user_id} can connect any account")
     
-    logging.info(f"[SLOT VALIDATION ✓] Usuario puede conectar nueva cuenta. Slots disponibles: {clouds_slots_total - clouds_slots_used}")
+    # Historical counter clouds_slots_used is now informational only
+    # Accounts are still tracked in cloud_slots_log for audit purposes
 
 
 def connect_cloud_account_with_slot(
@@ -634,14 +620,12 @@ def connect_cloud_account_with_slot(
         
         logging.info(f"[SLOT CREATED] Nuevo slot creado - slot_id={slot_id}, slot_number={next_slot_number}")
         
-        # Increment clouds_slots_used in user_plans
-        new_slots_used = plan.get("clouds_slots_used", 0) + 1
-        supabase.table("user_plans").update({
-            "clouds_slots_used": new_slots_used,
-            "updated_at": now_iso
-        }).eq("user_id", user_id).execute()
+        # UNLIMITED ACCOUNTS MODE (Phase 3): Counter disabled
+        # clouds_slots_used is now informational only (frozen at current state)
+        # new_slots_used = plan.get("clouds_slots_used", 0) + 1  # DISABLED: Unlimited accounts
+        # NO UPDATE to user_plans - avoid unnecessary DB writes
         
-        logging.info(f"[SLOT COUNTER] Incrementado clouds_slots_used a {new_slots_used} para user_id={user_id}")
+        logging.info(f"[UNLIMITED ACCOUNTS] Slot counter NOT incremented for user_id={user_id} (unlimited mode active)")
         
         return {
             "id": slot_id,
