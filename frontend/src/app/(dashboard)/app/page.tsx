@@ -990,7 +990,16 @@ function DashboardContent({
                               <td className="py-4 px-4">
                                 <div className="flex items-center gap-2">
                                   <span className="text-2xl">📧</span>
-                                  <span className="font-medium text-white">{acc.provider_email}</span>
+                                  <div className="flex flex-col">
+                                    <span className="font-medium text-white">{acc.provider_email}</span>
+                                    {storageData && storageData.used_bytes !== null && storageData.total_bytes !== null ? (
+                                      <span className="text-xs text-slate-400 mt-0.5">
+                                        Traffic: {formatStorageFromGB(storageData.used_bytes / (1024 ** 3))} / {formatStorageFromGB(storageData.total_bytes / (1024 ** 3))} • {storageData.percent_used?.toFixed(1)}%
+                                      </span>
+                                    ) : (
+                                      <span className="text-xs text-slate-500 mt-0.5">Traffic: —</span>
+                                    )}
+                                  </div>
                                 </div>
                               </td>
                               <td className="py-4 px-4">
