@@ -988,7 +988,7 @@ export default function DriveFilesPage() {
               remaining: fileArray.length - i
             });
             console.groupEnd();
-            alert(errorData.detail?.message || "Límite de copias alcanzado. Proceso detenido.");
+            alert(errorData.detail?.message || "Límite de transferencia alcanzado. Proceso detenido.");
             failedCount += (fileArray.length - i);
             break;
           }

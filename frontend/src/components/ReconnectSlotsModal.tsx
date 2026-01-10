@@ -190,7 +190,7 @@ export default function ReconnectSlotsModal({
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-slate-700">
           <div>
-            <h2 className="text-xl font-bold text-white">Mis Cuentas Cloud</h2>
+            <h2 className="text-xl font-bold text-white">Tus Nubes</h2>
             {summary && (
               <p className="text-xs text-slate-400 mt-1">
                 {summary.connected} conectadas • {summary.needs_reconnect} requieren reconexión • {summary.disconnected} desconectadas
@@ -254,7 +254,7 @@ export default function ReconnectSlotsModal({
                               </span>
                             </div>
                             <p className="text-xs text-slate-400">
-                              Slot #{account.slot_number} • Tokens válidos
+                              Tokens válidos
                             </p>
                           </div>
                           <button
@@ -372,9 +372,6 @@ export default function ReconnectSlotsModal({
                                 NECESITA RECONEXIÓN
                               </span>
                             </div>
-                            <p className="text-xs text-slate-400">
-                              Slot #{account.slot_number}
-                            </p>
                             {account.reason && (
                               <p className="text-xs text-amber-300 mt-1">
                                 🔍 {REASON_LABELS[account.reason] || account.reason}
@@ -431,9 +428,6 @@ export default function ReconnectSlotsModal({
                                 DESCONECTADA
                               </span>
                             </div>
-                            <p className="text-xs text-slate-500">
-                              Slot #{account.slot_number}
-                            </p>
                           </div>
                           <button
                             onClick={(e) => {
@@ -473,10 +467,10 @@ export default function ReconnectSlotsModal({
               {summary && summary.total_slots > 0 && (
                 <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mt-6">
                   <p className="text-sm text-blue-200 mb-2">
-                    💡 <strong>Reconnection:</strong> You can reconnect your accounts at any time without consuming new slots, even with a full FREE plan.
+                    💡 <strong>Reconexión:</strong> Puedes reconectar tus cuentas en cualquier momento sin restricciones.
                   </p>
                   <p className="text-xs text-blue-300 italic">
-                    ℹ️ Reconnecting restores access to this account. It does not add storage.
+                    ℹ️ La reconexión restaura el acceso a esta cuenta. No afecta al tráfico de transferencia.
                   </p>
                 </div>
               )}

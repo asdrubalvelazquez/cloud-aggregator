@@ -9,8 +9,8 @@ import PricingPaymentStatus from "@/components/PricingPaymentStatus";
 type Plan = {
   name: string;
   price: string;
-  clouds: number;
-  copies: number;
+  transfer_gb: number | null; // null = ilimitado
+  max_file_gb: number;
   features: string[];
 };
 
@@ -18,23 +18,26 @@ const plans: Plan[] = [
   {
     name: "Free",
     price: "$0",
-    clouds: 2,
-    copies: 20,
+    transfer_gb: 5,
+    max_file_gb: 1,
     features: [
-      "2 cuentas de Google Drive",
-      "20 copias por mes",
+      "Cuentas ilimitadas (Google Drive & OneDrive)",
+      "Copias ilimitadas",
+      "5 GB de transferencia (lifetime)",
+      "Archivos hasta 1 GB",
       "Detección de duplicados",
-      "Renombrar archivos",
     ],
   },
   {
     name: "Plus",
     price: "$9",
-    clouds: 3,
-    copies: 500,
+    transfer_gb: 100,
+    max_file_gb: 10,
     features: [
-      "3 cuentas de Google Drive",
-      "500 copias por mes",
+      "Cuentas ilimitadas",
+      "Copias ilimitadas",
+      "100 GB de transferencia/mes",
+      "Archivos hasta 10 GB",
       "Todas las funciones Free",
       "Soporte prioritario",
     ],
@@ -42,11 +45,13 @@ const plans: Plan[] = [
   {
     name: "Pro",
     price: "$19",
-    clouds: 7,
-    copies: 2500,
+    transfer_gb: null, // ilimitado
+    max_file_gb: 50,
     features: [
-      "7 cuentas de Google Drive",
-      "2,500 copias por mes",
+      "Cuentas ilimitadas",
+      "Copias ilimitadas",
+      "Transferencia ilimitada 🚀",
+      "Archivos hasta 50 GB",
       "Todas las funciones Plus",
       "API access (próximamente)",
     ],
@@ -186,14 +191,14 @@ export default function PricingPage() {
               {/* Limits */}
               <div className="space-y-3 mb-6">
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-400">Nubes:</span>
-                  <span className="font-semibold">{plan.clouds}</span>
+                  <span className="text-slate-400">Transferencia:</span>
+                  <span className="font-semibold">
+                    {plan.transfer_gb === null ? "Ilimitada ✨" : `${plan.transfer_gb} GB`}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-400">Copias/mes:</span>
-                  <span className="font-semibold">
-                    {plan.copies.toLocaleString()}
-                  </span>
+                  <span className="text-slate-400">Max archivo:</span>
+                  <span className="font-semibold">{plan.max_file_gb} GB</span>
                 </div>
               </div>
 

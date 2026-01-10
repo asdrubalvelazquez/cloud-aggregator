@@ -139,13 +139,13 @@ export function ExplorerSidebar({ onNavigate }: Props) {
             </div>
 
             {/* Summary Stats (optional) */}
-            {cloudStatus && cloudStatus.summary.total_slots > 0 && (
+            {cloudStatus && cloudStatus.summary.connected > 0 && (
               <div className="pt-4 border-t border-slate-700">
                 <div className="text-xs text-slate-500 space-y-1">
-                  <div>Connected: {cloudStatus.summary.connected}</div>
+                  <div>Nubes activas: {cloudStatus.summary.connected}</div>
                   {cloudStatus.summary.needs_reconnect > 0 && (
                     <div className="text-amber-400">
-                      ⚠️ Needs reconnect: {cloudStatus.summary.needs_reconnect}
+                      ⚠️ Requieren reconexión: {cloudStatus.summary.needs_reconnect}
                     </div>
                   )}
                   {cloudStatus.summary.disconnected > 0 && (

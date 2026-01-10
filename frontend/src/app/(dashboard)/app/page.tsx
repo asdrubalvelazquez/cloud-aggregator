@@ -402,15 +402,6 @@ function DashboardContent({
       
       // Execute validation after 500ms delay (allow cookies to settle)
       setTimeout(validateReconnect, 500);
-    } else if (authError === "cloud_limit_reached") {
-      setToast({
-        message: `Has usado tus slots históricos. Puedes reconectar tus cuentas anteriores desde "Ver mis cuentas", pero no puedes agregar cuentas nuevas en plan FREE.`,
-        type: "warning",
-      });
-      window.history.replaceState({}, "", window.location.pathname);
-      fetchSummary(abortController.signal);
-      fetchBillingQuota(abortController.signal);
-      fetchCloudStatusData();
     } else if (authError) {
       setToast({
         message: `Error de autenticación: ${authError}`,
@@ -570,24 +561,53 @@ function DashboardContent({
             {userEmail && (
               <p className="text-sm text-slate-400 mt-1">{userEmail}</p>
             )}
-            {quota && (
-              <>
-                <p className="text-xs text-slate-500 mt-1">
-                  Plan: {quota.plan.toUpperCase()} • Slots históricos: {quota.historical_slots_used} / {quota.historical_slots_total}
-                </p>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Cuentas conectadas: {quota.active_clouds_connected}
-                </p>
-                {quota.historical_slots_used >= quota.historical_slots_total && (
-                  <p className="text-xs text-slate-400 italic mt-0.5">
-                    Puedes reconectar tus cuentas anteriores en cualquier momento
-                  </p>
+            
+            {/* NUEVO BLOQUE: Usage (solo transferencia) */}
+            {billingQuota && (
+              <div className="mt-3 bg-slate-800/50 rounded-lg p-3 border border-slate-700 max-w-md">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-semibold text-slate-300">
+                    📡 Tráfico de Transferencia
+                  </h3>
+                  <span className="text-xs text-slate-400">
+                    Plan: <span className="text-white font-bold uppercase">{billingQuota.plan}</span>
+                  </span>
+                </div>
+                
+                {billingQuota.transfer.limit_bytes !== null && billingQuota.transfer.limit_bytes > 0 ? (
+                  <>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs text-slate-400">
+                        {billingQuota.transfer.used_gb.toFixed(2)} GB / {billingQuota.transfer.limit_gb} GB
+                      </span>
+                      <span className="text-xs text-slate-400">
+                        {((billingQuota.transfer.used_bytes / billingQuota.transfer.limit_bytes) * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                    <ProgressBar
+                      current={billingQuota.transfer.used_bytes}
+                      total={billingQuota.transfer.limit_bytes}
+                      height="sm"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      {Math.max(0, (billingQuota.transfer.limit_bytes - billingQuota.transfer.used_bytes) / (1024 ** 3)).toFixed(2)} GB disponibles
+                    </p>
+                  </>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm text-emerald-400 font-semibold">✨ Tráfico ilimitado</p>
+                  </div>
                 )}
-                <p className={`text-xs mt-1 ${quota.remaining <= 3 ? "text-amber-400 font-semibold" : "text-slate-500"}`}>
-                  Copias este mes: {quota.used} / {quota.limit}
-                  {quota.remaining <= 3 && " ⚠️"}
-                </p>
-              </>
+                
+                {billingQuota.plan !== "pro" && (
+                  <a
+                    href="/pricing"
+                    className="mt-2 inline-block text-xs text-blue-400 hover:text-blue-300 underline transition"
+                  >
+                    {billingQuota.plan === "free" ? "⬆️ Actualiza para más tráfico" : "🚀 PRO = Tráfico ilimitado"}
+                  </a>
+                )}
+              </div>
             )}
           </div>
           <div className="flex gap-3">
@@ -595,61 +615,25 @@ function DashboardContent({
               onClick={() => setShowReconnectModal(true)}
               className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-700"
             >
-              📊 Ver mis cuentas
+              📊 Tus Nubes
             </button>
-            {(() => {
-              // FIX: Explicit boolean to avoid TS error (boolean | null not assignable)
-              const limitReached = quota ? quota.historical_slots_used >= quota.historical_slots_total : false;
-              return (
-                <>
-                  <button
-                    onClick={handleConnectGoogle}
-                    disabled={limitReached}
-                    className={
-                      limitReached
-                        ? "rounded-lg transition px-4 py-2 text-sm font-semibold bg-slate-600 text-slate-400 cursor-not-allowed"
-                        : "rounded-lg transition px-4 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-600"
-                    }
-                    title={
-                      limitReached
-                        ? "Has usado todos tus slots históricos. Puedes reconectar tus cuentas anteriores desde 'Ver mis cuentas'"
-                        : "Conectar una nueva cuenta de Google Drive"
-                    }
-                  >
-                    Conectar Google Drive
-                  </button>
-                  <button
-                    onClick={handleConnectOneDrive}
-                    disabled={limitReached}
-                    className={
-                      limitReached
-                        ? "rounded-lg transition px-4 py-2 text-sm font-semibold bg-slate-600 text-slate-400 cursor-not-allowed"
-                        : "rounded-lg transition px-4 py-2 text-sm font-semibold bg-blue-500 hover:bg-blue-600"
-                    }
-                    title={
-                      limitReached
-                        ? "Has usado todos tus slots históricos. Puedes reconectar tus cuentas anteriores desde 'Ver mis cuentas'"
-                        : "Conectar una nueva cuenta de OneDrive"
-                    }
-                  >
-                    Conectar OneDrive
-                  </button>
-                  
-                  {/* CTA upgrade cuando límite alcanzado (solo FREE y PLUS) */}
-                  {limitReached && billingQuota && billingQuota.plan !== "pro" && (
-                    <a
-                      href="/pricing"
-                      className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-purple-600 hover:bg-purple-700 text-white flex items-center gap-2"
-                    >
-                      <span>🚀</span>
-                      <span>
-                        {billingQuota.plan === "free" ? "Actualizar a PLUS o PRO" : "Actualizar a PRO"}
-                      </span>
-                    </a>
-                  )}
-                </>
-              );
-            })()}
+            
+            <button
+              onClick={handleConnectGoogle}
+              className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-600"
+              title="Conectar una nueva cuenta de Google Drive"
+            >
+              Conectar Google Drive
+            </button>
+            
+            <button
+              onClick={handleConnectOneDrive}
+              className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-blue-500 hover:bg-blue-600"
+              title="Conectar una nueva cuenta de OneDrive"
+            >
+              Conectar OneDrive
+            </button>
+            
             <button
               onClick={handleLogout}
               className="rounded-lg bg-slate-700 hover:bg-slate-600 transition px-4 py-2 text-sm font-semibold"
@@ -714,35 +698,7 @@ function DashboardContent({
                   )}
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {/* Copias */}
-                  <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-sm font-semibold text-slate-300">
-                        📋 Copias {billingQuota.copies.is_lifetime ? "(Lifetime)" : "(Mes)"}
-                      </h3>
-                      {billingQuota.copies.limit !== null && (
-                        <span className="text-xs text-slate-400">
-                          {billingQuota.copies.used} / {billingQuota.copies.limit}
-                        </span>
-                      )}
-                    </div>
-                    {billingQuota.copies.limit !== null ? (
-                      <>
-                        <ProgressBar
-                          current={billingQuota.copies.used}
-                          total={billingQuota.copies.limit}
-                          height="sm"
-                        />
-                        <p className="text-xs text-slate-400 mt-2">
-                          {Math.max(0, billingQuota.copies.limit - billingQuota.copies.used)} restantes
-                        </p>
-                      </>
-                    ) : (
-                      <p className="text-sm text-emerald-400 font-semibold">Ilimitadas ✨</p>
-                    )}
-                  </div>
-
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {/* Transferencia */}
                   <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
                     <div className="flex items-center justify-between mb-2">
