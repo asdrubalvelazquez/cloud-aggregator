@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import { authenticatedFetch } from "@/lib/api";
 import { formatStorageFromGB } from "@/lib/formatStorage";
+import { supabase } from "@/lib/supabaseClient";
 
 type BillingQuota = {
   plan: string;
@@ -25,6 +27,7 @@ const TABS = [
 
 export function DashboardTopBar() {
   const [billingQuota, setBillingQuota] = useState<BillingQuota>(null);
+  const [userEmail, setUserEmail] = useState<string>("");
 
   useEffect(() => {
     const fetchBillingQuota = async () => {
@@ -39,7 +42,17 @@ export function DashboardTopBar() {
       }
     };
 
+    const fetchUserEmail = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        setUserEmail(user?.email || "");
+      } catch (e) {
+        console.error("Failed to fetch user email:", e);
+      }
+    };
+
     fetchBillingQuota();
+    fetchUserEmail();
   }, []);
 
   const trafficText = billingQuota?.transfer
@@ -53,6 +66,22 @@ export function DashboardTopBar() {
   return (
     <div className="fixed top-0 left-0 right-0 z-40 backdrop-blur-md bg-slate-900/80 border-b border-slate-700/50">
       <div className="flex items-center justify-between px-6 py-3">
+        {/* Brand Section */}
+        <div className="flex items-center gap-3">
+          <Image
+            src="/logo.png"
+            alt="Cloud Aggregator"
+            width={28}
+            height={28}
+            className="rounded-md"
+            priority
+          />
+          <div className="flex flex-col leading-tight">
+            <span className="text-sm font-semibold text-white">Cloud Aggregator</span>
+            {userEmail && <span className="text-xs text-slate-400">{userEmail}</span>}
+          </div>
+        </div>
+
         {/* Tabs */}
         <div className="flex items-center gap-1">
           {TABS.map((tab) => (

@@ -588,93 +588,37 @@ function DashboardContent({
       )}
 
       <div className="w-full max-w-6xl space-y-6">
-        <header className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl md:text-3xl font-bold">Cloud Aggregator 🌥️</h1>
-            {userEmail && (
-              <p className="text-sm text-slate-400 mt-1">{userEmail}</p>
-            )}
-            
-            {/* NUEVO BLOQUE: Usage (solo transferencia) */}
-            {billingQuota && (
-              <div className="mt-3 bg-slate-800/50 rounded-lg p-3 border border-slate-700 max-w-md">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-sm font-semibold text-slate-300">
-                    📡 Tráfico de Transferencia
-                  </h3>
-                  <span className="text-xs text-slate-400">
-                    Plan: <span className="text-white font-bold uppercase">{billingQuota.plan}</span>
-                  </span>
-                </div>
-                
-                {billingQuota.transfer.limit_bytes !== null && billingQuota.transfer.limit_bytes > 0 ? (
-                  <>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs text-slate-400">
-                        {billingQuota.transfer.used_gb.toFixed(2)} GB / {billingQuota.transfer.limit_gb} GB
-                      </span>
-                      <span className="text-xs text-slate-400">
-                        {((billingQuota.transfer.used_bytes / billingQuota.transfer.limit_bytes) * 100).toFixed(1)}%
-                      </span>
-                    </div>
-                    <ProgressBar
-                      current={billingQuota.transfer.used_bytes}
-                      total={billingQuota.transfer.limit_bytes}
-                      height="sm"
-                    />
-                    <p className="text-xs text-slate-500 mt-1">
-                      {Math.max(0, (billingQuota.transfer.limit_bytes - billingQuota.transfer.used_bytes) / (1024 ** 3)).toFixed(2)} GB disponibles
-                    </p>
-                  </>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm text-emerald-400 font-semibold">✨ Tráfico ilimitado</p>
-                  </div>
-                )}
-                
-                {billingQuota.plan !== "pro" && (
-                  <a
-                    href="/pricing"
-                    className="mt-2 inline-block text-xs text-blue-400 hover:text-blue-300 underline transition"
-                  >
-                    {billingQuota.plan === "free" ? "⬆️ Actualiza para más tráfico" : "🚀 PRO = Tráfico ilimitado"}
-                  </a>
-                )}
-              </div>
-            )}
-          </div>
-          <div className="flex gap-3">
-            <button
-              onClick={() => setShowReconnectModal(true)}
-              className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-700"
-            >
-              📊 Tus Nubes
-            </button>
-            
-            <button
-              onClick={handleConnectGoogle}
-              className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-600"
-              title="Conectar una nueva cuenta de Google Drive"
-            >
-              Conectar Google Drive
-            </button>
-            
-            <button
-              onClick={handleConnectOneDrive}
-              className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-blue-500 hover:bg-blue-600"
-              title="Conectar una nueva cuenta de OneDrive"
-            >
-              Conectar OneDrive
-            </button>
-            
-            <button
-              onClick={handleLogout}
-              className="rounded-lg bg-slate-700 hover:bg-slate-600 transition px-4 py-2 text-sm font-semibold"
-            >
-              Salir
-            </button>
-          </div>
-        </header>
+        <div className="flex items-center justify-end gap-3">
+          <button
+            onClick={() => setShowReconnectModal(true)}
+            className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-700"
+          >
+            📊 Tus Nubes
+          </button>
+          
+          <button
+            onClick={handleConnectGoogle}
+            className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-600"
+            title="Conectar una nueva cuenta de Google Drive"
+          >
+            Conectar Google Drive
+          </button>
+          
+          <button
+            onClick={handleConnectOneDrive}
+            className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-blue-500 hover:bg-blue-600"
+            title="Conectar una nueva cuenta de OneDrive"
+          >
+            Conectar OneDrive
+          </button>
+          
+          <button
+            onClick={handleLogout}
+            className="rounded-lg bg-slate-700 hover:bg-slate-600 transition px-4 py-2 text-sm font-semibold"
+          >
+            Salir
+          </button>
+        </div>
 
         {(loading || softTimeout) && (
           <DashboardLoadingState />
