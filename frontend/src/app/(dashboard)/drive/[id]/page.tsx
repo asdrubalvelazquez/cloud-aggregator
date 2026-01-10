@@ -1190,7 +1190,7 @@ export default function DriveFilesPage() {
       a.download = downloadFileName;
       document.body.appendChild(a);
       a.click();
-      document.body.removeChild(a);
+      a.remove();  // Safe: uses Element.remove() instead of parent.removeChild()
       window.URL.revokeObjectURL(downloadUrl);
     } catch (e: any) {
       alert(`Error al descargar: ${e.message}`);

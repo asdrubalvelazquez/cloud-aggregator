@@ -515,8 +515,13 @@ function DashboardContent({
     setToast(null);
 
     try {
-      // Sign out from Supabase (clears session/cookies)
-      await supabase.auth.signOut();
+      // Sign out with timeout to prevent hanging
+      const signOutPromise = supabase.auth.signOut();
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("SignOut timeout")), 3000)
+      );
+      
+      await Promise.race([signOutPromise, timeoutPromise]);
     } catch (error) {
       // Even if signOut fails, force navigation (handles network errors)
       console.error("[LOGOUT] SignOut error (forcing navigation):", error);
@@ -528,6 +533,17 @@ function DashboardContent({
     
     // Force refresh to clear any cached authenticated state
     router.refresh();
+    
+    // FALLBACK: If still on /app after 500ms, force navigation with window.location
+    // This handles edge cases where Next.js router fails (hydration issues, etc.)
+    setTimeout(() => {
+      if (window.location.pathname.startsWith("/app") || 
+          window.location.pathname.startsWith("/drive") ||
+          window.location.pathname.startsWith("/onedrive")) {
+        console.warn("[LOGOUT] Router failed, using window.location fallback");
+        window.location.assign("/");
+      }
+    }, 500);
   };
 
   const getRelativeTime = (timestamp: number): string => {
