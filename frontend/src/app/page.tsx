@@ -15,274 +15,359 @@ export default function Home() {
       {/* Silent auth check - client component that doesn't block SSR */}
       <SilentAuthRedirect />
       
-      <main className="min-h-screen bg-slate-950 text-white overflow-hidden">
-      {/* Animated gradient background */}
-      <div className="fixed inset-0 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 animate-gradient-slow" />
-      <div className="fixed inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-emerald-900/20 via-transparent to-transparent" />
-      
-      <div className="relative z-10">
-        {/* Hero Section */}
-        <section className="min-h-screen flex flex-col items-center justify-center px-6 py-20">
-          <div className="max-w-5xl mx-auto text-center space-y-8">
-            {/* Badge */}
-            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 backdrop-blur-sm border border-white/10 text-sm text-slate-300">
-              <span className="text-emerald-400">●</span>
-              Connect multiple cloud accounts
+      <main className="min-h-screen bg-[#fafafa] dark:bg-[#0a0a0a] text-[#171717] dark:text-[#ededed]">
+        {/* Subtle gradient overlay for depth */}
+        <div className="fixed inset-0 bg-gradient-to-b from-transparent via-transparent to-gray-50/50 dark:to-neutral-950/50 pointer-events-none" />
+        
+        <div className="relative">
+          {/* Navigation */}
+          <nav className="border-b border-gray-200 dark:border-neutral-800 bg-white/80 dark:bg-black/80 backdrop-blur-md sticky top-0 z-50">
+            <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
+                  </svg>
+                </div>
+                <span className="font-semibold text-lg">Cloud Aggregator</span>
+              </div>
+              <div className="flex items-center gap-6">
+                <Link href="/pricing" className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-colors">
+                  Pricing
+                </Link>
+                <Link 
+                  href="/login"
+                  className="text-sm px-4 py-2 rounded-lg bg-black dark:bg-white text-white dark:text-black hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors font-medium"
+                >
+                  Sign in
+                </Link>
+              </div>
             </div>
+          </nav>
 
-            {/* App Name */}
-            <h1 className="text-4xl md:text-5xl font-bold text-white mb-2">
+          {/* Hero Section */}
+          <section className="max-w-6xl mx-auto px-6 pt-24 pb-32 text-center">
+            {/* App Name & Description - Critical for Google OAuth Brand Verification */}
+            <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-6 bg-gradient-to-br from-gray-900 via-gray-800 to-gray-600 dark:from-white dark:via-gray-100 dark:to-gray-400 bg-clip-text text-transparent">
               Cloud Aggregator
             </h1>
-
-            {/* App Description - Critical for Google OAuth Brand Verification */}
-            <p className="text-lg text-slate-300 mt-2 mb-6">
-              Cloud Aggregator is a multi-account Google Drive management app.
+            
+            <p className="text-xl md:text-2xl text-gray-600 dark:text-gray-400 mb-4 max-w-3xl mx-auto leading-relaxed">
+              Manage multiple Google Drive and OneDrive accounts from a single, unified interface.
             </p>
 
-            {/* Main Heading */}
-            <h2 className="text-5xl md:text-7xl font-extrabold tracking-tight leading-tight">
-              Connect{" "}
-              <span className="bg-gradient-to-r from-emerald-400 via-blue-500 to-purple-500 bg-clip-text text-transparent animate-gradient">
-                multiple Google Drive
-              </span>
-              {" "}accounts from a single interface
-            </h2>
-
-            {/* Subheading */}
-            <p className="text-xl md:text-2xl text-slate-300 max-w-3xl mx-auto leading-relaxed">
-              Connect multiple Google Drive accounts (each remains separate), select files with Google Picker,
-              and manually copy between accounts with explicit user confirmation.
-            </p>
-
-            {/* Disclaimer */}
-            <p className="text-sm text-slate-500 max-w-2xl mx-auto border-l-2 border-slate-700 pl-4 italic">
-              Each account remains separate. Use Google Picker to select specific files. All copy operations are user-initiated. Storage limits remain unchanged.
+            <p className="text-sm text-gray-500 dark:text-gray-500 mb-12 max-w-2xl mx-auto">
+              Cloud Aggregator is a multi-account cloud storage management app. Connect accounts, select files, and copy between drives with full user control.
             </p>
 
             {/* CTA Buttons */}
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-16">
               <Link
                 href="/login"
-                className="group relative inline-flex items-center gap-2 px-8 py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white font-semibold text-lg shadow-lg shadow-emerald-500/30 transition-all duration-300 hover:scale-105 hover:shadow-2xl hover:shadow-emerald-500/40"
+                className="group inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-black dark:bg-white text-white dark:text-black hover:bg-gray-800 dark:hover:bg-gray-100 transition-all duration-200 font-medium shadow-sm hover:shadow-md"
               >
-                Get Started
-                <svg className="w-5 h-5 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                Get started
+                <svg className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                 </svg>
+              </Link>
+              <Link
+                href="#how-it-works"
+                className="inline-flex items-center gap-2 px-6 py-3 rounded-lg border border-gray-300 dark:border-neutral-700 hover:border-gray-400 dark:hover:border-neutral-600 transition-colors font-medium text-gray-700 dark:text-gray-300"
+              >
+                See how it works
               </Link>
             </div>
 
             {/* Trust Indicators */}
-            <div className="flex items-center justify-center gap-6 pt-8 text-sm text-slate-400">
+            <div className="flex flex-wrap items-center justify-center gap-8 text-sm text-gray-500 dark:text-gray-500">
               <div className="flex items-center gap-2">
-                <svg className="w-5 h-5 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
-                No credit card required
+                <span>No credit card required</span>
               </div>
               <div className="flex items-center gap-2">
-                <svg className="w-5 h-5 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
-                Free plan available
+                <span>Free plan available</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                <span>User-controlled operations</span>
               </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        {/* Features Section */}
-        <section className="py-20 px-6">
-          <div className="max-w-6xl mx-auto">
+          {/* How It Works Section */}
+          <section id="how-it-works" className="max-w-6xl mx-auto px-6 py-24">
             <div className="text-center mb-16">
-              <h2 className="text-3xl md:text-4xl font-bold mb-4">
-                User-controlled file operations
-              </h2>
-              <p className="text-slate-400 text-lg">
-                Connect accounts and copy files manually
+              <h2 className="text-3xl md:text-4xl font-bold mb-4">How it works</h2>
+              <p className="text-gray-600 dark:text-gray-400 text-lg max-w-2xl mx-auto">
+                Connect your accounts and manage files in three simple steps.
               </p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-              {/* Feature 1 */}
-              <div className="group relative p-8 rounded-2xl bg-white/5 backdrop-blur-sm border border-white/10 hover:bg-white/10 hover:border-emerald-500/50 transition-all duration-300 hover:scale-105">
-                <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                  <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                  </svg>
+              {/* Step 1 */}
+              <div className="relative group">
+                <div className="absolute -inset-0.5 bg-gradient-to-r from-blue-500 to-blue-600 rounded-2xl opacity-0 group-hover:opacity-100 blur transition-opacity duration-300" />
+                <div className="relative p-8 rounded-2xl bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800">
+                  <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 font-bold text-xl mb-6">
+                    1
+                  </div>
+                  <h3 className="text-xl font-semibold mb-3">Connect accounts</h3>
+                  <p className="text-gray-600 dark:text-gray-400 leading-relaxed">
+                    Securely connect multiple Google Drive and OneDrive accounts using OAuth. Each account remains completely separate.
+                  </p>
                 </div>
-                <h3 className="text-xl font-bold mb-3">View connected accounts</h3>
-                <p className="text-slate-400 leading-relaxed">
-                  Connect multiple Google Drive accounts and view storage usage for each account separately. Each account remains independent.
-                </p>
               </div>
 
-              {/* Feature 2 */}
-              <div className="group relative p-8 rounded-2xl bg-white/5 backdrop-blur-sm border border-white/10 hover:bg-white/10 hover:border-blue-500/50 transition-all duration-300 hover:scale-105">
-                <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                  <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-                  </svg>
+              {/* Step 2 */}
+              <div className="relative group">
+                <div className="absolute -inset-0.5 bg-gradient-to-r from-purple-500 to-purple-600 rounded-2xl opacity-0 group-hover:opacity-100 blur transition-opacity duration-300" />
+                <div className="relative p-8 rounded-2xl bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800">
+                  <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-purple-50 dark:bg-purple-950 text-purple-600 dark:text-purple-400 font-bold text-xl mb-6">
+                    2
+                  </div>
+                  <h3 className="text-xl font-semibold mb-3">Select files</h3>
+                  <p className="text-gray-600 dark:text-gray-400 leading-relaxed">
+                    Use Google Picker to browse and select specific files. Only files you explicitly choose are accessible.
+                  </p>
                 </div>
-                <h3 className="text-xl font-bold mb-3">Manual file copy</h3>
-                <p className="text-slate-400 leading-relaxed">
-                  Copy files between your Google Drive accounts with manual file selection and explicit user confirmation for each operation.
-                </p>
               </div>
 
-              {/* Feature 3 */}
-              <div className="group relative p-8 rounded-2xl bg-white/5 backdrop-blur-sm border border-white/10 hover:bg-white/10 hover:border-purple-500/50 transition-all duration-300 hover:scale-105">
-                <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-purple-500 to-purple-600 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                  <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
+              {/* Step 3 */}
+              <div className="relative group">
+                <div className="absolute -inset-0.5 bg-gradient-to-r from-green-500 to-green-600 rounded-2xl opacity-0 group-hover:opacity-100 blur transition-opacity duration-300" />
+                <div className="relative p-8 rounded-2xl bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800">
+                  <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-green-50 dark:bg-green-950 text-green-600 dark:text-green-400 font-bold text-xl mb-6">
+                    3
+                  </div>
+                  <h3 className="text-xl font-semibold mb-3">Copy with control</h3>
+                  <p className="text-gray-600 dark:text-gray-400 leading-relaxed">
+                    Manually initiate copy operations between accounts. Every action requires explicit user confirmation.
+                  </p>
                 </div>
-                <h3 className="text-xl font-bold mb-3">File selection (Google Picker)</h3>
-                <p className="text-slate-400 leading-relaxed">
-                  Select files with Google Picker from your connected accounts. Only user-selected files are accessible for copy operations.
-                </p>
               </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        {/* Dashboard Preview Section */}
-        <section className="py-20 px-6">
-          <div className="max-w-6xl mx-auto">
-            <div className="text-center mb-12">
-              <h2 className="text-3xl md:text-4xl font-bold mb-4">
-                Single interface for connected accounts
-              </h2>
-              <p className="text-slate-400 text-lg">
-                View connected accounts and initiate copy operations
+          {/* Supported Clouds Section */}
+          <section className="max-w-6xl mx-auto px-6 py-24">
+            <div className="text-center mb-16">
+              <h2 className="text-3xl md:text-4xl font-bold mb-4">Supported cloud providers</h2>
+              <p className="text-gray-600 dark:text-gray-400 text-lg max-w-2xl mx-auto">
+                Connect unlimited accounts from supported providers.
               </p>
             </div>
 
-            {/* Dashboard Mockup */}
-            <div className="relative rounded-3xl overflow-hidden bg-gradient-to-br from-slate-800/50 to-slate-900/50 backdrop-blur-sm border border-white/10 p-8 shadow-2xl">
-              <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 via-transparent to-purple-500/10" />
-              
-              <div className="relative space-y-4">
-                {/* Mock header */}
-                <div className="flex items-center justify-between pb-4 border-b border-white/10">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-600" />
-                    <div className="space-y-1">
-                      <div className="h-4 w-32 bg-white/20 rounded" />
-                      <div className="h-3 w-24 bg-white/10 rounded" />
-                    </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+              {/* Google Drive */}
+              <div className="p-6 rounded-xl bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 hover:border-gray-300 dark:hover:border-neutral-700 transition-colors">
+                <div className="flex flex-col items-center gap-3">
+                  <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center">
+                    <svg className="w-7 h-7 text-white" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12.545 10.239v3.821h5.445c-.712 2.315-2.647 3.972-5.445 3.972a6.033 6.033 0 110-12.064c1.498 0 2.866.549 3.921 1.453l2.814-2.814A9.969 9.969 0 0012.545 2C7.021 2 2.543 6.477 2.543 12s4.478 10 10.002 10c8.396 0 10.249-7.85 9.426-11.748l-9.426-.013z"/>
+                    </svg>
                   </div>
-                  <div className="flex gap-2">
-                    <div className="h-9 w-24 bg-white/10 rounded-lg" />
-                    <div className="h-9 w-9 bg-emerald-500/20 rounded-lg" />
+                  <span className="font-medium text-sm">Google Drive</span>
+                </div>
+              </div>
+
+              {/* OneDrive */}
+              <div className="p-6 rounded-xl bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 hover:border-gray-300 dark:hover:border-neutral-700 transition-colors">
+                <div className="flex flex-col items-center gap-3">
+                  <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-blue-600 to-blue-700 flex items-center justify-center">
+                    <svg className="w-7 h-7 text-white" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M13.004 3A7 7 0 007.5 7.93a6.5 6.5 0 00-5.41 8.35A6.51 6.51 0 008.6 21h10.905A4.496 4.496 0 0019.504 12c0-.31-.035-.615-.092-.91A7 7 0 0013.004 3z"/>
+                    </svg>
                   </div>
+                  <span className="font-medium text-sm">OneDrive</span>
                 </div>
+              </div>
 
-                {/* Mock stats */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 py-4">
-                  {[1, 2, 3, 4].map((i) => (
-                    <div key={i} className="p-4 rounded-xl bg-white/5 border border-white/10">
-                      <div className="h-3 w-20 bg-white/20 rounded mb-3" />
-                      <div className="h-6 w-24 bg-gradient-to-r from-emerald-400/30 to-blue-400/30 rounded" />
-                    </div>
-                  ))}
+              {/* More coming soon placeholders */}
+              <div className="p-6 rounded-xl bg-gray-50 dark:bg-neutral-950 border border-dashed border-gray-300 dark:border-neutral-800">
+                <div className="flex flex-col items-center gap-3 opacity-40">
+                  <div className="w-12 h-12 rounded-lg bg-gray-200 dark:bg-neutral-800 flex items-center justify-center">
+                    <svg className="w-7 h-7 text-gray-400 dark:text-neutral-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                    </svg>
+                  </div>
+                  <span className="font-medium text-sm text-gray-500 dark:text-neutral-500">Coming soon</span>
                 </div>
+              </div>
 
-                {/* Mock table */}
-                <div className="space-y-2 py-4">
-                  {[1, 2, 3].map((i) => (
-                    <div key={i} className="flex items-center gap-4 p-4 rounded-xl bg-white/5 border border-white/10">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500" />
-                      <div className="flex-1 space-y-2">
-                        <div className="h-3 w-40 bg-white/20 rounded" />
-                        <div className="h-2 w-32 bg-white/10 rounded" />
-                      </div>
-                      <div className="h-2 w-32 bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-full" />
-                    </div>
-                  ))}
+              <div className="p-6 rounded-xl bg-gray-50 dark:bg-neutral-950 border border-dashed border-gray-300 dark:border-neutral-800">
+                <div className="flex flex-col items-center gap-3 opacity-40">
+                  <div className="w-12 h-12 rounded-lg bg-gray-200 dark:bg-neutral-800 flex items-center justify-center">
+                    <svg className="w-7 h-7 text-gray-400 dark:text-neutral-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                    </svg>
+                  </div>
+                  <span className="font-medium text-sm text-gray-500 dark:text-neutral-500">Coming soon</span>
                 </div>
               </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        {/* Stats Section */}
-        <section className="py-20 px-6">
-          <div className="max-w-6xl mx-auto">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-              <div className="text-center p-8">
-                <div className="text-5xl md:text-6xl font-bold bg-gradient-to-r from-emerald-400 to-emerald-600 bg-clip-text text-transparent mb-2">
-                  500+
+          {/* Security & Privacy Section */}
+          <section className="max-w-6xl mx-auto px-6 py-24">
+            <div className="text-center mb-16">
+              <h2 className="text-3xl md:text-4xl font-bold mb-4">Security & privacy first</h2>
+              <p className="text-gray-600 dark:text-gray-400 text-lg max-w-2xl mx-auto">
+                Your data security and privacy are our top priorities.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              {/* Security Feature 1 */}
+              <div className="p-8 rounded-2xl bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800">
+                <div className="flex items-start gap-4">
+                  <div className="w-10 h-10 rounded-lg bg-green-50 dark:bg-green-950 flex items-center justify-center flex-shrink-0">
+                    <svg className="w-5 h-5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold mb-2">Secure OAuth authentication</h3>
+                    <p className="text-gray-600 dark:text-gray-400 text-sm leading-relaxed">
+                      All account connections use industry-standard OAuth 2.0. We never store your passwords, only secure access tokens.
+                    </p>
+                  </div>
                 </div>
-                <p className="text-slate-400 text-lg">Accounts connected</p>
               </div>
-              <div className="text-center p-8">
-                <div className="text-5xl md:text-6xl font-bold bg-gradient-to-r from-blue-400 to-blue-600 bg-clip-text text-transparent mb-2">
-                  Multi
+
+              {/* Security Feature 2 */}
+              <div className="p-8 rounded-2xl bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800">
+                <div className="flex items-start gap-4">
+                  <div className="w-10 h-10 rounded-lg bg-blue-50 dark:bg-blue-950 flex items-center justify-center flex-shrink-0">
+                    <svg className="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold mb-2">Explicit user control</h3>
+                    <p className="text-gray-600 dark:text-gray-400 text-sm leading-relaxed">
+                      Every file operation requires your explicit confirmation. No automated syncing or background processes.
+                    </p>
+                  </div>
                 </div>
-                <p className="text-slate-400 text-lg">Multiple accounts</p>
               </div>
-              <div className="text-center p-8">
-                <div className="text-5xl md:text-6xl font-bold bg-gradient-to-r from-purple-400 to-purple-600 bg-clip-text text-transparent mb-2">
-                  Free
+
+              {/* Security Feature 3 */}
+              <div className="p-8 rounded-2xl bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800">
+                <div className="flex items-start gap-4">
+                  <div className="w-10 h-10 rounded-lg bg-purple-50 dark:bg-purple-950 flex items-center justify-center flex-shrink-0">
+                    <svg className="w-5 h-5 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold mb-2">Minimal data collection</h3>
+                    <p className="text-gray-600 dark:text-gray-400 text-sm leading-relaxed">
+                      We only collect data necessary for the service to function. No tracking, no ads, no selling your data.
+                    </p>
+                  </div>
                 </div>
-                <p className="text-slate-400 text-lg">To get started</p>
+              </div>
+
+              {/* Security Feature 4 */}
+              <div className="p-8 rounded-2xl bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800">
+                <div className="flex items-start gap-4">
+                  <div className="w-10 h-10 rounded-lg bg-orange-50 dark:bg-orange-950 flex items-center justify-center flex-shrink-0">
+                    <svg className="w-5 h-5 text-orange-600 dark:text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold mb-2">Easy account deletion</h3>
+                    <p className="text-gray-600 dark:text-gray-400 text-sm leading-relaxed">
+                      Revoke access anytime from your Google/Microsoft account settings. Request full account deletion via email.
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        {/* Final CTA Section */}
-        <section className="py-32 px-6">
-          <div className="max-w-4xl mx-auto text-center space-y-8">
-            <h2 className="text-4xl md:text-5xl font-bold leading-tight">
-              Ready to connect your Google Drive accounts?
+          {/* Final CTA Section */}
+          <section className="max-w-5xl mx-auto px-6 py-32 text-center">
+            <h2 className="text-4xl md:text-5xl font-bold leading-tight mb-6">
+              Ready to get started?
             </h2>
-            <p className="text-xl text-slate-300 max-w-2xl mx-auto">
-              Connect accounts and work with your user-selected files from a single interface.
+            <p className="text-xl text-gray-600 dark:text-gray-400 max-w-2xl mx-auto mb-8">
+              Connect your cloud accounts and manage files from a single, unified dashboard.
             </p>
-            <div className="pt-4">
-              <Link
-                href="/login"
-                className="group inline-flex items-center gap-3 px-10 py-5 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white font-bold text-xl shadow-2xl shadow-emerald-500/40 transition-all duration-300 hover:scale-105 hover:shadow-emerald-500/50"
-              >
-                Get Started
-                <svg className="w-6 h-6 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                </svg>
-              </Link>
-            </div>
-          </div>
-        </section>
+            <Link
+              href="/login"
+              className="inline-flex items-center gap-2 px-8 py-4 rounded-lg bg-black dark:bg-white text-white dark:text-black hover:bg-gray-800 dark:hover:bg-gray-100 transition-all duration-200 font-semibold text-lg shadow-lg hover:shadow-xl"
+            >
+              Get started for free
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </Link>
+          </section>
 
-        {/* Footer */}
-        <footer className="py-12 px-6 border-t border-white/10">
-          <div className="max-w-6xl mx-auto text-center space-y-4">
-            {/* Legal Links */}
-            <div className="flex items-center justify-center gap-6 text-sm">
-              <Link 
-                href="/privacy" 
-                className="text-slate-400 hover:text-emerald-400 transition-colors duration-200"
-              >
-                Privacy Policy
-              </Link>
-              <span className="text-slate-600">•</span>
-              <Link 
-                href="/terms" 
-                className="text-slate-400 hover:text-emerald-400 transition-colors duration-200"
-              >
-                Terms of Service
-              </Link>
+          {/* Footer */}
+          <footer className="border-t border-gray-200 dark:border-neutral-800 bg-white/50 dark:bg-black/50 backdrop-blur-sm">
+            <div className="max-w-6xl mx-auto px-6 py-12">
+              <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+                {/* Brand */}
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center">
+                    <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
+                    </svg>
+                  </div>
+                  <span className="font-semibold text-sm">Cloud Aggregator</span>
+                </div>
+
+                {/* Links */}
+                <div className="flex flex-wrap items-center justify-center gap-6 text-sm">
+                  <Link 
+                    href="/privacy" 
+                    className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-colors"
+                  >
+                    Privacy
+                  </Link>
+                  <Link 
+                    href="/data-deletion" 
+                    className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-colors"
+                  >
+                    Data deletion
+                  </Link>
+                  <Link 
+                    href="/pricing" 
+                    className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-colors"
+                  >
+                    Pricing
+                  </Link>
+                  <Link 
+                    href="/login" 
+                    className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-colors"
+                  >
+                    Sign in
+                  </Link>
+                </div>
+              </div>
+
+              {/* Copyright */}
+              <div className="mt-8 pt-8 border-t border-gray-200 dark:border-neutral-800 text-center">
+                <p className="text-sm text-gray-500 dark:text-gray-500">
+                  © 2025 Cloud Aggregator. Multi-account cloud storage management.
+                </p>
+              </div>
             </div>
-            
-            {/* Copyright */}
-            <p className="text-slate-400 text-sm">
-              Cloud Aggregator © 2025 - Multi-account Google Drive manager
-            </p>
-          </div>
-        </footer>
-      </div>
-    </main>
+          </footer>
+        </div>
+      </main>
     </>
   );
 }
