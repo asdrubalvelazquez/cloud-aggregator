@@ -1,5 +1,6 @@
 import Link from "next/link";
 import SilentAuthRedirect from "@/components/SilentAuthRedirect";
+import SignInWithGoogleButton from "@/components/SignInWithGoogleButton";
 
 /**
  * Landing page - Server Component for better SEO and Google OAuth Brand Verification.
@@ -35,12 +36,7 @@ export default function Home() {
                 <Link href="/pricing" className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-colors">
                   Pricing
                 </Link>
-                <Link 
-                  href="/login"
-                  className="text-sm px-4 py-2 rounded-lg bg-black dark:bg-white text-white dark:text-black hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors font-medium"
-                >
-                  Sign in
-                </Link>
+                <SignInWithGoogleButton variant="nav" />
               </div>
             </div>
           </nav>
@@ -48,7 +44,7 @@ export default function Home() {
           {/* Hero Section */}
           <section className="max-w-6xl mx-auto px-6 pt-24 pb-32 text-center">
             {/* App Name & Description - Critical for Google OAuth Brand Verification */}
-            <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-6 bg-gradient-to-br from-gray-900 via-gray-800 to-gray-600 dark:from-white dark:via-gray-100 dark:to-gray-400 bg-clip-text text-transparent">
+            <h1 className="text-5xl md:text-7xl font-bold tracking-tight leading-[1.1] pb-2 mb-6 bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 dark:from-blue-400 dark:via-purple-400 dark:to-pink-400 bg-[length:200%_auto] animate-gradient bg-clip-text text-transparent">
               Cloud Aggregator
             </h1>
             
@@ -62,15 +58,7 @@ export default function Home() {
 
             {/* CTA Buttons */}
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-16">
-              <Link
-                href="/login"
-                className="group inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-black dark:bg-white text-white dark:text-black hover:bg-gray-800 dark:hover:bg-gray-100 transition-all duration-200 font-medium shadow-sm hover:shadow-md"
-              >
-                Get started
-                <svg className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-              </Link>
+              <SignInWithGoogleButton variant="primary" />
               <Link
                 href="#how-it-works"
                 className="inline-flex items-center gap-2 px-6 py-3 rounded-lg border border-gray-300 dark:border-neutral-700 hover:border-gray-400 dark:hover:border-neutral-600 transition-colors font-medium text-gray-700 dark:text-gray-300"
