@@ -1,5 +1,7 @@
 "use client";
 
+import { CloudLoadingIndicator } from "./CloudLoadingIndicator";
+
 export function TopProgressBar() {
   return (
     <div className="fixed top-0 left-0 right-0 h-1 bg-slate-800 z-50 overflow-hidden">
@@ -27,7 +29,7 @@ export function SkeletonCard() {
 export function DashboardLoadingState() {
   return (
     <>
-      <TopProgressBar />
+      <CloudLoadingIndicator />
       
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         <SkeletonCard />
