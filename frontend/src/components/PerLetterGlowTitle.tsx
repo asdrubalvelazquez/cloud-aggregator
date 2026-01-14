@@ -14,6 +14,7 @@ export default function PerLetterGlowTitle({ text, className = "" }: PerLetterGl
   return (
     <span 
       className="relative inline-block overflow-visible"
+      style={{ isolation: "isolate" }}
       onMouseEnter={() => setIsContainerHovered(true)}
       onMouseLeave={() => setIsContainerHovered(false)}
     >
@@ -25,14 +26,14 @@ export default function PerLetterGlowTitle({ text, className = "" }: PerLetterGl
           whiteSpace: 'pre',
           filter: 'blur(12px)',
           opacity: isContainerHovered ? 0.8 : 0,
-          zIndex: -1,
+          zIndex: 0,
         }}
       >
         {text}
       </span>
       
       {/* Base layer: continuous text with animated gradient */}
-      <span className={className} style={{ whiteSpace: 'pre', pointerEvents: 'none' }}>
+      <span className={className} style={{ whiteSpace: 'pre', pointerEvents: 'none', position: 'relative', zIndex: 1 }}>
         {text}
       </span>
     </span>
