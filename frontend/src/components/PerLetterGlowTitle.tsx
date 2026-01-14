@@ -12,6 +12,8 @@ export default function PerLetterGlowTitle({ text, className = "" }: PerLetterGl
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   // Store neon color palette (3 colors) per letter index
   const [paletteByIndex, setPaletteByIndex] = useState<Record<number, [string, string, string]>>({});
+  // Track container hover for under-glow effect
+  const [isContainerHovered, setIsContainerHovered] = useState(false);
 
   const rand = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
 
@@ -38,7 +40,25 @@ export default function PerLetterGlowTitle({ text, className = "" }: PerLetterGl
   }, []);
 
   return (
-    <span className="relative inline-block overflow-visible">
+    <span 
+      className="relative inline-block overflow-visible"
+      onMouseEnter={() => setIsContainerHovered(true)}
+      onMouseLeave={() => setIsContainerHovered(false)}
+    >
+      {/* Under-glow layer - light beneath text */}
+      <span
+        aria-hidden="true"
+        className={`absolute inset-0 pointer-events-none transition-opacity duration-300 ${className}`}
+        style={{
+          whiteSpace: 'pre',
+          filter: 'blur(12px)',
+          opacity: isContainerHovered ? 0.8 : 0,
+          zIndex: -1,
+        }}
+      >
+        {text}
+      </span>
+      
       {/* Base layer: continuous text with animated gradient */}
       <span className={className} style={{ whiteSpace: 'pre', pointerEvents: 'none' }}>
         {text}
