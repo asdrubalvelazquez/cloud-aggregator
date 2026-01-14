@@ -15,7 +15,7 @@ export default function PerLetterGlowTitle({ text, className = "" }: PerLetterGl
 
   const randomGlowColor = (): string => {
     const hue = Math.floor(Math.random() * 360);
-    return `hsl(${hue}, 95%, 70%)`;
+    return `hsl(${hue}, 100%, 65%)`;
   };
 
   const handleLetterHover = (index: number) => {
@@ -59,13 +59,27 @@ export default function PerLetterGlowTitle({ text, className = "" }: PerLetterGl
                 {char === ' ' ? '\u00A0' : char}
               </span>
               
-              {/* Glow layer - light beneath letter */}
+              {/* Glow layer 1 - núcleo (tubo neón) */}
               <span
-                className="absolute inset-0 transition-opacity duration-300"
+                className="absolute inset-0 transition-opacity duration-150"
                 style={{
                   color: glowColor,
-                  opacity: isActive ? 0.8 : 0,
-                  filter: 'blur(18px)',
+                  opacity: isActive ? 1 : 0,
+                  filter: 'blur(12px)',
+                  zIndex: 0,
+                  pointerEvents: 'none',
+                }}
+              >
+                {char === ' ' ? '\u00A0' : char}
+              </span>
+
+              {/* Glow layer 2 - aura salvaje (halo grande) */}
+              <span
+                className="absolute inset-0 transition-opacity duration-150"
+                style={{
+                  color: glowColor,
+                  opacity: isActive ? 0.95 : 0,
+                  filter: 'blur(38px) saturate(1.4)',
                   zIndex: 0,
                   pointerEvents: 'none',
                 }}
