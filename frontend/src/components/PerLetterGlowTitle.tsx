@@ -10,26 +10,31 @@ interface PerLetterGlowTitleProps {
 export default function PerLetterGlowTitle({ text, className = "" }: PerLetterGlowTitleProps) {
   // Track which letter is currently hovered
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  // Store generated colors per letter index
-  const [colorsByIndex, setColorsByIndex] = useState<Record<number, string>>({});
+  // Store neon color palette (3 colors) per letter index
+  const [paletteByIndex, setPaletteByIndex] = useState<Record<number, [string, string, string]>>({});
+
+  const rand = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+  const randomNeonPalette = (): [string, string, string] => {
+    const h1 = rand(0, 360);
+    const h2 = (h1 + rand(50, 150)) % 360;
+    const h3 = (h2 + rand(50, 150)) % 360;
+    return [
+      `hsl(${h1}, 95%, 70%)`,
+      `hsl(${h2}, 95%, 70%)`,
+      `hsl(${h3}, 95%, 70%)`,
+    ];
+  };
 
   const handleLetterHover = useCallback((index: number) => {
     // Set this letter as active
     setActiveIndex(index);
     
-    // Generate random HSL color for this letter on every hover
-    const hue = Math.floor(Math.random() * 360);
-    const color = `hsl(${hue}, 90%, 65%)`;
-    
-    setColorsByIndex(prev => ({
+    // Generate random neon palette for this letter on every hover
+    setPaletteByIndex(prev => ({
       ...prev,
-      [index]: color,
+      [index]: randomNeonPalette(),
     }));
-  }, []);
-
-  const handleLetterLeave = useCallback(() => {
-    // Clear active index when mouse leaves
-    setActiveIndex(null);
   }, []);
 
   return (
@@ -39,7 +44,7 @@ export default function PerLetterGlowTitle({ text, className = "" }: PerLetterGl
         {text}
       </span>
       
-      {/* Overlay layer: per-letter edge glow on hover */}
+      {/* Overlay layer: per-letter brutal edge glow on hover */}
       <span 
         aria-hidden="true" 
         className="absolute inset-0"
@@ -47,7 +52,8 @@ export default function PerLetterGlowTitle({ text, className = "" }: PerLetterGl
       >
         {text.split('').map((char, index) => {
           const isActive = activeIndex === index;
-          const color = colorsByIndex[index];
+          const palette = paletteByIndex[index];
+          const [c1, c2, c3] = palette || ['transparent', 'transparent', 'transparent'];
           
           return (
             <span
@@ -61,16 +67,42 @@ export default function PerLetterGlowTitle({ text, className = "" }: PerLetterGl
                 {char === ' ' ? '\u00A0' : char}
               </span>
               
-              {/* Edge glow layer - appears on hover */}
+              {/* Stroke layer - crisp outline */}
               <span
                 className="absolute inset-0 transition-opacity duration-300"
                 style={{
                   color: 'transparent',
+                  WebkitTextFillColor: 'transparent',
                   opacity: isActive ? 1 : 0,
-                  WebkitTextStroke: color ? `0.75px ${color}` : '0px transparent',
-                  textShadow: color
-                    ? `0 0 2px ${color}, 0 0 6px ${color}, 0 0 12px ${color}`
-                    : 'none',
+                  WebkitTextStroke: `2.5px ${c1}`,
+                }}
+              >
+                {char === ' ' ? '\u00A0' : char}
+              </span>
+
+              {/* Glow inner - more defined halo */}
+              <span
+                className="absolute inset-0 transition-opacity duration-300"
+                style={{
+                  color: 'transparent',
+                  WebkitTextFillColor: 'transparent',
+                  opacity: isActive ? 0.75 : 0,
+                  WebkitTextStroke: `2.5px ${c1}`,
+                  filter: `drop-shadow(0 0 8px ${c2}) drop-shadow(0 0 14px ${c3}) saturate(1.8)`,
+                }}
+              >
+                {char === ' ' ? '\u00A0' : char}
+              </span>
+
+              {/* Glow outer - large aura */}
+              <span
+                className="absolute inset-0 transition-opacity duration-300"
+                style={{
+                  color: 'transparent',
+                  WebkitTextFillColor: 'transparent',
+                  opacity: isActive ? 0.55 : 0,
+                  WebkitTextStroke: '0px transparent',
+                  filter: `drop-shadow(0 0 18px ${c2}) drop-shadow(0 0 30px ${c3}) saturate(1.8)`,
                 }}
               >
                 {char === ' ' ? '\u00A0' : char}
