@@ -47,16 +47,17 @@ async def get_valid_token(account_id: int) -> str:
             }
         )
 
-    # Check if token is expired (with 60s buffer to avoid race conditions)
+    # Check if token is expired (with 120s buffer for safe API operations)
+    # Buffer increased from 60s to 120s to handle long-running operations (file transfers, etc.)
     token_expiry = account.get("token_expiry")
     needs_refresh = False
     
     if token_expiry:
         expiry_dt = dateutil_parser.parse(token_expiry)
         now = datetime.now(timezone.utc)
-        buffer = timedelta(seconds=60)
+        buffer = timedelta(seconds=120)
         
-        # If token expires in less than 60s, refresh it proactively
+        # If token expires in less than 120s, refresh it proactively
         if expiry_dt <= (now + buffer):
             needs_refresh = True
             logger.info(f"[TOKEN REFRESH] account_id={account_id} token expires soon, refreshing")
