@@ -35,15 +35,15 @@ export default function PerLetterGlowTitle({ text, className = "" }: PerLetterGl
   return (
     <span className="relative inline-block overflow-visible">
       {/* Base layer: continuous text with animated gradient */}
-      <span className={className} style={{ whiteSpace: 'pre' }}>
+      <span className={className} style={{ whiteSpace: 'pre', pointerEvents: 'none' }}>
         {text}
       </span>
       
-      {/* Overlay layer: per-letter glow on hover */}
+      {/* Overlay layer: per-letter edge glow on hover */}
       <span 
         aria-hidden="true" 
-        className="absolute inset-0 pointer-events-none"
-        style={{ whiteSpace: 'pre' }}
+        className="absolute inset-0"
+        style={{ whiteSpace: 'pre', pointerEvents: 'auto' }}
       >
         {text.split('').map((char, index) => {
           const isActive = activeIndex === index;
@@ -52,17 +52,29 @@ export default function PerLetterGlowTitle({ text, className = "" }: PerLetterGl
           return (
             <span
               key={index}
-              className="inline-block pointer-events-auto transition-[text-shadow] duration-300"
-              style={{
-                color: 'transparent',
-                textShadow: isActive && color 
-                  ? `0 0 12px ${color}, 0 0 28px ${color}, 0 0 40px ${color}` 
-                  : 'none',
-              }}
+              className="relative inline-block pointer-events-auto"
               onMouseEnter={() => handleLetterHover(index)}
               onMouseLeave={() => setActiveIndex(null)}
             >
-              {char === ' ' ? '\u00A0' : char}
+              {/* Invisible spacer to maintain layout */}
+              <span style={{ color: 'transparent' }}>
+                {char === ' ' ? '\u00A0' : char}
+              </span>
+              
+              {/* Edge glow layer - appears on hover */}
+              <span
+                className="absolute inset-0 transition-opacity duration-300"
+                style={{
+                  color: 'transparent',
+                  opacity: isActive ? 1 : 0,
+                  WebkitTextStroke: color ? `0.75px ${color}` : '0px transparent',
+                  textShadow: color
+                    ? `0 0 2px ${color}, 0 0 6px ${color}, 0 0 12px ${color}`
+                    : 'none',
+                }}
+              >
+                {char === ' ' ? '\u00A0' : char}
+              </span>
             </span>
           );
         })}
