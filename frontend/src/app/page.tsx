@@ -45,8 +45,16 @@ export default function Home() {
           <section className="max-w-6xl mx-auto px-6 pt-24 pb-32 text-center">
             {/* App Name & Description - Critical for Google OAuth Brand Verification */}
             <h1 className="group text-5xl md:text-7xl font-bold tracking-tight mb-6">
-              <span className="inline-block overflow-visible leading-[1.05] py-[0.08em] bg-gradient-to-r from-emerald-500 via-teal-500 to-blue-500 dark:from-emerald-300 dark:via-teal-300 dark:to-blue-300 bg-[length:200%_auto] animate-gradient bg-clip-text text-transparent transition-[filter,transform] duration-300 group-hover:filter group-hover:drop-shadow-[0_0_18px_rgba(16,185,129,0.45)] group-hover:drop-shadow-[0_0_40px_rgba(45,212,191,0.25)]">
-                Cloud Aggregator
+              <span className="relative inline-block overflow-visible leading-[1.1] py-[0.15em]">
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-0 opacity-0 blur-2xl transition-opacity duration-300 group-hover:opacity-100 text-emerald-400 dark:text-teal-300 drop-shadow-[0_0_24px_rgba(16,185,129,0.35)]"
+                >
+                  Cloud Aggregator
+                </span>
+                <span className="relative bg-gradient-to-r from-emerald-500 via-teal-500 to-blue-500 dark:from-emerald-300 dark:via-teal-300 dark:to-blue-300 bg-[length:200%_auto] animate-gradient bg-clip-text text-transparent">
+                  Cloud Aggregator
+                </span>
               </span>
             </h1>
             
