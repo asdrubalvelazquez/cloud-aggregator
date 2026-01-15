@@ -1000,12 +1000,63 @@ def google_login_url(
     
     # OAuth Prompt Strategy (Google best practices):
     # - Default: "select_account" (mejor UX, no agresivo)
-    # - Consent: SOLO si mode="consent" explícito (primera vez o refresh_token perdido)
+    # - Consent: SOLO si mode="consent" explícito O si es primera conexión sin refresh_token
     # - Evitar "consent" innecesario (Google OAuth review lo penaliza)
+    
+    # CRITICAL: Detectar si necesitamos forzar consent para obtener refresh_token
+    # Google NO envía refresh_token en re-autorizaciones (prompt=select_account)
+    # Solo lo envía en primera autorización O si usamos prompt=consent
+    needs_consent = False
+    
     if mode == "consent":
-        oauth_prompt = "consent"  # Forzar pantalla de permisos (casos excepcionales)
-    else:
-        oauth_prompt = "select_account"  # Default recomendado por Google
+        # Modo consent explícito (forzado por usuario)
+        needs_consent = True
+        logging.info(f"[OAUTH_URL] mode=consent explicit for user_id={user_id}")
+    elif mode == "connect":
+        # Modo connect: verificar si ya existe refresh_token para este usuario
+        # Si NO existe → primera conexión → forzar consent
+        try:
+            # Multi-cuenta: si se proporciona account_email, filtrar por ese email específico
+            # Si NO hay account_email, buscar cualquier cuenta Google del usuario (fallback)
+            account_email = request.query_params.get("account_email")
+            
+            query = supabase.table("cloud_accounts").select("id,refresh_token,account_email").eq(
+                "user_id", user_id
+            ).eq("provider", "google")
+            
+            # Filtro adicional por email si se proporciona (multi-cuenta)
+            if account_email:
+                query = query.eq("account_email", account_email)
+                logging.info(f"[OAUTH_URL] Checking refresh_token for specific account: {account_email}")
+            
+            existing_accounts = query.limit(1).execute()
+            
+            has_refresh_token = False
+            if existing_accounts.data:
+                for acc in existing_accounts.data:
+                    refresh = acc.get("refresh_token")
+                    if refresh and refresh.strip():
+                        has_refresh_token = True
+                        break
+            
+            if not has_refresh_token:
+                # Primera conexión o refresh_token perdido → forzar consent
+                needs_consent = True
+                target_info = f"account_email={account_email}" if account_email else "any Google account"
+                logging.info(
+                    f"[OAUTH_URL] First connection detected (no refresh_token in DB) for user_id={user_id} "
+                    f"({target_info}). Forcing prompt=consent to obtain refresh_token."
+                )
+            else:
+                target_info = f"for {account_email}" if account_email else f"for user_id={user_id}"
+                logging.info(f"[OAUTH_URL] Existing refresh_token found {target_info}, using prompt=select_account")
+        except Exception as e:
+            # Error al verificar DB → usar consent por seguridad (mejor obtener token que fallar)
+            logging.warning(f"[OAUTH_URL] Failed to check existing refresh_token: {e}. Using prompt=consent as fallback.")
+            needs_consent = True
+    
+    # Determinar prompt final
+    oauth_prompt = "consent" if needs_consent else "select_account"
     
     params = {
         "client_id": GOOGLE_CLIENT_ID,
@@ -1468,11 +1519,18 @@ async def google_callback(request: Request):
                 logging.info(f"[CONNECT] Preserved existing refresh_token for {account_email}")
             else:
                 # NO hay refresh_token (ni nuevo ni existente) → requiere prompt=consent
+                # Este caso NO debería ocurrir si /auth/google/login-url detecta correctamente
+                # la primera conexión, pero lo manejamos por seguridad
                 logging.error(
                     f"[CONNECT ERROR] No refresh_token for {account_email}. "
-                    f"User needs to authorize with mode=consent to obtain refresh_token."
+                    f"This should not happen if login-url correctly detects first connection. "
+                    f"Redirecting to error page with actionable hint."
                 )
-                return RedirectResponse(f"{frontend_origin}/app?error=missing_refresh_token&hint=need_consent")
+                # Redirect con hint para que frontend pueda reintentar con mode=consent
+                # (sin email por privacidad)
+                return RedirectResponse(
+                    f"{frontend_origin}/app?error=missing_refresh_token&hint=need_consent"
+                )
         except Exception as e:
             logging.error(f"[CONNECT ERROR] Failed to load existing refresh_token: {e}")
             return RedirectResponse(f"{frontend_origin}/app?error=connection_failed&reason=token_load_error")
