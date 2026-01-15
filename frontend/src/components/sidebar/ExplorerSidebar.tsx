@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useCloudStatusQuery } from "@/queries/useCloudStatusQuery";
 import { ProviderTree } from "./ProviderTree";
+import AddCloudModal from "@/components/AddCloudModal";
 
 type Props = {
   onNavigate?: () => void;
@@ -24,6 +25,9 @@ export function ExplorerSidebar({ onNavigate }: Props) {
   
   // Local UI state for manual refresh spinner
   const [refreshing, setRefreshing] = useState(false);
+  
+  // State for Add Cloud modal
+  const [showAddCloudModal, setShowAddCloudModal] = useState(false);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -94,13 +98,15 @@ export function ExplorerSidebar({ onNavigate }: Props) {
 
       {/* Add Cloud Button */}
       <div className="p-4 border-b border-slate-700">
-        <Link
-          href="/app"
-          onClick={onNavigate}
+        <button
+          onClick={() => {
+            onNavigate?.();
+            setShowAddCloudModal(true);
+          }}
           className="block w-full py-2.5 px-4 bg-emerald-500 hover:bg-emerald-600 text-white text-center rounded-lg font-semibold transition shadow-sm"
         >
           + Add Cloud
-        </Link>
+        </button>
       </div>
 
       {/* Clouds Tree */}
@@ -184,6 +190,12 @@ export function ExplorerSidebar({ onNavigate }: Props) {
           🔒 Privacy
         </Link>
       </div>
+      
+      {/* Add Cloud Modal */}
+      <AddCloudModal 
+        open={showAddCloudModal} 
+        onClose={() => setShowAddCloudModal(false)} 
+      />
     </div>
   );
 }
