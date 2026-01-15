@@ -1911,13 +1911,23 @@ async def get_onedrive_files(
                 try:
                     refresh_result = await refresh_onedrive_token(refresh_token)
                     
-                    # SECURITY: Encrypt new tokens before storing
-                    supabase.table("cloud_provider_accounts").update({
+                    # Build update payload (always update access_token and expiry)
+                    update_payload = {
                         "access_token": encrypt_token(refresh_result["access_token"]),
-                        "refresh_token": encrypt_token(refresh_result["refresh_token"]),
                         "token_expiry": refresh_result["token_expiry"].isoformat(),
                         "updated_at": datetime.utcnow().isoformat()
-                    }).eq("id", account_id).execute()
+                    }
+                    
+                    # CRITICAL: Only update refresh_token if Microsoft rotated it
+                    # Prevents double encryption bug when Microsoft returns the same token
+                    new_refresh = refresh_result.get("refresh_token")
+                    if new_refresh and new_refresh != refresh_token:
+                        update_payload["refresh_token"] = encrypt_token(new_refresh)
+                        logging.info(f"[ONEDRIVE] Microsoft rotated refresh_token for account {account_id}")
+                    else:
+                        logging.info(f"[ONEDRIVE] Preserving existing refresh_token (not rotated) for account {account_id}")
+                    
+                    supabase.table("cloud_provider_accounts").update(update_payload).eq("id", account_id).execute()
                     
                     access_token = refresh_result["access_token"]  # Use fresh plaintext token
                     logging.info(f"[ONEDRIVE] Token refreshed successfully for account {account_id}")
@@ -2044,11 +2054,25 @@ async def download_onedrive_file(
                     refresh_token = decrypt_token(account["refresh_token"])
                     tokens = await refresh_onedrive_token(refresh_token)
                     
-                    supabase.table("cloud_provider_accounts").update({
+                    # Build update payload
+                    update_payload = {
                         "access_token": encrypt_token(tokens["access_token"]),
-                        "refresh_token": encrypt_token(tokens["refresh_token"]),
                         "updated_at": datetime.now(timezone.utc).isoformat()
-                    }).eq("id", account_id).execute()
+                    }
+                    
+                    # CRITICAL: Only update refresh_token if Microsoft rotated it
+                    new_refresh = tokens.get("refresh_token")
+                    if new_refresh and new_refresh != refresh_token:
+                        update_payload["refresh_token"] = encrypt_token(new_refresh)
+                        logging.info(f"[ONEDRIVE] Microsoft rotated refresh_token for account {account_id}")
+                    else:
+                        logging.info(f"[ONEDRIVE] Preserving existing refresh_token (not rotated) for account {account_id}")
+                    
+                    # Add token_expiry if available
+                    if "token_expiry" in tokens:
+                        update_payload["token_expiry"] = tokens["token_expiry"].isoformat()
+                    
+                    supabase.table("cloud_provider_accounts").update(update_payload).eq("id", account_id).execute()
                     
                     access_token = tokens["access_token"]
                     headers = {"Authorization": f"Bearer {access_token}"}
@@ -2139,11 +2163,25 @@ async def rename_onedrive_item(
                     refresh_token = decrypt_token(account["refresh_token"])
                     tokens = await refresh_onedrive_token(refresh_token)
                     
-                    supabase.table("cloud_provider_accounts").update({
+                    # Build update payload
+                    update_payload = {
                         "access_token": encrypt_token(tokens["access_token"]),
-                        "refresh_token": encrypt_token(tokens["refresh_token"]),
                         "updated_at": datetime.now(timezone.utc).isoformat()
-                    }).eq("id", request.account_id).execute()
+                    }
+                    
+                    # CRITICAL: Only update refresh_token if Microsoft rotated it
+                    new_refresh = tokens.get("refresh_token")
+                    if new_refresh and new_refresh != refresh_token:
+                        update_payload["refresh_token"] = encrypt_token(new_refresh)
+                        logging.info(f"[ONEDRIVE] Microsoft rotated refresh_token for account {request.account_id}")
+                    else:
+                        logging.info(f"[ONEDRIVE] Preserving existing refresh_token (not rotated) for account {request.account_id}")
+                    
+                    # Add token_expiry if available
+                    if "token_expiry" in tokens:
+                        update_payload["token_expiry"] = tokens["token_expiry"].isoformat()
+                    
+                    supabase.table("cloud_provider_accounts").update(update_payload).eq("id", request.account_id).execute()
                     
                     access_token = tokens["access_token"]
                     headers = {"Authorization": f"Bearer {access_token}"}
