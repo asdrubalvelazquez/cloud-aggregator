@@ -4380,20 +4380,42 @@ async def onedrive_callback(request: Request):
         "client_secret": MICROSOFT_CLIENT_SECRET,
         "redirect_uri": MICROSOFT_REDIRECT_URI,
         "grant_type": "authorization_code",
+        "scope": " ".join(ONEDRIVE_SCOPES),  # CRITICAL: Required by Microsoft token endpoint
     }
+    
+    # DIAGNOSTIC LOGGING: Log token exchange attempt (without secrets)
+    logging.info(
+        f"[ONEDRIVE][TOKEN_EXCHANGE] Attempting token exchange: "
+        f"endpoint={MICROSOFT_TOKEN_ENDPOINT} "
+        f"tenant={MICROSOFT_TENANT_ID} "
+        f"redirect_uri={MICROSOFT_REDIRECT_URI} "
+        f"scope={' '.join(ONEDRIVE_SCOPES)} "
+        f"grant_type=authorization_code"
+    )
 
     async with httpx.AsyncClient() as client:
         try:
             token_res = await client.post(MICROSOFT_TOKEN_ENDPOINT, data=data)
             token_res.raise_for_status()
             token_json = token_res.json()
+            logging.info(f"[ONEDRIVE][TOKEN_EXCHANGE] SUCCESS: Received tokens from Microsoft")
         except httpx.HTTPStatusError as e:
+            # DIAGNOSTIC LOGGING: Log detailed error response (sanitize sensitive data)
+            error_body = ""
+            try:
+                error_body = e.response.text[:500]  # Truncate to avoid logging huge responses
+            except:
+                error_body = "Unable to read response body"
+            
             logging.error(
-                f"[ONEDRIVE][TOKEN_EXCHANGE] HTTP {e.response.status_code} from Microsoft token endpoint"
+                f"[ONEDRIVE][TOKEN_EXCHANGE] HTTP {e.response.status_code} from Microsoft token endpoint. "
+                f"Error body: {error_body}"
             )
             return RedirectResponse(f"{frontend_origin}/app?error=onedrive_token_exchange_failed")
         except Exception as e:
-            logging.error(f"[ONEDRIVE][TOKEN_EXCHANGE] Unexpected error: {type(e).__name__}")
+            logging.error(
+                f"[ONEDRIVE][TOKEN_EXCHANGE] Unexpected error: {type(e).__name__} - {str(e)}"
+            )
             return RedirectResponse(f"{frontend_origin}/app?error=onedrive_token_exchange_failed")
 
     access_token = token_json.get("access_token")
