@@ -4400,19 +4400,34 @@ async def onedrive_callback(request: Request):
             token_json = token_res.json()
             logging.info(f"[ONEDRIVE][TOKEN_EXCHANGE] SUCCESS: Received tokens from Microsoft")
         except httpx.HTTPStatusError as e:
-            # DIAGNOSTIC LOGGING: Log detailed error response (sanitize sensitive data)
+            # HARDENING: Handle invalid_grant separately for better UX
             error_body = ""
             try:
                 error_body = e.response.text[:500]  # Truncate to avoid logging huge responses
             except:
                 error_body = "Unable to read response body"
             
-            logging.error(
-                f"[ONEDRIVE][TOKEN_EXCHANGE] HTTP {e.response.status_code} from Microsoft token endpoint. "
-                f"Error body: {error_body}"
-            )
-            return RedirectResponse(f"{frontend_origin}/app?error=onedrive_token_exchange_failed")
+            # Check if error is invalid_grant (code expired/redeemed, or token revoked)
+            is_invalid_grant = False
+            if "invalid_grant" in error_body.lower() or "aadsts54005" in error_body.lower() or "aadsts70000" in error_body.lower():
+                is_invalid_grant = True
+            
+            if is_invalid_grant:
+                # IDEMPOTENT: Don't treat as hard failure, allow user to retry
+                logging.warning(
+                    f"[ONEDRIVE][TOKEN_EXCHANGE] invalid_grant (code expired/redeemed): "
+                    f"status={e.response.status_code} body_preview={error_body[:200]}"
+                )
+                return RedirectResponse(f"{frontend_origin}/app?error=onedrive_invalid_grant&hint=retry_connect")
+            else:
+                # Other HTTP errors (e.g., 500, 503, 401 non-grant errors)
+                logging.error(
+                    f"[ONEDRIVE][TOKEN_EXCHANGE] HTTP {e.response.status_code} from Microsoft token endpoint. "
+                    f"Error body: {error_body}"
+                )
+                return RedirectResponse(f"{frontend_origin}/app?error=onedrive_token_exchange_failed")
         except Exception as e:
+            # Network errors, timeouts, parsing errors, etc.
             logging.error(
                 f"[ONEDRIVE][TOKEN_EXCHANGE] Unexpected error: {type(e).__name__} - {str(e)}"
             )
