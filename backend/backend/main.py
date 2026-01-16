@@ -4,7 +4,8 @@ import logging
 import uuid
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
+from types import SimpleNamespace
 
 import httpx
 import stripe
@@ -4383,6 +4384,55 @@ async def onedrive_callback(request: Request):
         "scope": " ".join(ONEDRIVE_SCOPES),  # CRITICAL: Required by Microsoft token endpoint
     }
     
+    # HELPER: Execute Supabase query with fallback ordering to prevent 500s from schema mismatches
+    def execute_with_order_fallback(builder_factory: Callable[[], Any], order_fields: list[str], context: str = "query"):
+        """
+        Attempts to execute a Supabase query with multiple fallback order fields.
+        If all ordering fields fail (42703 error), executes without ordering.
+        Never raises exceptions - returns empty result on unrecoverable errors.
+        
+        Args:
+            builder_factory: Callable that returns a fresh Supabase query builder (prevents .order() accumulation)
+            order_fields: List of field names to try for ordering (e.g., ["created_at", "inserted_at", "id"])
+            context: Logging context string
+        
+        Returns:
+            Query result or empty result structure (SimpleNamespace)
+        """
+        EMPTY_RESULT = SimpleNamespace(data=[])
+        
+        for field in order_fields:
+            try:
+                builder = builder_factory()  # Create fresh builder for each attempt
+                result = builder.order(field, desc=True).execute()
+                logging.debug(f"[ONEDRIVE][FALLBACK][{context}] Successfully ordered by '{field}'")
+                return result
+            except Exception as e:
+                error_msg = str(e)
+                # Check for PostgreSQL "column does not exist" error
+                if "42703" in error_msg or "does not exist" in error_msg.lower():
+                    logging.warning(
+                        f"[ONEDRIVE][FALLBACK][{context}] Field '{field}' not found, trying next fallback: {error_msg[:200]}"
+                    )
+                    continue  # Try next field
+                else:
+                    # Non-schema error (network, auth, etc.) - log and return empty
+                    logging.error(
+                        f"[ONEDRIVE][FALLBACK][{context}] Non-schema error on field '{field}': {error_msg[:300]}"
+                    )
+                    return EMPTY_RESULT
+        
+        # All ordering fields failed, try without ordering (last resort)
+        try:
+            logging.warning(f"[ONEDRIVE][FALLBACK][{context}] All order fields failed, executing WITHOUT ordering")
+            builder = builder_factory()  # Create fresh builder
+            result = builder.execute()
+            return result
+        except Exception as e:
+            # Even unordered query failed - return empty result to prevent 500
+            logging.exception(f"[ONEDRIVE][FALLBACK][{context}] CRITICAL: Query failed even without ordering")
+            return EMPTY_RESULT
+    
     # DIAGNOSTIC LOGGING: Log token exchange attempt (without secrets)
     logging.info(
         f"[ONEDRIVE][TOKEN_EXCHANGE] Attempting token exchange: "
@@ -4497,10 +4547,15 @@ async def onedrive_callback(request: Request):
             # Secure logging: mask emails
             expected_email = "unknown"
             try:
-                slot_info = supabase.table("cloud_slots_log").select("provider_email").eq("provider", "onedrive").eq("provider_account_id", reconnect_account_id_normalized).order("created_at", desc=True).limit(1).execute()
+                # Use helper with multiple order fallbacks - never causes 500
+                def slot_info_builder():
+                    return supabase.table("cloud_slots_log").select("provider_email").eq("provider", "onedrive").eq("provider_account_id", reconnect_account_id_normalized).limit(1)
+                slot_info = execute_with_order_fallback(slot_info_builder, ["created_at", "inserted_at", "id"], "slot_info_reconnect_validation")
                 if slot_info.data:
                     expected_email = slot_info.data[0].get("provider_email", "unknown")
-            except Exception:
+            except Exception as e:
+                # Extra safety: log but continue with "unknown" email
+                logging.warning(f"[ONEDRIVE][CALLBACK][RECONNECT] Could not fetch slot_info for validation: {str(e)[:200]}")
                 pass
             
             expected_domain = expected_email.split("@")[1] if expected_email and "@" in expected_email else "unknown"
@@ -4513,21 +4568,28 @@ async def onedrive_callback(request: Request):
             return RedirectResponse(f"{frontend_origin}/app?error=account_mismatch")
         
         # Security check: verify slot ownership
-        if slot_log_id:
-            target_slot = supabase.table("cloud_slots_log") \
-                .select("id, user_id, provider_account_id, provider_email") \
-                .eq("id", slot_log_id) \
-                .eq("provider", "onedrive") \
-                .limit(1) \
-                .execute()
-        else:
-            target_slot = supabase.table("cloud_slots_log") \
-                .select("id, user_id, provider_account_id, provider_email") \
-                .eq("provider", "onedrive") \
-                .eq("provider_account_id", reconnect_account_id_normalized) \
-                .order("created_at", desc=True) \
-                .limit(1) \
-                .execute()
+        try:
+            if slot_log_id:
+                # Direct query by ID - no ordering needed
+                target_slot = supabase.table("cloud_slots_log") \
+                    .select("id, user_id, provider_account_id, provider_email") \
+                    .eq("id", slot_log_id) \
+                    .eq("provider", "onedrive") \
+                    .limit(1) \
+                    .execute()
+            else:
+                # Use helper with fallback ordering - never causes 500
+                def target_slot_builder():
+                    return supabase.table("cloud_slots_log") \
+                        .select("id, user_id, provider_account_id, provider_email") \
+                        .eq("provider", "onedrive") \
+                        .eq("provider_account_id", reconnect_account_id_normalized) \
+                        .limit(1)
+                target_slot = execute_with_order_fallback(target_slot_builder, ["created_at", "inserted_at", "id"], "target_slot_reconnect")
+        except Exception as e:
+            # DB error during reconnect - degrade gracefully, treat as slot not found
+            logging.error(f"[ONEDRIVE][CALLBACK][RECONNECT] Database error fetching target_slot: {str(e)[:300]}")
+            return RedirectResponse(f"{frontend_origin}/app?error=onedrive_db_error")
         
         if not target_slot.data:
             user_hash = hashlib.sha256(user_id.encode()).hexdigest()[:8]
@@ -4731,11 +4793,17 @@ async def onedrive_callback(request: Request):
                 )
                 
                 # Find existing slot to reuse (avoid creating duplicate)
-                existing_slot = supabase.table("cloud_slots_log").select("id").eq(
-                    "provider", "onedrive"
-                ).eq("provider_account_id", microsoft_account_id).order(
-                    "created_at", desc=True
-                ).limit(1).execute()
+                # Use helper with fallback ordering - never causes 500
+                try:
+                    def existing_slot_builder():
+                        return supabase.table("cloud_slots_log").select("id").eq(
+                            "provider", "onedrive"
+                        ).eq("provider_account_id", microsoft_account_id).limit(1)
+                    existing_slot = execute_with_order_fallback(existing_slot_builder, ["created_at", "inserted_at", "id"], "existing_slot_reclaim")
+                except Exception as e:
+                    # DB error during safe reclaim - degrade gracefully
+                    logging.error(f"[ONEDRIVE][CALLBACK][RECLAIM] Database error fetching existing_slot: {str(e)[:300]}")
+                    return RedirectResponse(f"{frontend_origin}/app?error=onedrive_db_error")
                 
                 if not existing_slot.data:
                     logging.error(
