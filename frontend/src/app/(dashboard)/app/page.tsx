@@ -95,6 +95,7 @@ type DashboardRouteParams = {
   authStatus: string | null;
   authError: string | null;
   reconnectStatus: string | null;
+  connectionStatus: string | null;  // OneDrive connection success
   allowedParam: string | null;
   slotId: string | null;
 };
@@ -112,6 +113,7 @@ function SearchParamsBridge({
       authStatus: searchParams.get("auth"),
       authError: searchParams.get("error"),
       reconnectStatus: searchParams.get("reconnect"),
+      connectionStatus: searchParams.get("connection"),
       allowedParam: searchParams.get("allowed"),
       slotId: searchParams.get("slot_id"),
     });
@@ -142,10 +144,11 @@ function DashboardContent({
   const [quota, setQuota] = useState<QuotaInfo>(null);
   const [billingQuota, setBillingQuota] = useState<BillingQuota>(null);
   const [showReconnectModal, setShowReconnectModal] = useState(false);
+  const [loadingTimeout, setLoadingTimeout] = useState(false);
   const router = useRouter();
   
   // Use React Query for cloudStatus (single source of truth)
-  const { data: cloudStatus } = useCloudStatusQuery();
+  const { data: cloudStatus, isLoading: isCloudStatusLoading, refetch: refetchCloudStatus } = useCloudStatusQuery();
 
   const withTimeout = async <T,>(promise: Promise<T>, ms: number): Promise<T> => {
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -253,6 +256,19 @@ function DashboardContent({
     }
   };
 
+  // Effect: Timeout de 8s para cloudStatus loading
+  useEffect(() => {
+    if (isCloudStatusLoading) {
+      setLoadingTimeout(false);
+      const timeoutId = setTimeout(() => {
+        setLoadingTimeout(true);
+      }, 8000);
+      return () => clearTimeout(timeoutId);
+    } else {
+      setLoadingTimeout(false);
+    }
+  }, [isCloudStatusLoading]);
+
   useEffect(() => {
     // AbortController con timeout de 10s para evitar fetch colgados
     const abortController = new AbortController();
@@ -275,7 +291,7 @@ function DashboardContent({
     checkSession();
 
     // Verificar si el usuario acaba de autenticarse (usando search params)
-    const { authStatus, authError, reconnectStatus } = routeParams;
+    const { authStatus, authError, reconnectStatus, connectionStatus } = routeParams;
       
     if (authStatus === "success") {
       // CRITICAL: Refresh Supabase session after OAuth redirect
@@ -324,6 +340,46 @@ function DashboardContent({
       
       // Execute refresh after 500ms delay (allow cookies to settle)
       setTimeout(refreshAndLoad, 500);
+    } else if (connectionStatus === "success") {
+      // ONEDRIVE: Handle connection=success (from OneDrive OAuth callback)
+      const handleOneDriveConnection = async () => {
+        try {
+          // Refresh Supabase session
+          const { data, error } = await withTimeout(supabase.auth.refreshSession(), 10000);
+          if (error) {
+            console.error("[ONEDRIVE_CONNECTION] Failed to refresh session:", error);
+            await supabase.auth.signOut();
+            window.location.href = "/login?reason=session_expired&next=/app";
+            return;
+          }
+          
+          console.log("[ONEDRIVE_CONNECTION] Session refreshed successfully");
+          
+          setToast({
+            message: "OneDrive conectado exitosamente",
+            type: "success",
+          });
+          
+          // Refetch cloudStatus FIRST (before URL change for reliability)
+          await refetchCloudStatus();
+          
+          // Clean URL after successful refetch to avoid refresh loops
+          router.replace("/app");
+          
+          // Refresh dashboard data
+          fetchSummary(abortController.signal);
+          fetchQuota(abortController.signal);
+          fetchBillingQuota(abortController.signal);
+        } catch (err) {
+          console.error("[ONEDRIVE_CONNECTION] Exception:", err);
+          setToast({
+            message: "Error inesperado. Recarga la página.",
+            type: "error",
+          });
+        }
+      };
+      
+      setTimeout(handleOneDriveConnection, 500);
     } else if (reconnectStatus === "success") {
       const slotId = routeParams.slotId;
       
@@ -412,8 +468,20 @@ function DashboardContent({
       // Execute validation after 500ms delay (allow cookies to settle)
       setTimeout(validateReconnect, 500);
     } else if (authError) {
+      // Handle errors (both Google and OneDrive)
+      let errorMessage = `Error de autenticación: ${authError}`;
+      
+      // OneDrive-specific error messages
+      if (authError === "onedrive_invalid_grant") {
+        errorMessage = "⚠️ Código de OneDrive expirado. Por favor, intenta conectar nuevamente.";
+      } else if (authError === "onedrive_token_exchange_failed") {
+        errorMessage = "❌ Error al conectar OneDrive. Intenta más tarde.";
+      } else if (authError.startsWith("onedrive")) {
+        errorMessage = `❌ Error de OneDrive: ${authError.replace("onedrive_", "")}`;
+      }
+      
       setToast({
-        message: `Error de autenticación: ${authError}`,
+        message: errorMessage,
         type: "error",
       });
       window.history.replaceState({}, "", window.location.pathname);
@@ -620,8 +688,27 @@ function DashboardContent({
           </button>
         </div>
 
-        {(loading || softTimeout) && (
+        {/* Loading state: solo bloquear UI si cloudStatus no existe o si loading summary sin data */}
+        {(loading || softTimeout) && !cloudStatus && (
           <DashboardLoadingState />
+        )}
+        
+        {/* Fallback UX: Si cloudStatus tarda > 8s, mostrar botón reintentar */}
+        {isCloudStatusLoading && loadingTimeout && (
+          <div className="bg-amber-500/20 border border-amber-500 rounded-lg p-4 text-center">
+            <p className="text-amber-200 text-sm mb-3">
+              ⏳ Cargando tus nubes está tardando más de lo normal...
+            </p>
+            <button
+              onClick={() => {
+                console.log("[REINTENTAR] Manual refetch of cloudStatus");
+                refetchCloudStatus();
+              }}
+              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-semibold transition"
+            >
+              🔄 Reintentar
+            </button>
+          </div>
         )}
 
         {hardError && !loading && (
@@ -1057,6 +1144,7 @@ export default function AppDashboard() {
     authStatus: null,
     authError: null,
     reconnectStatus: null,
+    connectionStatus: null,
     allowedParam: null,
     slotId: null,
   });
