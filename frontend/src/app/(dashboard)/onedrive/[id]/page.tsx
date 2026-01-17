@@ -510,50 +510,24 @@ export default function OneDriveFilesPage() {
                 {accountEmail ? `Cuenta: ${accountEmail}` : `Cargando...`}
               </p>
             </div>
-            <Link
-              href="/app"
-              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium transition"
-            >
-              ← Volver al Dashboard
-            </Link>
-          </header>
-
-        {/* Breadcrumb */}
-        <div className="relative">
-          {/* Switching account indicator */}
-          {isSwitchingAccount && (
-            <div className="absolute top-0 right-0 flex items-center gap-2 text-xs text-slate-400">
-              <div className="animate-spin rounded-full h-3 w-3 border-b border-blue-500"></div>
-              <span>Cargando cuenta...</span>
-            </div>
-          )}
-          
-          <nav className="flex items-center gap-2 text-sm text-slate-300">
-            {breadcrumb.map((crumb, index) => (
-            <div key={index} className="flex items-center gap-2">
-              {index > 0 && <span className="text-slate-500">/</span>}
-              <button
-                onClick={() => handleBreadcrumbClick(index)}
-                className={`hover:text-blue-400 transition ${
-                  index === breadcrumb.length - 1 ? "font-semibold text-white" : ""
-                }`}
+            <div className="flex items-center gap-3">
+              {breadcrumb.length > 1 && (
+                <button
+                  type="button"
+                  onClick={handleBack}
+                  className="text-sm text-slate-400 hover:text-white transition"
+                >
+                  ← Atrás
+                </button>
+              )}
+              <Link
+                href="/app"
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium transition"
               >
-                {crumb.name}
-              </button>
+                ← Volver al Dashboard
+              </Link>
             </div>
-          ))}
-        </nav>
-        </div>
-
-        {/* Back button */}
-        {breadcrumb.length > 1 && (
-          <button
-            onClick={handleBack}
-            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium transition"
-          >
-            ← Atrás
-          </button>
-        )}
+          </header>
 
         {/* Rename status banner */}
         {renameStatus && (
