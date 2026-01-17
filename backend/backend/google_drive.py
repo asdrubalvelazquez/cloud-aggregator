@@ -5,12 +5,131 @@ import os
 from datetime import datetime, timezone, timedelta
 from dateutil import parser as dateutil_parser
 import httpx
+import logging
 
 from backend.db import supabase
 from backend.crypto import decrypt_token, encrypt_token
 
 GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 GOOGLE_DRIVE_API_BASE = "https://www.googleapis.com/drive/v3"
+
+logger = logging.getLogger(__name__)
+
+
+async def try_refresh_google_token(cloud_account: dict) -> dict:
+    """
+    Try to refresh Google access token for cloud_account (silent, no exceptions).
+    
+    Used by /me/cloud-status to proactively refresh expired tokens without
+    forcing user reconnection for normal token expiration.
+    
+    Args:
+        cloud_account: Row from cloud_accounts table with encrypted tokens
+    
+    Returns:
+        {
+            "success": bool,
+            "error_type": str | None,  # "invalid_grant", "no_refresh_token", "network_error", etc.
+            "updated_account": dict | None  # Updated account data if success
+        }
+    """
+    account_id = cloud_account.get("id")
+    account_email = cloud_account.get("account_email", "unknown")
+    
+    # Decrypt refresh_token
+    refresh_token = decrypt_token(cloud_account.get("refresh_token"))
+    if not refresh_token:
+        logger.warning(f"[SILENT_REFRESH] account_id={account_id} no refresh_token")
+        return {"success": False, "error_type": "no_refresh_token", "updated_account": None}
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            token_res = await client.post(
+                GOOGLE_TOKEN_ENDPOINT,
+                data={
+                    "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+                    "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+                    "refresh_token": refresh_token,
+                    "grant_type": "refresh_token",
+                }
+            )
+            
+            if token_res.status_code != 200:
+                # Parse JSON defensively
+                error_data = {}
+                try:
+                    if token_res.headers.get("content-type", "").startswith("application/json"):
+                        error_data = token_res.json()
+                except Exception as json_err:
+                    logger.warning(f"[SILENT_REFRESH] account_id={account_id} failed to parse error JSON: {json_err}")
+                
+                error_type = error_data.get("error", "unknown")
+                logger.warning(
+                    f"[SILENT_REFRESH] account_id={account_id} failed: {error_type} "
+                    f"(status={token_res.status_code})"
+                )
+                
+                # Handle invalid_grant as permanent revocation
+                if error_type == "invalid_grant":
+                    logger.error(
+                        f"[SILENT_REFRESH] account_id={account_id} REVOKED (invalid_grant). "
+                        f"Marking is_active=False and clearing tokens to prevent retry loops."
+                    )
+                    try:
+                        # Mark account as inactive and clear tokens to prevent loops
+                        supabase.table("cloud_accounts").update({
+                            "is_active": False,
+                            "access_token": None,
+                            "refresh_token": None,
+                            "token_expiry": None
+                        }).eq("id", account_id).execute()
+                    except Exception as db_err:
+                        logger.error(f"[SILENT_REFRESH] Failed to mark account inactive: {db_err}")
+                
+                return {"success": False, "error_type": error_type, "updated_account": None}
+
+            # Parse success response defensively
+            try:
+                token_json = token_res.json()
+            except Exception as json_err:
+                logger.error(f"[SILENT_REFRESH] account_id={account_id} failed to parse success JSON: {json_err}")
+                return {"success": False, "error_type": "invalid_json_response", "updated_account": None}
+            
+            expires_in = token_json.get("expires_in", 3600)
+            
+            if not new_access_token:
+                logger.warning(f"[SILENT_REFRESH] account_id={account_id} no access_token in response")
+                return {"success": False, "error_type": "no_access_token", "updated_account": None}
+            
+            # Calculate new expiry
+            new_expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+            
+            # Update database
+            update_result = supabase.table("cloud_accounts").update({
+                "access_token": encrypt_token(new_access_token),
+                "token_expiry": new_expiry.isoformat(),
+                "is_active": True,
+            }).eq("id", account_id).execute()
+            
+            logger.info(
+                f"[SILENT_REFRESH] SUCCESS account_id={account_id} "
+                f"new_expiry={new_expiry.isoformat()}"
+            )
+            
+            # Return updated account data
+            updated_account = cloud_account.copy()
+            updated_account["access_token"] = encrypt_token(new_access_token)
+            updated_account["token_expiry"] = new_expiry.isoformat()
+            updated_account["is_active"] = True
+            
+            return {"success": True, "error_type": None, "updated_account": updated_account}
+            
+    except httpx.HTTPError as e:
+        logger.warning(f"[SILENT_REFRESH] account_id={account_id} network error: {e}")
+        return {"success": False, "error_type": "network_error", "updated_account": None}
+    except Exception as e:
+        logger.error(f"[SILENT_REFRESH] account_id={account_id} unexpected error: {e}")
+        return {"success": False, "error_type": "unexpected_error", "updated_account": None}
 
 
 async def get_valid_token(account_id: int) -> str:

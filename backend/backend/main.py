@@ -1017,20 +1017,10 @@ def google_login_url(
         # Modo connect: verificar si ya existe refresh_token para este usuario
         # Si NO existe → primera conexión → forzar consent
         try:
-            # Multi-cuenta: si se proporciona account_email, filtrar por ese email específico
-            # Si NO hay account_email, buscar cualquier cuenta Google del usuario (fallback)
-            account_email = request.query_params.get("account_email")
-            
-            query = supabase.table("cloud_accounts").select("id,refresh_token,account_email").eq(
-                "user_id", user_id
-            ).eq("provider", "google")
-            
-            # Filtro adicional por email si se proporciona (multi-cuenta)
-            if account_email:
-                query = query.eq("account_email", account_email)
-                logging.info(f"[OAUTH_URL] Checking refresh_token for specific account: {account_email}")
-            
-            existing_accounts = query.limit(1).execute()
+            # Buscar cualquier cuenta Google del usuario con refresh_token válido
+            existing_accounts = supabase.table("cloud_accounts").select(
+                "id,refresh_token,account_email"
+            ).eq("user_id", user_id).eq("provider", "google").limit(1).execute()
             
             has_refresh_token = False
             if existing_accounts.data:
@@ -1043,14 +1033,12 @@ def google_login_url(
             if not has_refresh_token:
                 # Primera conexión o refresh_token perdido → forzar consent
                 needs_consent = True
-                target_info = f"account_email={account_email}" if account_email else "any Google account"
                 logging.info(
-                    f"[OAUTH_URL] First connection detected (no refresh_token in DB) for user_id={user_id} "
-                    f"({target_info}). Forcing prompt=consent to obtain refresh_token."
+                    f"[OAUTH_URL] First connection detected (no refresh_token in DB) for user_id={user_id}. "
+                    f"Forcing prompt=consent to obtain refresh_token."
                 )
             else:
-                target_info = f"for {account_email}" if account_email else f"for user_id={user_id}"
-                logging.info(f"[OAUTH_URL] Existing refresh_token found {target_info}, using prompt=select_account")
+                logging.info(f"[OAUTH_URL] Existing refresh_token found for user_id={user_id}, using prompt=select_account")
         except Exception as e:
             # Error al verificar DB → usar consent por seguridad (mejor obtener token que fallar)
             logging.warning(f"[OAUTH_URL] Failed to check existing refresh_token: {e}. Using prompt=consent as fallback.")
@@ -3544,11 +3532,14 @@ def classify_account_status(slot: dict, cloud_account: dict) -> dict:
             "can_reconnect": True
         }
     
-    # Caso 4b: Token expirado pero hay refresh_token (puede auto-renovarse)
+    # Caso 4b: Token expirado pero hay refresh_token disponible
+    # La cuenta NO está "connected" si el token expiró, incluso si hay refresh_token.
+    # /me/cloud-status intentará refresh automático, pero esta función debe reflejar estado real.
+    # Solo "connected" = token válido + no expirado.
     if token_is_expired and refresh_token:
         return {
             "connection_status": "needs_reconnect",
-            "reason": "token_expired",
+            "reason": "token_expired_refresh_available",  # Refresh disponible pero token inválido ahora
             "can_reconnect": True
         }
     
@@ -3660,7 +3651,58 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
                 # OneDrive/Dropbox/others use cloud_provider_accounts
                 cloud_account = provider_accounts_map.get((slot_provider, slot_provider_id))
             
-            # 5. Classify status
+            # 4b. AUTOMATIC REFRESH for Google Drive (MultCloud-style persistence)
+            # If token expired but refresh_token exists, try silent refresh before classifying
+            if slot_provider == "google_drive" and cloud_account:
+                token_expiry = cloud_account.get("token_expiry")
+                refresh_token = cloud_account.get("refresh_token")
+                
+                # Check if token is expired or about to expire (<120s buffer)
+                token_needs_refresh = False
+                if token_expiry:
+                    try:
+                        expiry_dt = datetime.fromisoformat(token_expiry.replace("Z", "+00:00"))
+                        buffer = timedelta(seconds=120)
+                        token_needs_refresh = expiry_dt < (datetime.now(timezone.utc) + buffer)
+                    except (ValueError, AttributeError):
+                        token_needs_refresh = True
+                else:
+                    token_needs_refresh = True  # No expiry info
+                
+                # If token expired and refresh_token exists, try refresh
+                if token_needs_refresh and refresh_token:
+                    from backend.google_drive import try_refresh_google_token
+                    
+                    logging.info(
+                        f"[CLOUD_STATUS] Auto-refresh attempt for account_id={cloud_account.get('id')} "
+                        f"email={cloud_account.get('account_email')}"
+                    )
+                    
+                    refresh_result = await try_refresh_google_token(cloud_account)
+                    
+                    if refresh_result["success"]:
+                        # Refresh succeeded - update cloud_account with new token data
+                        cloud_account = refresh_result["updated_account"]
+                        # Update accounts_map for subsequent slots (avoid re-refresh)
+                        accounts_map[slot_provider_id] = cloud_account
+                        logging.info(
+                            f"[CLOUD_STATUS] Auto-refresh SUCCESS for account_id={cloud_account.get('id')}"
+                        )
+                    else:
+                        # Refresh failed - log but don't crash (classify_account_status will handle)
+                        error_type = refresh_result.get("error_type", "unknown")
+                        logging.warning(
+                            f"[CLOUD_STATUS] Auto-refresh FAILED for account_id={cloud_account.get('id')} "
+                            f"error={error_type}"
+                        )
+                        # If invalid_grant, optionally mark is_active=false (user must reconnect)
+                        if error_type == "invalid_grant":
+                            logging.warning(
+                                f"[CLOUD_STATUS] Token revoked for account_id={cloud_account.get('id')}, "
+                                f"user must reconnect"
+                            )
+            
+            # 5. Classify status (after potential refresh)
             status = classify_account_status(slot, cloud_account)
             
             # 6. Build response
