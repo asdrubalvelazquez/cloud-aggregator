@@ -338,6 +338,180 @@ async def refresh_onedrive_token(refresh_token: str) -> Dict[str, Any]:
     )
 
 
+async def try_refresh_onedrive_token(provider_account: dict) -> dict:
+    """
+    Intenta refrescar tokens de OneDrive silenciosamente (sin excepciones).
+    MultCloud-style: preserva conectividad cuando token expira normalmente.
+    
+    Args:
+        provider_account: Row de cloud_provider_accounts (con tokens encrypted)
+    
+    Returns:
+        {
+            "success": bool,
+            "error_type": str | None,  # "no_refresh_token", "invalid_grant", "interaction_required", "invalid_client", "transient_error", etc.
+            "updated_account": dict  # provider_account actualizado (tokens ENCRYPTED, no decrypted)
+        }
+    
+    NEVER raises exceptions - siempre retorna estructura de respuesta.
+    """
+    from backend.db import supabase
+    from backend.crypto import decrypt_token, encrypt_token
+    
+    account_id = provider_account.get("id")
+    
+    # Caso 1: No existe refresh_token
+    encrypted_refresh_token = provider_account.get("refresh_token")
+    if not encrypted_refresh_token:
+        logger.warning(f"[ONEDRIVE_REFRESH] No refresh_token available for account_id={account_id}")
+        return {
+            "success": False,
+            "error_type": "no_refresh_token",
+            "updated_account": provider_account
+        }
+    
+    # Decrypt refresh_token
+    try:
+        refresh_token_plain = decrypt_token(encrypted_refresh_token)
+    except Exception as e:
+        logger.error(f"[ONEDRIVE_REFRESH] Token decryption failed for account_id={account_id}: {e}")
+        return {
+            "success": False,
+            "error_type": "decryption_error",
+            "updated_account": provider_account
+        }
+    
+    # Intentar refresh con helper existente (puede lanzar HTTPException)
+    try:
+        refresh_result = await refresh_onedrive_token(refresh_token_plain)
+        
+        # refresh_onedrive_token retorna: {access_token, refresh_token, expires_in, token_expiry}
+        new_access_token = refresh_result["access_token"]
+        new_refresh_token = refresh_result.get("refresh_token")  # Puede ser None si Microsoft no lo envía
+        new_expiry = refresh_result["token_expiry"]
+        
+        # Preparar update payload
+        update_payload = {
+            "access_token": encrypt_token(new_access_token),
+            "token_expiry": new_expiry.isoformat(),
+            "is_active": True
+        }
+        
+        # Solo actualizar refresh_token si Microsoft envió uno nuevo
+        if new_refresh_token:
+            update_payload["refresh_token"] = encrypt_token(new_refresh_token)
+            logger.info(f"[ONEDRIVE_REFRESH] Microsoft sent new refresh_token for account_id={account_id}")
+        else:
+            # Preservar existente (NO incluir campo en update)
+            logger.info(f"[ONEDRIVE_REFRESH] Preserving existing refresh_token for account_id={account_id}")
+        
+        # Actualizar DB
+        try:
+            supabase.table("cloud_provider_accounts").update(update_payload).eq("id", account_id).execute()
+            logger.info(f"[ONEDRIVE_REFRESH] SUCCESS for account_id={account_id}")
+        except Exception as db_error:
+            logger.error(f"[ONEDRIVE_REFRESH] DB update failed for account_id={account_id}: {db_error}")
+            return {
+                "success": False,
+                "error_type": "db_update_error",
+                "updated_account": provider_account
+            }
+        
+        # Construir account actualizado (in-memory) reutilizando tokens ya encriptados del payload
+        updated_account = provider_account.copy()
+        updated_account["access_token"] = update_payload["access_token"]  # Ya encriptado
+        updated_account["token_expiry"] = update_payload["token_expiry"]
+        updated_account["is_active"] = update_payload["is_active"]
+        if "refresh_token" in update_payload:
+            updated_account["refresh_token"] = update_payload["refresh_token"]  # Ya encriptado
+        
+        return {
+            "success": True,
+            "error_type": None,
+            "updated_account": updated_account
+        }
+        
+    except HTTPException as http_err:
+        # Analizar tipo de error desde detail
+        error_detail = http_err.detail if hasattr(http_err, "detail") else {}
+        error_code = error_detail.get("error_code", "") if isinstance(error_detail, dict) else ""
+        error_msg = error_detail.get("error", "") if isinstance(error_detail, dict) else ""
+        
+        # Normalizar strings para detección case-insensitive
+        error_code_lower = error_code.lower()
+        error_msg_lower = error_msg.lower()
+        
+        # Caso 1: invalid_grant (token revocado permanentemente)
+        if "invalid_grant" in error_code_lower or "invalid_grant" in error_msg_lower:
+            logger.warning(f"[ONEDRIVE_REFRESH] invalid_grant detected for account_id={account_id}, marking inactive")
+            
+            try:
+                supabase.table("cloud_provider_accounts").update({
+                    "is_active": False,
+                    "access_token": None,
+                    "token_expiry": None
+                    # NO borrar refresh_token - puede ser útil para debugging
+                }).eq("id", account_id).execute()
+                logger.info(f"[ONEDRIVE_REFRESH] Marked account_id={account_id} as inactive (invalid_grant)")
+            except Exception as db_error:
+                logger.error(f"[ONEDRIVE_REFRESH] Failed to mark inactive account_id={account_id}: {db_error}")
+            
+            return {
+                "success": False,
+                "error_type": "invalid_grant",
+                "updated_account": provider_account
+            }
+        
+        # Caso 2: interaction_required (requiere consentimiento usuario)
+        if "interaction_required" in error_code_lower or "interaction_required" in error_msg_lower:
+            logger.warning(f"[ONEDRIVE_REFRESH] interaction_required detected for account_id={account_id}, marking inactive")
+            
+            try:
+                supabase.table("cloud_provider_accounts").update({
+                    "is_active": False,
+                    "access_token": None,
+                    "token_expiry": None
+                    # NO borrar refresh_token
+                }).eq("id", account_id).execute()
+                logger.info(f"[ONEDRIVE_REFRESH] Marked account_id={account_id} as inactive (interaction_required)")
+            except Exception as db_error:
+                logger.error(f"[ONEDRIVE_REFRESH] Failed to mark inactive account_id={account_id}: {db_error}")
+            
+            return {
+                "success": False,
+                "error_type": "interaction_required",
+                "updated_account": provider_account
+            }
+        
+        # Caso 3: invalid_client o unauthorized_client (config OAuth incorrecta)
+        if "invalid_client" in error_code_lower or "invalid_client" in error_msg_lower or \
+           "unauthorized_client" in error_code_lower or "unauthorized_client" in error_msg_lower:
+            logger.error(f"[ONEDRIVE_REFRESH] invalid_client/unauthorized_client for account_id={account_id} (OAuth misconfiguration)")
+            # NO mutar tokens - es un problema de configuración, no de cuenta
+            return {
+                "success": False,
+                "error_type": "invalid_client",
+                "updated_account": provider_account
+            }
+        
+        # Caso 4: Errores transitorios (network, 5xx, rate limit, etc.)
+        logger.warning(f"[ONEDRIVE_REFRESH] Transient error for account_id={account_id}: error_code={error_code}")
+        return {
+            "success": False,
+            "error_type": "transient_error",
+            "updated_account": provider_account
+        }
+    
+    except Exception as e:
+        # Errores inesperados
+        logger.exception(f"[ONEDRIVE_REFRESH] Unexpected error for account_id={account_id}: {e}")
+        return {
+            "success": False,
+            "error_type": "unexpected_error",
+            "updated_account": provider_account
+        }
+
+
 async def list_onedrive_files(
     access_token: str,
     parent_id: Optional[str] = None,

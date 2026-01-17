@@ -3639,6 +3639,10 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
         accounts_status = []
         summary = {"connected": 0, "needs_reconnect": 0, "disconnected": 0}
         
+        # Import refresh helpers (needed for auto-refresh in loop)
+        from backend.google_drive import try_refresh_google_token
+        from backend.onedrive import try_refresh_onedrive_token
+        
         for slot in slots_result.data:
             # 4. Match slot to cloud_account using normalized ID (provider-aware)
             slot_provider = slot.get("provider", "").strip()
@@ -3671,8 +3675,6 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
                 
                 # If token expired and refresh_token exists, try refresh
                 if token_needs_refresh and refresh_token:
-                    from backend.google_drive import try_refresh_google_token
-                    
                     logging.info(
                         f"[CLOUD_STATUS] Auto-refresh attempt for account_id={cloud_account.get('id')} "
                         f"email={cloud_account.get('account_email')}"
@@ -3699,6 +3701,55 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
                         if error_type == "invalid_grant":
                             logging.warning(
                                 f"[CLOUD_STATUS] Token revoked for account_id={cloud_account.get('id')}, "
+                                f"user must reconnect"
+                            )
+            
+            # 4c. AUTOMATIC REFRESH for OneDrive (MultCloud-style persistence)
+            # If token expired but refresh_token exists, try silent refresh before classifying
+            if slot_provider == "onedrive" and cloud_account:
+                token_expiry = cloud_account.get("token_expiry")
+                refresh_token = cloud_account.get("refresh_token")
+                
+                # Check if token is expired or about to expire (<120s buffer)
+                token_needs_refresh = False
+                if token_expiry:
+                    try:
+                        expiry_dt = datetime.fromisoformat(token_expiry.replace("Z", "+00:00"))
+                        buffer = timedelta(seconds=120)
+                        token_needs_refresh = expiry_dt < (datetime.now(timezone.utc) + buffer)
+                    except (ValueError, AttributeError):
+                        token_needs_refresh = True
+                else:
+                    token_needs_refresh = True  # No expiry info
+                
+                # If token expired and refresh_token exists, try refresh
+                if token_needs_refresh and refresh_token:
+                    logging.info(
+                        f"[CLOUD_STATUS][ONEDRIVE] Auto-refresh attempt for account_id={cloud_account.get('id')} "
+                        f"email={cloud_account.get('account_email')}"
+                    )
+                    
+                    refresh_result = await try_refresh_onedrive_token(cloud_account)
+                    
+                    if refresh_result["success"]:
+                        # Refresh succeeded - update cloud_account with new token data
+                        cloud_account = refresh_result["updated_account"]
+                        # Update provider_accounts_map for subsequent slots (avoid re-refresh)
+                        provider_accounts_map[(slot_provider, slot_provider_id)] = cloud_account
+                        logging.info(
+                            f"[CLOUD_STATUS][ONEDRIVE] Auto-refresh SUCCESS for account_id={cloud_account.get('id')}"
+                        )
+                    else:
+                        # Refresh failed - log but don't crash (classify_account_status will handle)
+                        error_type = refresh_result.get("error_type", "unknown")
+                        logging.warning(
+                            f"[CLOUD_STATUS][ONEDRIVE] Auto-refresh FAILED for account_id={cloud_account.get('id')} "
+                            f"error={error_type}"
+                        )
+                        # If invalid_grant or interaction_required, user must reconnect
+                        if error_type in ("invalid_grant", "interaction_required"):
+                            logging.warning(
+                                f"[CLOUD_STATUS][ONEDRIVE] Token revoked/interaction required for account_id={cloud_account.get('id')}, "
                                 f"user must reconnect"
                             )
             
