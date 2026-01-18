@@ -81,6 +81,7 @@ def safe_frontend_origin_from_request(request: Request) -> str:
 
 
 def create_transfer_token(
+    *,
     provider: str,
     provider_account_id: str,
     requesting_user_id: str,
@@ -5440,6 +5441,7 @@ async def onedrive_callback(request: Request):
             transfer_token = create_transfer_token(
                 provider="onedrive",
                 provider_account_id=microsoft_account_id,
+                requesting_user_id=user_id,
                 existing_owner_id=orphan_user_id,
                 account_email=account_email
             )
