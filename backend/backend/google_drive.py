@@ -95,6 +95,7 @@ async def try_refresh_google_token(cloud_account: dict) -> dict:
                 logger.error(f"[SILENT_REFRESH] account_id={account_id} failed to parse success JSON: {json_err}")
                 return {"success": False, "error_type": "invalid_json_response", "updated_account": None}
             
+            new_access_token = token_json.get("access_token")
             expires_in = token_json.get("expires_in", 3600)
             
             if not new_access_token:

@@ -5429,12 +5429,26 @@ async def onedrive_callback(request: Request):
     if orphan_slot_check.data and len(orphan_slot_check.data) > 0:
         orphan_user_id = orphan_slot_check.data[0]["user_id"]
         if orphan_user_id != user_id:
-            # Slot exists for different user but cloud_provider_accounts didn't catch it
-            logging.error(
-                f"[SECURITY][ONEDRIVE][CONNECT] Orphan slot detected: "
-                f"slot belongs to user_id={orphan_user_id} but current user_id={user_id}"
+            # Orphan slot detected: unify with ownership conflict flow
+            logging.warning(
+                f"[ONEDRIVE][CONNECT] Orphan slot detected for provider_account_id={microsoft_account_id}: "
+                f"slot belongs to user_id={orphan_user_id} but current user_id={user_id}. "
+                f"Generating transfer_token for explicit user consent."
             )
-            return RedirectResponse(f"{frontend_origin}/app?error=ownership_violation")
+            
+            # Generate transfer_token igual que en ownership conflict
+            transfer_token = create_transfer_token(
+                provider="onedrive",
+                provider_account_id=microsoft_account_id,
+                existing_owner_id=orphan_user_id,
+                account_email=account_email
+            )
+            
+            # Usar fragment (#) para que no viaje al servidor (seguridad)
+            from urllib.parse import quote
+            return RedirectResponse(
+                f"{frontend_origin}/app?error=ownership_conflict#transfer_token={quote(transfer_token)}"
+            )
     
     # Get/create slot (only if no SAFE RECLAIM happened)
     try:
