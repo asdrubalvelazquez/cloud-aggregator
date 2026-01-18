@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import httpx
 import stripe
+import jwt  # PyJWT para transfer_token firmado
 from fastapi import FastAPI, Request, HTTPException, Depends, Header
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -78,6 +79,65 @@ def safe_frontend_origin_from_request(request: Request) -> str:
 
     return CANONICAL_FRONTEND_ORIGIN
 
+
+def create_transfer_token(
+    provider: str,
+    provider_account_id: str,
+    requesting_user_id: str,
+    existing_owner_id: str,
+    account_email: str = ""
+) -> str:
+    """Crear transfer_token JWT firmado para ownership transfer.
+    
+    Args:
+        provider: 'onedrive', 'dropbox', etc.
+        provider_account_id: ID de cuenta en el proveedor
+        requesting_user_id: UUID del usuario que solicita transferencia
+        existing_owner_id: UUID del propietario actual
+        account_email: Email de la cuenta (opcional, solo para UI)
+    
+    Returns:
+        JWT firmado con TTL de 10 minutos
+    """
+    payload = {
+        "typ": "ownership_transfer",
+        "provider": provider,
+        "provider_account_id": provider_account_id,
+        "requesting_user_id": requesting_user_id,
+        "existing_owner_id": existing_owner_id,
+        "account_email": account_email,
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=TRANSFER_TOKEN_TTL_MINUTES),
+        "iat": datetime.now(timezone.utc)
+    }
+    return jwt.encode(payload, TRANSFER_TOKEN_SECRET, algorithm="HS256")
+
+
+def verify_transfer_token(token: str) -> Dict[str, Any]:
+    """Verificar y decodificar transfer_token JWT.
+    
+    Args:
+        token: JWT firmado
+    
+    Returns:
+        Dict con payload decodificado
+    
+    Raises:
+        HTTPException: Si token es inválido o expirado
+    """
+    try:
+        payload = jwt.decode(token, TRANSFER_TOKEN_SECRET, algorithms=["HS256"])
+        
+        # Validar tipo de token
+        if payload.get("typ") != "ownership_transfer":
+            raise HTTPException(status_code=400, detail="Invalid token type")
+        
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=400, detail="Transfer token expired")
+    except jwt.InvalidTokenError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid transfer token: {str(e)}")
+
+
 # CORS_ALLOWED_ORIGINS: Comma-separated list of allowed origins
 # If not set, use defaults: FRONTEND_URL + localhost
 cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS")
@@ -145,6 +205,13 @@ STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
+
+# Transfer Token Secret (para ownership transfer JWT)
+# Debe ser un secret dedicado (32+ bytes random, nunca loggeado)
+TRANSFER_TOKEN_SECRET = os.getenv("OWNERSHIP_TRANSFER_TOKEN_SECRET")
+if not TRANSFER_TOKEN_SECRET:
+    raise RuntimeError("Missing OWNERSHIP_TRANSFER_TOKEN_SECRET environment variable")
+TRANSFER_TOKEN_TTL_MINUTES = 10  # TTL corto para seguridad
 
 
 @app.get("/")
@@ -4170,6 +4237,285 @@ async def disconnect_slot(
         )
 
 
+class TransferOwnershipRequest(BaseModel):
+    transfer_token: str
+
+
+@app.post("/cloud/transfer-ownership")
+async def transfer_cloud_ownership(
+    request: TransferOwnershipRequest,
+    user_id: str = Depends(verify_supabase_jwt)
+):
+    """
+    Transfer ownership of cloud provider account between users.
+    
+    Resolves ownership_conflict when User B attempts to connect an account already
+    owned by User A with email mismatch (not covered by automatic SAFE RECLAIM).
+    
+    Flow:
+    1. User B tries to connect OneDrive → ownership_conflict error + transfer_token
+    2. Frontend shows modal: "Transfer account from User A to you?"
+    3. User B confirms → POST /cloud/transfer-ownership {transfer_token}
+    4. Backend validates JWT and calls RPC transfer_provider_account_ownership
+    5. Updates ownership atomically (no DELETE+INSERT)
+    6. Adjusts user_plans.clouds_slots_used for both users (same logic as SAFE RECLAIM)
+    
+    Security:
+    - Requires valid JWT token
+    - Validates transfer_token JWT (exp + signature)
+    - Ensures requesting_user_id == current user_id
+    - RPC uses FOR UPDATE (pessimistic lock) to avoid race conditions
+    - Validates expected_old_user_id to prevent concurrent ownership changes
+    
+    Body:
+        {
+            "transfer_token": "eyJhbGc..."  # JWT firmado (TTL 10 min)
+        }
+    
+    Returns:
+        {
+            "success": true,
+            "account_id": "uuid",
+            "message": "Account transferred successfully"
+        }
+    
+    Errors:
+        400: Invalid/expired transfer_token
+        403: requesting_user_id != current user_id
+        409: owner_changed (concurrent modification)
+        404: account_not_found
+        500: Database error
+    """
+    try:
+        # ═══════════════════════════════════════════════════════════════════════════
+        # PASO 1: Validar y decodificar transfer_token JWT
+        # ═══════════════════════════════════════════════════════════════════════════
+        try:
+            payload = verify_transfer_token(request.transfer_token)
+        except HTTPException as e:
+            logging.error(f"[TRANSFER OWNERSHIP] Invalid transfer_token: {e.detail}")
+            raise
+        
+        provider = payload["provider"]
+        provider_account_id = payload["provider_account_id"]
+        requesting_user_id = payload["requesting_user_id"]
+        existing_owner_id = payload["existing_owner_id"]
+        account_email = payload.get("account_email", "")
+        
+        # ═══════════════════════════════════════════════════════════════════════════
+        # PASO 2: Validar que requesting_user_id coincide con user_id actual
+        # ═══════════════════════════════════════════════════════════════════════════
+        if requesting_user_id != user_id:
+            logging.error(
+                f"[TRANSFER OWNERSHIP] Authorization mismatch: "
+                f"transfer_token.requesting_user_id={requesting_user_id} != current_user_id={user_id}"
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Unauthorized: transfer token not issued for current user"
+            )
+        
+        logging.info(
+            f"[TRANSFER OWNERSHIP] Initiating transfer: "
+            f"provider={provider} account_id={provider_account_id} "
+            f"from_user={existing_owner_id} to_user={user_id}"
+        )
+        
+        # ═══════════════════════════════════════════════════════════════════════════
+        # PASO 2.5: IDEMPOTENCIA - Consultar owner actual antes del RPC
+        # ═══════════════════════════════════════════════════════════════════════════
+        # Evita doble conteo de slots si el endpoint se reintenta (refresh, retry, etc.)
+        # Si el owner actual ya es el nuevo owner, significa que se transfirió previamente
+        try:
+            pre_check_result = supabase.table("cloud_provider_accounts").select(
+                "user_id, is_active"
+            ).eq("provider", provider).eq("provider_account_id", provider_account_id).limit(1).execute()
+            
+            if pre_check_result.data and len(pre_check_result.data) > 0:
+                current_owner = pre_check_result.data[0].get("user_id")
+                is_currently_active = pre_check_result.data[0].get("is_active", False)
+                
+                # Si el owner actual ya es el nuevo owner → transferencia ya completada
+                if current_owner == user_id:
+                    logging.info(
+                        f"[TRANSFER OWNERSHIP] Idempotency check: account already owned by {user_id}. "
+                        f"Transfer already completed (no-op)."
+                    )
+                    return {
+                        "success": True,
+                        "account_id": "already_transferred",
+                        "message": f"{provider} account already transferred (idempotent)"
+                    }
+                
+                # Guardar owner anterior para validación posterior
+                pre_owner_user_id = current_owner
+            else:
+                # Cuenta no existe → RPC retornará account_not_found
+                pre_owner_user_id = None
+        except Exception as e:
+            logging.error(f"[TRANSFER OWNERSHIP] Pre-check query failed: {str(e)[:300]}")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to verify current ownership state"
+            )
+        
+        # ═══════════════════════════════════════════════════════════════════════════
+        # PASO 3: Llamar RPC transaccional para transferir ownership
+        # ═══════════════════════════════════════════════════════════════════════════
+        try:
+            rpc_result = supabase.rpc("transfer_provider_account_ownership", {
+                "p_provider": provider,
+                "p_provider_account_id": provider_account_id,
+                "p_new_user_id": user_id,
+                "p_expected_old_user_id": existing_owner_id
+            }).execute()
+        except Exception as rpc_error:
+            logging.error(f"[TRANSFER OWNERSHIP] RPC error: {str(rpc_error)[:500]}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Database error during ownership transfer: {str(rpc_error)[:200]}"
+            )
+        
+        if not rpc_result.data:
+            logging.error("[TRANSFER OWNERSHIP] RPC returned no data")
+            raise HTTPException(status_code=500, detail="RPC returned no result")
+        
+        result = rpc_result.data
+        
+        # ═══════════════════════════════════════════════════════════════════════════
+        # PASO 4: Validar resultado del RPC
+        # ═══════════════════════════════════════════════════════════════════════════
+        if not result.get("success"):
+            error_type = result.get("error", "unknown")
+            
+            if error_type == "account_not_found":
+                raise HTTPException(status_code=404, detail="Cloud account not found")
+            elif error_type == "owner_changed":
+                # Ownership cambió entre la generación del token y esta llamada
+                # Verificar si cambió al nuevo owner (idempotencia) o a otro usuario
+                actual_owner = result.get('actual_owner')
+                
+                if actual_owner == user_id:
+                    # Ya es del nuevo owner → transfer completado en intento previo (idempotente)
+                    logging.info(
+                        f"[TRANSFER OWNERSHIP] Owner already changed to {user_id} (idempotent). "
+                        f"Skipping slot adjustments."
+                    )
+                    return {
+                        "success": True,
+                        "account_id": "already_transferred",
+                        "message": f"{provider} account already transferred (idempotent)"
+                    }
+                else:
+                    # Ownership cambió a otro usuario diferente → conflicto concurrente real
+                    logging.warning(
+                        f"[TRANSFER OWNERSHIP] Concurrent ownership change detected: "
+                        f"expected_owner={existing_owner_id} actual_owner={actual_owner}"
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Account ownership changed. Please retry the connection."
+                    )
+            else:
+                raise HTTPException(status_code=500, detail=f"Transfer failed: {error_type}")
+        
+        account_id = result.get("account_id")
+        slot_log_id = result.get("slot_log_id")
+        
+        logging.info(
+            f"[TRANSFER OWNERSHIP] RPC success: account_id={account_id} slot_log_id={slot_log_id}"
+        )
+        
+        # ═══════════════════════════════════════════════════════════════════════════
+        # PASO 5: Ajustar clouds_slots_used (replicar lógica SAFE RECLAIM)
+        # ═══════════════════════════════════════════════════════════════════════════
+        # IMPORTANTE: Solo ajustar slots si el transfer fue real (no idempotente)
+        # Validar que pre_owner_user_id != user_id para evitar doble conteo en reintentos
+        
+        if pre_owner_user_id and pre_owner_user_id != user_id:
+            # Transfer real: pre_owner era diferente, ahora es user_id
+            # Proceder con decrement/increment
+            
+            # 5.1. Decrementar clouds_slots_used del propietario anterior (si tenía slot activo)
+        if slot_log_id:
+            try:
+                old_user_plan = supabase.table("user_plans").select(
+                    "clouds_slots_used"
+                ).eq("user_id", existing_owner_id).single().execute()
+                
+                if old_user_plan.data:
+                    old_slots_used = old_user_plan.data.get("clouds_slots_used", 0)
+                    new_old_slots_used = max(0, old_slots_used - 1)
+                    
+                    supabase.table("user_plans").update({
+                        "clouds_slots_used": new_old_slots_used,
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }).eq("user_id", existing_owner_id).execute()
+                    
+                    logging.info(
+                        f"[TRANSFER OWNERSHIP] Decremented clouds_slots_used for old owner "
+                        f"{existing_owner_id}: {old_slots_used} → {new_old_slots_used}"
+                    )
+            except Exception as e:
+                # No fatal, solo log
+                logging.warning(
+                    f"[TRANSFER OWNERSHIP] Failed to decrement old owner slots: {str(e)[:300]}"
+                )
+            
+            # 5.2. Incrementar clouds_slots_used del nuevo propietario
+            # Como el transfer ocurre durante OAuth (tokens frescos disponibles),
+            # incrementamos aquí para mantener consistencia de conteo
+            try:
+                new_user_plan = supabase.table("user_plans").select(
+                    "clouds_slots_used"
+                ).eq("user_id", user_id).single().execute()
+                
+                if new_user_plan.data:
+                    new_slots_used = new_user_plan.data.get("clouds_slots_used", 0)
+                    incremented_slots_used = new_slots_used + 1
+                    
+                    supabase.table("user_plans").update({
+                        "clouds_slots_used": incremented_slots_used,
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }).eq("user_id", user_id).execute()
+                    
+                    logging.info(
+                        f"[TRANSFER OWNERSHIP] Incremented clouds_slots_used for new owner "
+                        f"{user_id}: {new_slots_used} → {incremented_slots_used}"
+                    )
+            except Exception as e:
+                # No fatal, solo log
+                logging.warning(
+                    f"[TRANSFER OWNERSHIP] Failed to increment new owner slots: {str(e)[:300]}"
+                )
+        else:
+            # No hubo transfer real (idempotencia) o pre_owner_user_id es None
+            logging.info(
+                f"[TRANSFER OWNERSHIP] Skipping slot adjustments: "
+                f"pre_owner={pre_owner_user_id} new_owner={user_id} (idempotent or no prior owner)"
+            )
+        
+        logging.info(
+            f"[TRANSFER OWNERSHIP] Transfer completed successfully: "
+            f"account_id={account_id} from_user={existing_owner_id} to_user={user_id}"
+        )
+        
+        return {
+            "success": True,
+            "account_id": account_id,
+            "message": f"{provider} account transferred successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[TRANSFER OWNERSHIP ERROR] Unexpected error: {str(e)[:500]}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to transfer ownership: {str(e)[:200]}"
+        )
+
+
 @app.get("/cloud/storage-summary")
 async def get_cloud_storage_summary(user_id: str = Depends(verify_supabase_jwt)):
     """
@@ -5047,13 +5393,29 @@ async def onedrive_callback(request: Request):
                     )
                     return RedirectResponse(f"{frontend_origin}/app?error=reconnect_failed")
             else:
-                # ❌ Email doesn't match => BLOCK (account takeover attempt)
-                logging.error(
-                    f"[SECURITY][ONEDRIVE][CONNECT] Account takeover attempt blocked! "
-                    f"provider_account_id={microsoft_account_id} belongs to different user. "
-                    f"Email mismatch prevents reclaim."
+                # ❌ Email doesn't match => OWNERSHIP CONFLICT
+                # Generar transfer_token JWT firmado para transferencia explícita
+                logging.warning(
+                    f"[SECURITY][ONEDRIVE][CONNECT] Ownership conflict detected: "
+                    f"provider_account_id={microsoft_account_id} belongs to user_id={existing_user_id}, "
+                    f"but user_id={user_id} is attempting to connect. Email mismatch prevents auto-reclaim. "
+                    f"Generating transfer_token for explicit ownership transfer."
                 )
-                return RedirectResponse(f"{frontend_origin}/app?error=ownership_violation")
+                
+                # Crear transfer_token firmado (TTL 10 minutos)
+                transfer_token = create_transfer_token(
+                    provider="onedrive",
+                    provider_account_id=microsoft_account_id,
+                    requesting_user_id=user_id,
+                    existing_owner_id=existing_user_id,
+                    account_email=account_email
+                )
+                
+                # Usar fragment (#) para que no viaje al servidor (seguridad)
+                from urllib.parse import quote
+                return RedirectResponse(
+                    f"{frontend_origin}/app?error=ownership_conflict#transfer_token={quote(transfer_token)}"
+                )
     
     # ═══════════════════════════════════════════════════════════════════════════
     # END SAFE RECLAIM - Proceed with normal flow (new account or same user reconnect)
