@@ -4340,8 +4340,56 @@ async def transfer_cloud_ownership(
                 if current_owner == user_id:
                     logging.info(
                         f"[TRANSFER OWNERSHIP] Idempotency check: account already owned by {user_id}. "
-                        f"Transfer already completed (no-op)."
+                        f"Checking for pending transfer request with fresh tokens."
                     )
+                    
+                    # IDEMPOTENCIA COMPLETA: Aplicar tokens si existe request pending no expirado
+                    try:
+                        idempotent_req_query = supabase.table("ownership_transfer_requests").select(
+                            "id, access_token, refresh_token, token_expiry, account_email"
+                        ).eq("provider", provider).eq(
+                            "provider_account_id", provider_account_id
+                        ).eq("requesting_user_id", user_id).eq(
+                            "status", "pending"
+                        ).gt("expires_at", datetime.now(timezone.utc).isoformat()).execute()
+                        
+                        if idempotent_req_query.data and len(idempotent_req_query.data) > 0:
+                            idempotent_req = idempotent_req_query.data[0]
+                            idempotent_req_id = idempotent_req["id"]
+                            
+                            # Aplicar tokens cifrados sin desencriptar
+                            update_payload_idempotent = {
+                                "access_token": idempotent_req["access_token"],
+                                "token_expiry": idempotent_req["token_expiry"],
+                                "is_active": True,
+                                "disconnected_at": None
+                            }
+                            
+                            if idempotent_req.get("refresh_token"):
+                                update_payload_idempotent["refresh_token"] = idempotent_req["refresh_token"]
+                            
+                            if idempotent_req.get("account_email"):
+                                update_payload_idempotent["account_email"] = idempotent_req["account_email"]
+                            
+                            supabase.table("cloud_provider_accounts").update(
+                                update_payload_idempotent
+                            ).eq("provider", provider).eq(
+                                "provider_account_id", provider_account_id
+                            ).eq("user_id", user_id).execute()
+                            
+                            # Marcar request como usado
+                            supabase.table("ownership_transfer_requests").update({
+                                "status": "used"
+                            }).eq("id", idempotent_req_id).execute()
+                            
+                            logging.info(
+                                f"[TRANSFER OWNERSHIP] Idempotent: Applied fresh tokens from request id={idempotent_req_id}"
+                            )
+                    except Exception as idempotent_err:
+                        logging.warning(
+                            f"[TRANSFER OWNERSHIP] Idempotent token application failed: {str(idempotent_err)[:300]}"
+                        )
+                    
                     return {
                         "success": True,
                         "account_id": "already_transferred",
@@ -4428,39 +4476,104 @@ async def transfer_cloud_ownership(
         )
         
         # ═══════════════════════════════════════════════════════════════════════════
-        # PASO 4.5: Reactivar cuenta para visibilidad en listados
+        # PASO 4.5: Recuperar tokens frescos y conectar cuenta completamente
         # ═══════════════════════════════════════════════════════════════════════════
-        # CRITICAL: Después del transfer, la cuenta debe ser visible en cloud-status
-        # aunque los tokens estén expirados (UI maneja "needs reconnect" state)
+        # CRITICAL: El transfer cambió user_id pero la cuenta necesita tokens frescos
+        # para aparecer conectada en cloud-status/storage-summary
         
+        transfer_request = None
         try:
-            # 4.5.1. Reactivar en cloud_provider_accounts
-            supabase.table("cloud_provider_accounts").update({
-                "is_active": True,
-                "disconnected_at": None
-            }).eq("provider", provider).eq("provider_account_id", provider_account_id).eq("user_id", user_id).execute()
+            # 4.5.1. Recuperar tokens desde ownership_transfer_requests
+            transfer_req_query = supabase.table("ownership_transfer_requests").select(
+                "id, access_token, refresh_token, token_expiry, account_email, status"
+            ).eq("provider", provider).eq(
+                "provider_account_id", provider_account_id
+            ).eq("requesting_user_id", user_id).eq(
+                "status", "pending"
+            ).gt("expires_at", datetime.now(timezone.utc).isoformat()).execute()
             
-            logging.info(
-                f"[TRANSFER OWNERSHIP] Account reactivated and visible: "
-                f"provider={provider} account_id={provider_account_id}"
-            )
-            
-            # 4.5.2. Reactivar en cloud_slots_log (si existe)
-            if slot_log_id:
-                supabase.table("cloud_slots_log").update({
-                    "is_active": True,
-                    "disconnected_at": None
-                }).eq("id", slot_log_id).execute()
+            if not transfer_req_query.data or len(transfer_req_query.data) == 0:
+                logging.warning(
+                    f"[TRANSFER OWNERSHIP] No pending transfer request found for tokens. "
+                    f"Account will be transferred but may require reconnect."
+                )
+            else:
+                transfer_request = transfer_req_query.data[0]
+                transfer_req_id = transfer_request["id"]
                 
                 logging.info(
-                    f"[TRANSFER OWNERSHIP] Slot reactivated: slot_log_id={slot_log_id}"
+                    f"[TRANSFER OWNERSHIP] Retrieved transfer request: id={transfer_req_id}"
                 )
+                
+                # 4.5.2. Actualizar cloud_provider_accounts con tokens cifrados (sin desencriptar)
+                update_payload = {
+                    "access_token": transfer_request["access_token"],  # Already encrypted
+                    "token_expiry": transfer_request["token_expiry"],
+                    "is_active": True,
+                    "disconnected_at": None
+                }
+                
+                if transfer_request.get("refresh_token"):
+                    update_payload["refresh_token"] = transfer_request["refresh_token"]
+                
+                if transfer_request.get("account_email"):
+                    update_payload["account_email"] = transfer_request["account_email"]
+                
+                supabase.table("cloud_provider_accounts").update(
+                    update_payload
+                ).eq("provider", provider).eq(
+                    "provider_account_id", provider_account_id
+                ).eq("user_id", user_id).execute()
+                
+                logging.info(
+                    f"[TRANSFER OWNERSHIP] Account connected with fresh tokens: "
+                    f"provider={provider} account_id={provider_account_id}"
+                )
+                
+                # 4.5.3. Reactivar en cloud_slots_log (si existe)
+                if slot_log_id:
+                    supabase.table("cloud_slots_log").update({
+                        "is_active": True,
+                        "disconnected_at": None
+                    }).eq("id", slot_log_id).execute()
+                    
+                    logging.info(
+                        f"[TRANSFER OWNERSHIP] Slot reactivated: slot_log_id={slot_log_id}"
+                    )
+                
+                # 4.5.4. Marcar request como usado para prevenir reutilización
+                supabase.table("ownership_transfer_requests").update({
+                    "status": "used"
+                }).eq("id", transfer_req_id).execute()
+                
+                logging.info(
+                    f"[TRANSFER OWNERSHIP] Transfer request marked as used: id={transfer_req_id}"
+                )
+                
         except Exception as e:
-            # No fatal: el transfer ya ocurrió exitosamente en el RPC
-            # Solo loggeamos el error de reactivación
+            # No fatal: el transfer RPC ya ocurrió exitosamente
+            # Si no hay tokens, la cuenta quedará transferida pero necesitará reconnect
             logging.warning(
-                f"[TRANSFER OWNERSHIP] Failed to reactivate account visibility: {str(e)[:300]}"
+                f"[TRANSFER OWNERSHIP] Failed to apply fresh tokens: {str(e)[:300]}"
             )
+            
+            # Fallback: al menos reactivar cuenta sin tokens
+            try:
+                supabase.table("cloud_provider_accounts").update({
+                    "is_active": True,
+                    "disconnected_at": None
+                }).eq("provider", provider).eq(
+                    "provider_account_id", provider_account_id
+                ).eq("user_id", user_id).execute()
+                
+                logging.info(
+                    f"[TRANSFER OWNERSHIP] Account reactivated (without tokens): "
+                    f"provider={provider} account_id={provider_account_id}"
+                )
+            except Exception as fallback_err:
+                logging.error(
+                    f"[TRANSFER OWNERSHIP] Fallback reactivation failed: {str(fallback_err)[:300]}"
+                )
         
         # ═══════════════════════════════════════════════════════════════════════════
         # PASO 5: Ajustar clouds_slots_used (replicar lógica SAFE RECLAIM)
@@ -5438,6 +5551,36 @@ async def onedrive_callback(request: Request):
                     f"Generating transfer_token for explicit ownership transfer."
                 )
                 
+                # Save encrypted tokens temporarily for ownership transfer (10 min TTL)
+                try:
+                    from backend.crypto import encrypt_token
+                    encrypted_access = encrypt_token(access_token)
+                    encrypted_refresh = encrypt_token(refresh_token) if refresh_token else None
+                    
+                    # UPSERT: if pending request exists, update tokens/expiry
+                    supabase.table("ownership_transfer_requests").upsert({
+                        "provider": "onedrive",
+                        "provider_account_id": microsoft_account_id,
+                        "requesting_user_id": user_id,
+                        "existing_owner_id": existing_user_id,
+                        "account_email": account_email,
+                        "access_token": encrypted_access,
+                        "refresh_token": encrypted_refresh,
+                        "token_expiry": expiry_iso,
+                        "status": "pending",
+                        "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+                    }, on_conflict="provider,provider_account_id,requesting_user_id").execute()
+                    
+                    logging.info(
+                        f"[OWNERSHIP_TRANSFER][ONEDRIVE] Tokens saved temporarily for transfer: "
+                        f"provider_account_id={microsoft_account_id} requesting_user={user_id}"
+                    )
+                except Exception as save_err:
+                    logging.error(
+                        f"[OWNERSHIP_TRANSFER][ONEDRIVE] Failed to save tokens: {type(save_err).__name__} - {str(save_err)[:200]}"
+                    )
+                    # Non-fatal: continue with transfer_token generation
+                
                 # Crear transfer_token firmado (TTL 10 minutos)
                 transfer_token = create_transfer_token(
                     provider="onedrive",
@@ -5471,6 +5614,36 @@ async def onedrive_callback(request: Request):
                 f"slot belongs to user_id={orphan_user_id} but current user_id={user_id}. "
                 f"Generating transfer_token for explicit user consent."
             )
+            
+            # Save encrypted tokens temporarily for ownership transfer (10 min TTL)
+            try:
+                from backend.crypto import encrypt_token
+                encrypted_access = encrypt_token(access_token)
+                encrypted_refresh = encrypt_token(refresh_token) if refresh_token else None
+                
+                # UPSERT: if pending request exists, update tokens/expiry
+                supabase.table("ownership_transfer_requests").upsert({
+                    "provider": "onedrive",
+                    "provider_account_id": microsoft_account_id,
+                    "requesting_user_id": user_id,
+                    "existing_owner_id": orphan_user_id,
+                    "account_email": account_email,
+                    "access_token": encrypted_access,
+                    "refresh_token": encrypted_refresh,
+                    "token_expiry": expiry_iso,
+                    "status": "pending",
+                    "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+                }, on_conflict="provider,provider_account_id,requesting_user_id").execute()
+                
+                logging.info(
+                    f"[OWNERSHIP_TRANSFER][ONEDRIVE] Tokens saved temporarily for orphan transfer: "
+                    f"provider_account_id={microsoft_account_id} requesting_user={user_id}"
+                )
+            except Exception as save_err:
+                logging.error(
+                    f"[OWNERSHIP_TRANSFER][ONEDRIVE] Failed to save tokens for orphan: {type(save_err).__name__} - {str(save_err)[:200]}"
+                )
+                # Non-fatal: continue with transfer_token generation
             
             # Generate transfer_token igual que en ownership conflict
             transfer_token = create_transfer_token(

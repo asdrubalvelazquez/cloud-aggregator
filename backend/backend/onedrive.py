@@ -442,19 +442,12 @@ async def try_refresh_onedrive_token(provider_account: dict) -> dict:
         error_msg_lower = error_msg.lower()
         
         # Caso 1: invalid_grant (token revocado permanentemente)
+        # SOFT-FAIL: NO marcar is_active=false, solo retornar error para que UI muestre "needs reconnect"
         if "invalid_grant" in error_code_lower or "invalid_grant" in error_msg_lower:
-            logger.warning(f"[ONEDRIVE_REFRESH] invalid_grant detected for account_id={account_id}, marking inactive")
-            
-            try:
-                supabase.table("cloud_provider_accounts").update({
-                    "is_active": False,
-                    "access_token": None,
-                    "token_expiry": None
-                    # NO borrar refresh_token - puede ser útil para debugging
-                }).eq("id", account_id).execute()
-                logger.info(f"[ONEDRIVE_REFRESH] Marked account_id={account_id} as inactive (invalid_grant)")
-            except Exception as db_error:
-                logger.error(f"[ONEDRIVE_REFRESH] Failed to mark inactive account_id={account_id}: {db_error}")
+            logger.warning(
+                f"[ONEDRIVE_REFRESH] invalid_grant detected for account_id={account_id}. "
+                f"Soft-fail: NOT disconnecting automatically, user must reconnect manually."
+            )
             
             return {
                 "success": False,
@@ -463,19 +456,12 @@ async def try_refresh_onedrive_token(provider_account: dict) -> dict:
             }
         
         # Caso 2: interaction_required (requiere consentimiento usuario)
+        # SOFT-FAIL: NO marcar is_active=false, solo retornar error
         if "interaction_required" in error_code_lower or "interaction_required" in error_msg_lower:
-            logger.warning(f"[ONEDRIVE_REFRESH] interaction_required detected for account_id={account_id}, marking inactive")
-            
-            try:
-                supabase.table("cloud_provider_accounts").update({
-                    "is_active": False,
-                    "access_token": None,
-                    "token_expiry": None
-                    # NO borrar refresh_token
-                }).eq("id", account_id).execute()
-                logger.info(f"[ONEDRIVE_REFRESH] Marked account_id={account_id} as inactive (interaction_required)")
-            except Exception as db_error:
-                logger.error(f"[ONEDRIVE_REFRESH] Failed to mark inactive account_id={account_id}: {db_error}")
+            logger.warning(
+                f"[ONEDRIVE_REFRESH] interaction_required detected for account_id={account_id}. "
+                f"Soft-fail: NOT disconnecting automatically, user must reconnect manually."
+            )
             
             return {
                 "success": False,
