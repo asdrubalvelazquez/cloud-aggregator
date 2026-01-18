@@ -4759,16 +4759,39 @@ async def onedrive_callback(request: Request):
             "slot_log_id": slot_id,
         }
         
-        # CRITICAL: Only update refresh_token if a new one is provided
-        # If refresh_token is None, omitting it from upsert preserves the existing value in database
+        # CRITICAL FIX (OAuth): Preservar refresh_token existente cuando Microsoft no envía uno nuevo
+        # Microsoft NO retorna refresh_token en reconnect con prompt=select_account (comportamiento normal)
+        # Debemos leer y preservar el token existente para evitar sobrescritura con NULL
         if refresh_token:
+            # Microsoft envió refresh_token nuevo (raro en reconnect, típico de prompt=consent)
             upsert_payload["refresh_token"] = encrypt_token(refresh_token)
             logging.info(f"[RECONNECT][ONEDRIVE] Got new refresh_token for slot_id={slot_id}")
         else:
-            # Do NOT set refresh_token field - this preserves existing refresh_token in database
-            logging.info(f"[RECONNECT][ONEDRIVE] No new refresh_token, preserving existing for slot_id={slot_id}")
+            # Microsoft NO envió refresh_token (normal en prompt=select_account)
+            # CRITICAL: Leer y preservar el refresh_token existente en DB (PARITY WITH GOOGLE DRIVE)
+            logging.info(f"[RECONNECT][ONEDRIVE] No new refresh_token, loading existing from DB for slot_id={slot_id}")
+            try:
+                existing_account = supabase.table("cloud_provider_accounts").select("refresh_token").eq(
+                    "provider", "onedrive"
+                ).eq("provider_account_id", microsoft_account_id).eq("user_id", user_id).limit(1).execute()
+                
+                if existing_account.data and existing_account.data[0].get("refresh_token"):
+                    # Preservar refresh_token existente (ya encriptado en DB)
+                    upsert_payload["refresh_token"] = existing_account.data[0]["refresh_token"]
+                    logging.info(f"[RECONNECT][ONEDRIVE] Preserved existing refresh_token for slot_id={slot_id}")
+                else:
+                    # NO hay refresh_token existente → requiere prompt=consent
+                    logging.error(
+                        f"[RECONNECT ERROR][ONEDRIVE] No existing refresh_token for slot_id={slot_id}. "
+                        f"User needs to reconnect with mode=consent to obtain new refresh_token."
+                    )
+                    return RedirectResponse(f"{frontend_origin}/app?error=missing_refresh_token&hint=need_consent")
+            except Exception as e:
+                logging.error(f"[RECONNECT ERROR][ONEDRIVE] Failed to load existing refresh_token: {str(e)[:300]}")
+                return RedirectResponse(f"{frontend_origin}/app?error=reconnect_failed&reason=token_load_error")
         
         # Upsert into cloud_provider_accounts
+        # refresh_token siempre incluido en payload (nuevo o preservado) → nunca NULL
         upsert_result = supabase.table("cloud_provider_accounts").upsert(
             upsert_payload,
             on_conflict="user_id,provider,provider_account_id"
@@ -4777,32 +4800,83 @@ async def onedrive_callback(request: Request):
         if upsert_result.data:
             account_id = upsert_result.data[0].get("id", "unknown")
             logging.info(
-                f"[RECONNECT SUCCESS][ONEDRIVE] cloud_provider_accounts UPSERT account_id={account_id}"
+                f"[RECONNECT SUCCESS][ONEDRIVE] cloud_provider_accounts UPSERT account_id={account_id} "
+                f"refresh_token_updated={bool(refresh_token)}"
+            )
+        else:
+            logging.warning(
+                f"[RECONNECT WARNING][ONEDRIVE] cloud_provider_accounts UPSERT returned no data. "
+                f"user_id={user_id} provider_account_id={microsoft_account_id}"
             )
         
-        # Ensure slot is active
+        # CRITICAL FIX: Update cloud_slots_log with fallback strategy to prevent 0 rows affected
+        # Strategy: Try by ID first, then by provider_account_id as fallback
+        slots_updated = 0
+        update_strategy_used = "none"
+        
+        # Strategy 1: Update by slot_log_id (if available from state token)
         if slot_log_id:
-            slot_update = supabase.table("cloud_slots_log").update({
-                "is_active": True,
-                "disconnected_at": None,
-                "provider_email": account_email,
-            }).eq("id", slot_log_id).eq("user_id", user_id).execute()
-        else:
-            slot_update = supabase.table("cloud_slots_log").update({
-                "is_active": True,
-                "disconnected_at": None,
-                "provider_email": account_email,
-            }).eq("user_id", user_id).eq("provider_account_id", microsoft_account_id).execute()
+            logging.info(f"[RECONNECT][ONEDRIVE][UPDATE] Attempting strategy 1: update by slot_log_id={slot_log_id}")
+            try:
+                slot_update = supabase.table("cloud_slots_log").update({
+                    "is_active": True,
+                    "disconnected_at": None,
+                    "provider_email": account_email,
+                }).eq("id", slot_log_id).eq("user_id", user_id).execute()
+                
+                slots_updated = len(slot_update.data) if slot_update.data else 0
+                if slots_updated > 0:
+                    update_strategy_used = "by_slot_id"
+                    logging.info(f"[RECONNECT][ONEDRIVE][UPDATE] Strategy 1 SUCCESS: {slots_updated} rows updated")
+                else:
+                    logging.warning(
+                        f"[RECONNECT][ONEDRIVE][UPDATE] Strategy 1 FAILED: 0 rows (slot_log_id={slot_log_id}, user_id={user_id})"
+                    )
+            except Exception as e:
+                logging.error(f"[RECONNECT][ONEDRIVE][UPDATE] Strategy 1 ERROR: {str(e)[:300]}")
         
-        slots_updated = len(slot_update.data) if slot_update.data else 0
-        
+        # Strategy 2: Fallback - update by user_id + provider_account_id (if strategy 1 failed or slot_log_id was None)
         if slots_updated == 0:
-            logging.error(f"[RECONNECT ERROR][ONEDRIVE] cloud_slots_log UPDATE affected 0 rows")
+            logging.info(
+                f"[RECONNECT][ONEDRIVE][UPDATE] Attempting strategy 2 (fallback): "
+                f"update by user_id={user_id} + provider_account_id={microsoft_account_id}"
+            )
+            try:
+                slot_update = supabase.table("cloud_slots_log").update({
+                    "is_active": True,
+                    "disconnected_at": None,
+                    "provider_email": account_email,
+                }).eq("user_id", user_id).eq("provider", "onedrive").eq("provider_account_id", microsoft_account_id).execute()
+                
+                slots_updated = len(slot_update.data) if slot_update.data else 0
+                if slots_updated > 0:
+                    update_strategy_used = "by_provider_account_id"
+                    logging.info(f"[RECONNECT][ONEDRIVE][UPDATE] Strategy 2 SUCCESS: {slots_updated} rows updated")
+                else:
+                    logging.warning(
+                        f"[RECONNECT][ONEDRIVE][UPDATE] Strategy 2 FAILED: 0 rows "
+                        f"(user_id={user_id}, provider_account_id={microsoft_account_id})"
+                    )
+            except Exception as e:
+                logging.error(f"[RECONNECT][ONEDRIVE][UPDATE] Strategy 2 ERROR: {str(e)[:300]}")
+        
+        # CRITICAL: Return error if all strategies failed
+        if slots_updated == 0:
+            logging.error(
+                f"[RECONNECT ERROR][ONEDRIVE] cloud_slots_log UPDATE FAILED (all strategies exhausted). "
+                f"slot_log_id={slot_log_id}, user_id={user_id}, provider_account_id={microsoft_account_id}, "
+                f"account_email={account_email}. This indicates slot was deleted, ownership mismatch, or database error."
+            )
             return RedirectResponse(f"{frontend_origin}/app?error=reconnect_failed&reason=slot_not_updated")
         
-        validated_slot_id = slot_log_id if slot_log_id else slot_update.data[0].get("id")
+        # Get validated_slot_id for frontend validation
+        validated_slot_id = slot_log_id if update_strategy_used == "by_slot_id" else slot_update.data[0].get("id")
         
-        logging.info(f"[RECONNECT SUCCESS][ONEDRIVE] cloud_slots_log updated. slot_id={validated_slot_id}")
+        logging.info(
+            f"[RECONNECT SUCCESS][ONEDRIVE] cloud_slots_log updated successfully. "
+            f"strategy={update_strategy_used}, slot_id={validated_slot_id}, "
+            f"slots_updated={slots_updated}, is_active=True, disconnected_at=None"
+        )
         
         return RedirectResponse(f"{frontend_origin}/app?reconnect=success&slot_id={validated_slot_id}")
     
