@@ -1272,18 +1272,31 @@ async def google_callback(request: Request):
                     f"email={slot_email_normalized} (verified match)"
                 )
                 
-                # Update slot ownership in cloud_slots_log
+                # CRITICAL FIX: Transfer ownership to new user_id
                 # NOTE: updated_at is handled by database trigger automatically
                 try:
-                    supabase.table("cloud_slots_log").update({
+                    # Step 1: Update cloud_slots_log (no unique constraints, safe)
+                    slot_update_result = supabase.table("cloud_slots_log").update({
                         "user_id": user_id
                     }).eq("id", slot_id).execute()
                     
-                    # Also update cloud_accounts ownership if exists
-                    # CRITICAL: Use provider + provider_account_id (not google_account_id which doesn't exist)
-                    supabase.table("cloud_accounts").update({
-                        "user_id": user_id
-                    }).eq("provider", "google").eq("provider_account_id", reconnect_account_id_normalized).execute()
+                    logging.info(
+                        f"[SECURITY][RECLAIM] Slot ownership updated: "
+                        f"slot_id={slot_id} rows_affected={len(slot_update_result.data) if slot_update_result.data else 0}"
+                    )
+                    
+                    # CRITICAL FIX: Delete old cloud_accounts record to avoid UNIQUE constraint violation
+                    # The subsequent UPSERT (line ~1370) will recreate it with new user_id and fresh tokens
+                    # UNIQUE constraint: (user_id, provider, provider_account_id) prevents UPDATE to new user_id
+                    delete_result = supabase.table("cloud_accounts").delete().eq(
+                        "provider", "google"
+                    ).eq("provider_account_id", reconnect_account_id_normalized).execute()
+                    
+                    logging.info(
+                        f"[SECURITY][RECLAIM] Old account record deleted (will be recreated by UPSERT): "
+                        f"provider_account_id={reconnect_account_id_normalized} "
+                        f"rows_deleted={len(delete_result.data) if delete_result.data else 0}"
+                    )
                     
                     logging.info(
                         f"[SECURITY][RECLAIM] Slot ownership transferred successfully. "
@@ -1291,7 +1304,7 @@ async def google_callback(request: Request):
                     )
                 except Exception as e:
                     logging.error(
-                        f"[SECURITY][RECLAIM] Ownership transfer failed: {type(e).__name__} "
+                        f"[SECURITY][RECLAIM] Ownership transfer failed: {type(e).__name__} - {str(e)[:200]} "
                         f"slot_id={slot_id} user_id={user_id}"
                     )
                     return RedirectResponse(f"{frontend_origin}/app?error=reconnect_failed")
@@ -4715,18 +4728,36 @@ async def onedrive_callback(request: Request):
                 )
                 
                 try:
-                    supabase.table("cloud_slots_log").update({
+                    # CRITICAL FIX: Transfer ownership to new user_id
+                    # Step 1: Update cloud_slots_log (no unique constraints, safe)
+                    slot_update_result = supabase.table("cloud_slots_log").update({
                         "user_id": user_id
                     }).eq("id", slot_id).execute()
                     
-                    supabase.table("cloud_provider_accounts").update({
-                        "user_id": user_id
-                    }).eq("provider", "onedrive").eq("provider_account_id", reconnect_account_id_normalized).execute()
+                    logging.info(
+                        f"[SECURITY][RECLAIM][ONEDRIVE] Slot ownership updated: "
+                        f"slot_id={slot_id} rows_affected={len(slot_update_result.data) if slot_update_result.data else 0}"
+                    )
                     
-                    logging.info(f"[SECURITY][RECLAIM][ONEDRIVE] Ownership transferred. slot_id={slot_id}")
+                    # CRITICAL FIX: Delete old cloud_provider_accounts record to avoid UNIQUE constraint violation
+                    # The subsequent UPSERT (line ~4820) will recreate it with new user_id and fresh tokens
+                    # UNIQUE constraint: (user_id, provider, provider_account_id) prevents UPDATE to new user_id
+                    delete_result = supabase.table("cloud_provider_accounts").delete().eq(
+                        "provider", "onedrive"
+                    ).eq("provider_account_id", reconnect_account_id_normalized).execute()
+                    
+                    logging.info(
+                        f"[SECURITY][RECLAIM][ONEDRIVE] Old account record deleted (will be recreated by UPSERT): "
+                        f"provider_account_id={reconnect_account_id_normalized} "
+                        f"rows_deleted={len(delete_result.data) if delete_result.data else 0}"
+                    )
+                    
+                    logging.info(f"[SECURITY][RECLAIM][ONEDRIVE] Ownership transfer completed. slot_id={slot_id}")
                 except Exception as e:
-                    logging.error(f"[SECURITY][RECLAIM][ONEDRIVE] Transfer failed: {type(e).__name__}")
-                    return RedirectResponse(f"{frontend_origin}/app?error=reconnect_failed")
+                    logging.error(
+                        f"[SECURITY][RECLAIM][ONEDRIVE] Transfer failed: {type(e).__name__} - {str(e)[:200]}"
+                    )
+                    return RedirectResponse(f"{frontend_origin}/app?error=reconnect_failed&reason=reclaim_failed")
                 
                 slot_user_id = user_id
             else:
