@@ -13,6 +13,7 @@ import ProgressBar from "@/components/ProgressBar";
 import AccountStatusBadge from "@/components/AccountStatusBadge";
 import { formatStorage, formatStorageFromGB } from "@/lib/formatStorage";
 import ReconnectSlotsModal from "@/components/ReconnectSlotsModal";
+import OwnershipTransferModal from "@/components/OwnershipTransferModal";
 
 type Account = {
   id: number;
@@ -145,10 +146,24 @@ function DashboardContent({
   const [billingQuota, setBillingQuota] = useState<BillingQuota>(null);
   const [showReconnectModal, setShowReconnectModal] = useState(false);
   const [loadingTimeout, setLoadingTimeout] = useState(false);
+  const [showOwnershipTransferModal, setShowOwnershipTransferModal] = useState(false);
+  const [ownershipTransferToken, setOwnershipTransferToken] = useState<string | null>(null);
   const router = useRouter();
   
   // Use React Query for cloudStatus (single source of truth)
   const { data: cloudStatus, isLoading: isCloudStatusLoading, refetch: refetchCloudStatus } = useCloudStatusQuery();
+
+  // Helper: Clean ownership_conflict URL params and hash
+  function cleanupOwnershipUrl({ removeError = true }) {
+    if (typeof window === "undefined") return;
+    
+    const url = new URL(window.location.href);
+    if (removeError) {
+      url.searchParams.delete("error");
+    }
+    const cleanUrl = url.pathname + (url.searchParams.toString() ? `?${url.searchParams.toString()}` : "");
+    window.history.replaceState({}, "", cleanUrl); // hash automatically removed
+  }
 
   const withTimeout = async <T,>(promise: Promise<T>, ms: number): Promise<T> => {
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -467,6 +482,39 @@ function DashboardContent({
       
       // Execute validation after 500ms delay (allow cookies to settle)
       setTimeout(validateReconnect, 500);
+    } else if (authError === "ownership_conflict") {
+      // OWNERSHIP TRANSFER FLOW: Check for transfer_token in hash
+      if (typeof window !== "undefined") {
+        try {
+          const hashParams = new URLSearchParams(window.location.hash.slice(1));
+          const transferToken = hashParams.get("transfer_token");
+          
+          if (transferToken) {
+            // Show ownership transfer modal
+            setOwnershipTransferToken(transferToken);
+            setShowOwnershipTransferModal(true);
+          } else {
+            // No token found, show generic error toast
+            setToast({
+              message: "❌ Conflicto de propiedad: cuenta ya conectada a otro usuario",
+              type: "error",
+            });
+            cleanupOwnershipUrl({ removeError: true });
+          }
+        } catch (err) {
+          setToast({
+            message: "❌ Error al procesar transferencia de cuenta",
+            type: "error",
+          });
+          cleanupOwnershipUrl({ removeError: true });
+        }
+      }
+      
+      // Load data regardless
+      fetchSummary(abortController.signal);
+      fetchQuota(abortController.signal);
+      fetchBillingQuota(abortController.signal);
+      fetchCloudStatusData();
     } else if (authError) {
       // Handle errors (both Google and OneDrive)
       let errorMessage = `Error de autenticación: ${authError}`;
@@ -582,6 +630,35 @@ function DashboardContent({
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleOwnershipTransferSuccess = async () => {
+    // Close modal
+    setShowOwnershipTransferModal(false);
+    setOwnershipTransferToken(null);
+    
+    // Clean URL (remove error param and hash)
+    cleanupOwnershipUrl({ removeError: true });
+    
+    // Show success toast
+    setToast({
+      message: "✅ Cuenta transferida exitosamente",
+      type: "success",
+    });
+    
+    // Refresh all data (without signal - not part of initial load)
+    fetchSummary();
+    fetchQuota();
+    fetchBillingQuota();
+    await refetchCloudStatus();
+  };
+
+  const handleOwnershipTransferClose = () => {
+    setShowOwnershipTransferModal(false);
+    setOwnershipTransferToken(null);
+    
+    // Clean URL when user cancels
+    cleanupOwnershipUrl({ removeError: true });
   };
 
   const handleLogout = async () => {
@@ -1134,6 +1211,16 @@ function DashboardContent({
         isOpen={showReconnectModal}
         onClose={() => setShowReconnectModal(false)}
       />
+
+      {/* Modal de transferencia de propiedad */}
+      {ownershipTransferToken && (
+        <OwnershipTransferModal
+          isOpen={showOwnershipTransferModal}
+          transferToken={ownershipTransferToken}
+          onClose={handleOwnershipTransferClose}
+          onSuccess={handleOwnershipTransferSuccess}
+        />
+      )}
     </main>
   );
 }
