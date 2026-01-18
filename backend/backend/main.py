@@ -4437,30 +4437,30 @@ async def transfer_cloud_ownership(
             # Proceder con decrement/increment
             
             # 5.1. Decrementar clouds_slots_used del propietario anterior (si tenía slot activo)
-        if slot_log_id:
-            try:
-                old_user_plan = supabase.table("user_plans").select(
-                    "clouds_slots_used"
-                ).eq("user_id", existing_owner_id).single().execute()
-                
-                if old_user_plan.data:
-                    old_slots_used = old_user_plan.data.get("clouds_slots_used", 0)
-                    new_old_slots_used = max(0, old_slots_used - 1)
+            if slot_log_id:
+                try:
+                    old_user_plan = supabase.table("user_plans").select(
+                        "clouds_slots_used"
+                    ).eq("user_id", existing_owner_id).single().execute()
                     
-                    supabase.table("user_plans").update({
-                        "clouds_slots_used": new_old_slots_used,
-                        "updated_at": datetime.now(timezone.utc).isoformat()
-                    }).eq("user_id", existing_owner_id).execute()
-                    
-                    logging.info(
-                        f"[TRANSFER OWNERSHIP] Decremented clouds_slots_used for old owner "
-                        f"{existing_owner_id}: {old_slots_used} → {new_old_slots_used}"
+                    if old_user_plan.data:
+                        old_slots_used = old_user_plan.data.get("clouds_slots_used", 0)
+                        new_old_slots_used = max(0, old_slots_used - 1)
+                        
+                        supabase.table("user_plans").update({
+                            "clouds_slots_used": new_old_slots_used,
+                            "updated_at": datetime.now(timezone.utc).isoformat()
+                        }).eq("user_id", existing_owner_id).execute()
+                        
+                        logging.info(
+                            f"[TRANSFER OWNERSHIP] Decremented clouds_slots_used for old owner "
+                            f"{existing_owner_id}: {old_slots_used} → {new_old_slots_used}"
+                        )
+                except Exception as e:
+                    # No fatal, solo log
+                    logging.warning(
+                        f"[TRANSFER OWNERSHIP] Failed to decrement old owner slots: {str(e)[:300]}"
                     )
-            except Exception as e:
-                # No fatal, solo log
-                logging.warning(
-                    f"[TRANSFER OWNERSHIP] Failed to decrement old owner slots: {str(e)[:300]}"
-                )
             
             # 5.2. Incrementar clouds_slots_used del nuevo propietario
             # Como el transfer ocurre durante OAuth (tokens frescos disponibles),
