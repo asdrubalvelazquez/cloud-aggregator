@@ -4428,6 +4428,41 @@ async def transfer_cloud_ownership(
         )
         
         # ═══════════════════════════════════════════════════════════════════════════
+        # PASO 4.5: Reactivar cuenta para visibilidad en listados
+        # ═══════════════════════════════════════════════════════════════════════════
+        # CRITICAL: Después del transfer, la cuenta debe ser visible en cloud-status
+        # aunque los tokens estén expirados (UI maneja "needs reconnect" state)
+        
+        try:
+            # 4.5.1. Reactivar en cloud_provider_accounts
+            supabase.table("cloud_provider_accounts").update({
+                "is_active": True,
+                "disconnected_at": None
+            }).eq("provider", provider).eq("provider_account_id", provider_account_id).eq("user_id", user_id).execute()
+            
+            logging.info(
+                f"[TRANSFER OWNERSHIP] Account reactivated and visible: "
+                f"provider={provider} account_id={provider_account_id}"
+            )
+            
+            # 4.5.2. Reactivar en cloud_slots_log (si existe)
+            if slot_log_id:
+                supabase.table("cloud_slots_log").update({
+                    "is_active": True,
+                    "disconnected_at": None
+                }).eq("id", slot_log_id).execute()
+                
+                logging.info(
+                    f"[TRANSFER OWNERSHIP] Slot reactivated: slot_log_id={slot_log_id}"
+                )
+        except Exception as e:
+            # No fatal: el transfer ya ocurrió exitosamente en el RPC
+            # Solo loggeamos el error de reactivación
+            logging.warning(
+                f"[TRANSFER OWNERSHIP] Failed to reactivate account visibility: {str(e)[:300]}"
+            )
+        
+        # ═══════════════════════════════════════════════════════════════════════════
         # PASO 5: Ajustar clouds_slots_used (replicar lógica SAFE RECLAIM)
         # ═══════════════════════════════════════════════════════════════════════════
         # IMPORTANTE: Solo ajustar slots si el transfer fue real (no idempotente)
