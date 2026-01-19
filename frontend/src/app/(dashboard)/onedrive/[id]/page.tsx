@@ -459,7 +459,7 @@ export default function OneDriveFilesPage() {
       )}
 
       {/* Account not found or not connected - Reconnect UI */}
-      {!checkingConnection && (!accountStatus || accountStatus.connection_status !== "connected") && (
+      {!checkingConnection && (!accountStatus || accountStatus.connection_status === "disconnected") && (
         <div className="w-full max-w-2xl mt-20">
           <div className="bg-gradient-to-br from-amber-500/20 to-red-500/20 rounded-lg p-8 border-2 border-amber-500/50 shadow-xl">
             <div className="text-center mb-6">
@@ -501,6 +501,27 @@ export default function OneDriveFilesPage() {
 
       {/* Normal UI - Only show if connected */}
       {!checkingConnection && accountStatus && accountStatus.connection_status === "connected" && (
+        <>
+        {/* Banner de reauth si auth_notice */}
+        {accountStatus.auth_notice && accountStatus.auth_notice.type === "reauth_required" && (
+          <div className="w-full max-w-6xl mb-4 rounded-lg border border-yellow-400 bg-yellow-900/80 p-4 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">⚠️</span>
+              <span className="text-yellow-100 font-medium">
+                Re-auth required to access files
+                {accountStatus.auth_notice.reason && (
+                  <span className="ml-2 text-yellow-200 text-sm">({accountStatus.auth_notice.reason})</span>
+                )}
+              </span>
+            </div>
+            <button
+              onClick={() => setShowReconnectModal(true)}
+              className="px-4 py-2 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg font-semibold transition"
+            >
+              Reconnect
+            </button>
+          </div>
+        )}
         <div className="w-full max-w-6xl space-y-6">
           {/* Header */}
           <header className="flex items-center justify-between">

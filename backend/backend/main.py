@@ -3669,82 +3669,34 @@ def classify_account_status(slot: dict, cloud_account: dict) -> dict:
         return {
             "connection_status": "disconnected",
             "reason": "slot_inactive",
-            "can_reconnect": True
+            "can_reconnect": True,
+            "auth_notice": None
         }
-    
-    # Caso 2: Slot activo pero no hay cloud_account
-    if cloud_account is None:
-        return {
-            "connection_status": "needs_reconnect",
-            "reason": "cloud_account_missing",
-            "can_reconnect": True
-        }
-    
-    # Caso 3: cloud_account existe pero marcada is_active=false
-    if not cloud_account.get("is_active"):
-        return {
-            "connection_status": "needs_reconnect",
-            "reason": "account_is_active_false",
-            "can_reconnect": True
-        }
-    
-    # Caso 4: Verificar token_expiry primero
-    token_expiry = cloud_account.get("token_expiry")
-    access_token = cloud_account.get("access_token")
-    refresh_token = cloud_account.get("refresh_token")
-    
-    # Calcular si el token está expirado (con buffer de 60s)
-    token_is_expired = False
-    if token_expiry:
-        try:
-            expiry_dt = datetime.fromisoformat(token_expiry.replace("Z", "+00:00"))
-            buffer = timedelta(seconds=60)
-            token_is_expired = expiry_dt < (datetime.now(timezone.utc) + buffer)
-        except (ValueError, AttributeError):
-            token_is_expired = True  # Invalid date format, assume expired
-    
-    # Caso 4a: Token expirado y NO hay refresh_token (bloqueante)
-    if token_is_expired and not refresh_token:
-        return {
-            "connection_status": "needs_reconnect",
-            "reason": "token_expired_no_refresh",
-            "can_reconnect": True
-        }
-    
-    # Caso 4b: Token expirado pero hay refresh_token disponible
-    # La cuenta NO está "connected" si el token expiró, incluso si hay refresh_token.
-    # /me/cloud-status intentará refresh automático, pero esta función debe reflejar estado real.
-    # Solo "connected" = token válido + no expirado.
-    if token_is_expired and refresh_token:
-        return {
-            "connection_status": "needs_reconnect",
-            "reason": "token_expired_refresh_available",  # Refresh disponible pero token inválido ahora
-            "can_reconnect": True
-        }
-    
-    # Caso 5: Token NO expirado pero falta access_token (sospechoso)
-    if not access_token:
-        return {
-            "connection_status": "needs_reconnect",
-            "reason": "missing_access_token",
-            "can_reconnect": True
-        }
-    
-    # Caso 6: Falta refresh_token - requiere reconexión
-    # Sin refresh_token, no habrá renovación automática cuando expire
-    # MultCloud-style: mostrar needs_reconnect para que usuario reconecte
-    if not refresh_token:
-        return {
-            "connection_status": "needs_reconnect",
-            "reason": "missing_refresh_token",
-            "can_reconnect": True
-        }
-    
-    # Caso 7: Todo OK - token válido, access_token existe, refresh_token existe
+
+    # Siempre "connected" si slot activo
+    connection_status = "connected"
+    reason = None
+    can_reconnect = False
+    auth_notice = None
+
+    # Si no hay cloud_account, no auth_notice (solo connected)
+    if cloud_account is not None:
+        access_token = cloud_account.get("access_token")
+        refresh_token = cloud_account.get("refresh_token")
+
+        # Señales confiables de revocación: falta access_token o refresh_token
+        if not access_token:
+            auth_notice = {"type": "reauth_required", "reason": "missing_access_token"}
+            can_reconnect = True
+        elif not refresh_token:
+            auth_notice = {"type": "reauth_required", "reason": "missing_refresh_token"}
+            can_reconnect = True
+
     return {
-        "connection_status": "connected",
-        "reason": None,
-        "can_reconnect": False
+        "connection_status": connection_status,
+        "reason": reason,
+        "can_reconnect": can_reconnect,
+        "auth_notice": auth_notice
     }
 
 
@@ -3960,6 +3912,7 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
                 "connection_status": status["connection_status"],
                 "reason": status["reason"],
                 "can_reconnect": status["can_reconnect"],
+                "auth_notice": status.get("auth_notice"),
                 "cloud_account_id": cloud_account["id"] if cloud_account else None,
                 "has_refresh_token": bool(cloud_account and cloud_account.get("refresh_token")),
                 "account_is_active": cloud_account["is_active"] if cloud_account else False
