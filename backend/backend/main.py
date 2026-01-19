@@ -5944,11 +5944,81 @@ async def onedrive_callback(request: Request):
                 f"[ONEDRIVE] Idempotent update: provider_account_id={microsoft_account_id} user_id={user_id}"
             )
     
-    # Save to database (only if no duplicate conflict detected)
-    resp = supabase.table("cloud_provider_accounts").upsert(
-        upsert_data,
-        on_conflict="user_id,provider,provider_account_id",
-    ).execute()
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Save to database with UNIQUE constraint violation handling (23505)
+    # ═══════════════════════════════════════════════════════════════════════════
+    try:
+        resp = supabase.table("cloud_provider_accounts").upsert(
+            upsert_data,
+            on_conflict="user_id,provider,provider_account_id",
+        ).execute()
+    except Exception as e:
+        error_str = str(e)
+        
+        # Check if this is a UNIQUE constraint violation (PostgreSQL 23505)
+        if "23505" in error_str or "duplicate key value violates unique constraint" in error_str.lower():
+            logging.warning(
+                f"[ONEDRIVE][UNIQUE_VIOLATION] Constraint 23505 detected for provider_account_id={microsoft_account_id}. "
+                f"Error: {error_str[:300]}"
+            )
+            
+            # Query to find the actual owner
+            try:
+                owner_check = supabase.table("cloud_provider_accounts").select("id, user_id").eq(
+                    "provider", "onedrive"
+                ).eq("provider_account_id", microsoft_account_id).limit(1).execute()
+                
+                if owner_check.data and len(owner_check.data) > 0:
+                    actual_owner_id = owner_check.data[0]["user_id"]
+                    
+                    if actual_owner_id != user_id:
+                        # Different user owns this account
+                        logging.warning(
+                            f"[ONEDRIVE][23505] Ownership conflict: provider_account_id={microsoft_account_id} "
+                            f"actual_owner={actual_owner_id} requesting_user={user_id}"
+                        )
+                        
+                        # Generate transfer_token for ownership transfer
+                        transfer_token = create_transfer_token(
+                            provider="onedrive",
+                            provider_account_id=microsoft_account_id,
+                            requesting_user_id=user_id,
+                            existing_owner_id=actual_owner_id,
+                            account_email=account_email
+                        )
+                        
+                        from urllib.parse import quote
+                        return RedirectResponse(
+                            f"{frontend_origin}/app?error=ownership_conflict#transfer_token={quote(transfer_token)}"
+                        )
+                    else:
+                        # Same user - treat as idempotent reconnect (race condition resolved)
+                        logging.info(
+                            f"[ONEDRIVE][23505] Idempotent race condition resolved: "
+                            f"provider_account_id={microsoft_account_id} user_id={user_id}"
+                        )
+                        return RedirectResponse(f"{frontend_origin}/app?connection=success")
+                else:
+                    # No owner found (should not happen, but handle gracefully)
+                    logging.error(
+                        f"[ONEDRIVE][23505] No owner found after UNIQUE violation for "
+                        f"provider_account_id={microsoft_account_id}"
+                    )
+                    return RedirectResponse(f"{frontend_origin}/app?error=database_inconsistency")
+                    
+            except Exception as owner_err:
+                logging.error(
+                    f"[ONEDRIVE][23505] Failed to query owner after UNIQUE violation: "
+                    f"{type(owner_err).__name__} - {str(owner_err)[:300]}"
+                )
+                return RedirectResponse(f"{frontend_origin}/app?error=database_query_failed")
+        else:
+            # Non-UNIQUE error, log and return generic error
+            logging.error(
+                f"[ONEDRIVE][UPSERT_ERROR] Non-UNIQUE database error: "
+                f"{type(e).__name__} - {error_str[:400]}"
+            )
+            return RedirectResponse(f"{frontend_origin}/app?error=database_error")
 
     # Redirect to frontend dashboard
     return RedirectResponse(f"{frontend_origin}/app?connection=success")
