@@ -5434,6 +5434,47 @@ async def onedrive_callback(request: Request):
                                 f"current_owner={existing_account_user_id} new_owner={user_id}"
                             )
                             
+                            # ═══════════════════════════════════════════════════════════════════════════
+                            # DIAGNOSTIC: Check if target user already has a row with this provider_account_id
+                            # ═══════════════════════════════════════════════════════════════════════════
+                            try:
+                                precheck = supabase.table("cloud_provider_accounts").select(
+                                    "id,user_id,provider,provider_account_id"
+                                ).eq("user_id", user_id).eq("provider", "onedrive").eq(
+                                    "provider_account_id", reconnect_account_id_normalized
+                                ).execute()
+                                
+                                logging.warning(
+                                    f"[DIAG][RECONNECT][BEFORE_RPC] user_id={user_id} "
+                                    f"provider_account_id={reconnect_account_id_normalized} "
+                                    f"rows={len(precheck.data or [])} data={precheck.data}"
+                                )
+                                
+                                # Short-circuit if already exists for same user
+                                if precheck.data:
+                                    logging.warning(
+                                        f"[DIAG][RECONNECT][SHORTCIRCUIT] Row already exists for target user. "
+                                        f"Returning success without RPC. user_id={user_id} "
+                                        f"provider_account_id={reconnect_account_id_normalized}"
+                                    )
+                                    return RedirectResponse(f"{frontend_origin}/app?connection=success")
+                                
+                                # Also check current owner
+                                ownercheck = supabase.table("cloud_provider_accounts").select(
+                                    "id,user_id"
+                                ).eq("provider", "onedrive").eq(
+                                    "provider_account_id", reconnect_account_id_normalized
+                                ).execute()
+                                
+                                logging.warning(
+                                    f"[DIAG][RECONNECT][OWNER] provider_account_id={reconnect_account_id_normalized} "
+                                    f"rows={len(ownercheck.data or [])} data={ownercheck.data}"
+                                )
+                            except Exception as diag_err:
+                                logging.error(
+                                    f"[DIAG][RECONNECT][PRECHECK_ERROR] Failed: {type(diag_err).__name__} - {str(diag_err)[:300]}"
+                                )
+                            
                             # Call RPC to transfer ownership atomically
                             try:
                                 rpc_result = supabase.rpc("transfer_provider_account_ownership", {
@@ -5828,6 +5869,47 @@ async def onedrive_callback(request: Request):
                 # RPC does UPDATE (not INSERT) to avoid 23505
                 # ═══════════════════════════════════════════════════════════════════════════
                 try:
+                    # ═══════════════════════════════════════════════════════════════════════════
+                    # DIAGNOSTIC: Check if target user already has a row with this provider_account_id
+                    # ═══════════════════════════════════════════════════════════════════════════
+                    try:
+                        precheck = supabase.table("cloud_provider_accounts").select(
+                            "id,user_id,provider,provider_account_id"
+                        ).eq("user_id", user_id).eq("provider", "onedrive").eq(
+                            "provider_account_id", microsoft_account_id
+                        ).execute()
+                        
+                        logging.warning(
+                            f"[DIAG][CONNECT][BEFORE_RPC] user_id={user_id} "
+                            f"provider_account_id={microsoft_account_id} "
+                            f"rows={len(precheck.data or [])} data={precheck.data}"
+                        )
+                        
+                        # Short-circuit if already exists for same user
+                        if precheck.data:
+                            logging.warning(
+                                f"[DIAG][CONNECT][SHORTCIRCUIT] Row already exists for target user. "
+                                f"Returning success without RPC. user_id={user_id} "
+                                f"provider_account_id={microsoft_account_id}"
+                            )
+                            return RedirectResponse(f"{frontend_origin}/app?connection=success")
+                        
+                        # Also check current owner
+                        ownercheck = supabase.table("cloud_provider_accounts").select(
+                            "id,user_id"
+                        ).eq("provider", "onedrive").eq(
+                            "provider_account_id", microsoft_account_id
+                        ).execute()
+                        
+                        logging.warning(
+                            f"[DIAG][CONNECT][OWNER] provider_account_id={microsoft_account_id} "
+                            f"rows={len(ownercheck.data or [])} data={ownercheck.data}"
+                        )
+                    except Exception as diag_err:
+                        logging.error(
+                            f"[DIAG][CONNECT][PRECHECK_ERROR] Failed: {type(diag_err).__name__} - {str(diag_err)[:300]}"
+                        )
+                    
                     logging.info(
                         f"[RECLAIM][TRANSFER] Initiating RPC transfer. "
                         f"provider_account_id={microsoft_account_id} "
