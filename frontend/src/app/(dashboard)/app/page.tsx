@@ -99,6 +99,8 @@ type DashboardRouteParams = {
   connectionStatus: string | null;  // OneDrive connection success
   allowedParam: string | null;
   slotId: string | null;
+  provider?: string | null;  // Provider type for ownership guard errors
+  masked_email?: string | null;  // Masked email for ownership guard errors
 };
 
 function SearchParamsBridge({
