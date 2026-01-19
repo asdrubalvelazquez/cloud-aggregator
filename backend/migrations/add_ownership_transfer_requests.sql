@@ -15,12 +15,9 @@ CREATE TABLE IF NOT EXISTS ownership_transfer_requests (
     token_expiry TIMESTAMPTZ,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'used', 'expired')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    expires_at TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '10 minutes')
+    expires_at TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '10 minutes'),
+    CONSTRAINT ownership_transfer_unique_key UNIQUE (provider, provider_account_id, requesting_user_id)
 );
-
--- Unique constraint: Only one row per (provider, account, requesting_user) - updates same row
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ownership_transfer_unique
-ON ownership_transfer_requests(provider, provider_account_id, requesting_user_id);
 
 -- Performance indexes
 CREATE INDEX IF NOT EXISTS idx_ownership_transfer_expires_at
