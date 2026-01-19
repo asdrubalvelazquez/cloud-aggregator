@@ -1578,7 +1578,7 @@ export default function DriveFilesPage() {
               disabled={copying || batchCopying}
             />
 
-            <QuotaBadge refreshKey={quotaRefreshKey} />
+            {false && <QuotaBadge refreshKey={quotaRefreshKey} />}
 
             <Link
               href="/app"
