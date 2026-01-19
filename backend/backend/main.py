@@ -5653,39 +5653,136 @@ async def onedrive_callback(request: Request):
                 
                 reclaimed_slot_id = existing_slot.data[0]["id"]
                 
-                # Transfer ownership in cloud_provider_accounts and cloud_slots_log
-                # NOTE: We'll update instead of upsert to ensure we transfer the existing row
+                # ═══════════════════════════════════════════════════════════════════════════
+                # IDEMPOTENCE GUARD: Check if account already belongs to current user
+                # This prevents 23505 (UNIQUE constraint violation) on subsequent reconnects
+                # ═══════════════════════════════════════════════════════════════════════════
                 try:
-                    # Transfer ownership in cloud_slots_log FIRST
-                    supabase.table("cloud_slots_log").update({
-                        "user_id": user_id,
-                        "is_active": True,
-                        "disconnected_at": None
-                    }).eq("id", reclaimed_slot_id).execute()
+                    idempotence_check = supabase.table("cloud_provider_accounts").select(
+                        "id, user_id"
+                    ).eq("user_id", user_id).eq("provider", "onedrive").eq(
+                        "provider_account_id", microsoft_account_id
+                    ).limit(1).execute()
                     
-                    # Then update cloud_provider_accounts
-                    supabase.table("cloud_provider_accounts").update({
-                        "user_id": user_id,
-                        "is_active": True,
-                        "disconnected_at": None,
-                        "access_token": encrypt_token(access_token),
-                        "token_expiry": expiry_iso,
-                        "slot_log_id": reclaimed_slot_id,
-                        "account_email": account_email,
-                        "refresh_token": encrypt_token(refresh_token) if refresh_token else None
-                    }).eq("provider", "onedrive").eq("provider_account_id", microsoft_account_id).execute()
+                    if idempotence_check.data and len(idempotence_check.data) > 0:
+                        # Account already belongs to current user - idempotent success
+                        logging.info(
+                            f"[RECLAIM][IDEMPOTENT_EXISTS] Account already owned by current user. "
+                            f"user_id={user_id} provider_account_id={microsoft_account_id} "
+                            f"slot_id={reclaimed_slot_id} (avoiding 23505)"
+                        )
+                        
+                        # Update tokens and ensure active state (idempotent refresh)
+                        try:
+                            update_data = {
+                                "is_active": True,
+                                "disconnected_at": None,
+                                "access_token": encrypt_token(access_token),
+                                "token_expiry": expiry_iso,
+                                "account_email": account_email
+                            }
+                            # Only include refresh_token if present (avoid overwriting with None)
+                            if refresh_token:
+                                update_data["refresh_token"] = encrypt_token(refresh_token)
+                            
+                            supabase.table("cloud_provider_accounts").update(
+                                update_data
+                            ).eq("user_id", user_id).eq("provider", "onedrive").eq(
+                                "provider_account_id", microsoft_account_id
+                            ).execute()
+                            
+                            logging.info(
+                                f"[RECLAIM][IDEMPOTENT_EXISTS] Tokens refreshed. "
+                                f"user_id={user_id} provider_account_id={microsoft_account_id}"
+                            )
+                        except Exception as refresh_err:
+                            # Non-fatal: tokens not updated but account exists
+                            logging.warning(
+                                f"[RECLAIM][IDEMPOTENT_EXISTS] Token refresh failed (non-fatal): {type(refresh_err).__name__}"
+                            )
+                        
+                        # CRITICAL: Return immediately to avoid duplicate operations
+                        return RedirectResponse(f"{frontend_origin}/app?connection=success")
+                
+                except Exception as check_err:
+                    # Non-fatal: log and continue with transfer flow
+                    logging.warning(
+                        f"[RECLAIM][IDEMPOTENT_CHECK] Failed (continuing with transfer): {type(check_err).__name__}"
+                    )
+                
+                # ═══════════════════════════════════════════════════════════════════════════
+                # OWNERSHIP TRANSFER: Use RPC for atomic transfer between users
+                # This avoids 23505 by using database transaction
+                # ═══════════════════════════════════════════════════════════════════════════
+                try:
+                    logging.info(
+                        f"[RECLAIM][TRANSFER] Initiating RPC transfer. "
+                        f"provider_account_id={microsoft_account_id} "
+                        f"from_user_id={existing_user_id} to_user_id={user_id}"
+                    )
+                    
+                    rpc_result = supabase.rpc("transfer_provider_account_ownership", {
+                        "p_provider": "onedrive",
+                        "p_provider_account_id": microsoft_account_id,
+                        "p_new_user_id": user_id,
+                        "p_expected_old_user_id": existing_user_id
+                    }).execute()
+                    
+                    if not rpc_result.data:
+                        logging.error(
+                            f"[RECLAIM][FAIL] RPC returned no data. "
+                            f"provider_account_id={microsoft_account_id}"
+                        )
+                        return RedirectResponse(f"{frontend_origin}/app?error=reconnect_failed")
+                    
+                    result = rpc_result.data
+                    
+                    if not result.get("success"):
+                        error_type = result.get("error", "unknown")
+                        logging.error(
+                            f"[RECLAIM][FAIL] RPC transfer failed: error={error_type} "
+                            f"provider_account_id={microsoft_account_id}"
+                        )
+                        return RedirectResponse(f"{frontend_origin}/app?error=reconnect_failed")
+                    
+                    # Transfer successful - update tokens
+                    try:
+                        supabase.table("cloud_provider_accounts").update({
+                            "access_token": encrypt_token(access_token),
+                            "token_expiry": expiry_iso,
+                            "account_email": account_email,
+                            "refresh_token": encrypt_token(refresh_token) if refresh_token else None
+                        }).eq("user_id", user_id).eq("provider", "onedrive").eq(
+                            "provider_account_id", microsoft_account_id
+                        ).execute()
+                    except Exception as token_err:
+                        # Non-fatal: ownership transferred but tokens not updated
+                        logging.warning(
+                            f"[RECLAIM][TRANSFER] Token update after RPC failed (non-fatal): {type(token_err).__name__}"
+                        )
                     
                     logging.info(
-                        f"[SECURITY][RECLAIM][ONEDRIVE][CONNECT] Ownership transferred successfully. "
-                        f"new_user_id={user_id} slot_id={reclaimed_slot_id}"
+                        f"[RECLAIM][TRANSFER] Ownership transferred successfully via RPC. "
+                        f"new_user_id={user_id} slot_id={reclaimed_slot_id} "
+                        f"was_idempotent={result.get('was_idempotent', False)}"
                     )
                     
                     # CRITICAL: Return immediately to avoid creating new slot
                     return RedirectResponse(f"{frontend_origin}/app?connection=success")
                     
                 except Exception as e:
+                    error_str = str(e)
+                    # Extract PostgreSQL error code if present
+                    error_code = "unknown"
+                    if hasattr(e, 'code'):
+                        error_code = str(e.code)
+                    elif "23505" in error_str or "duplicate key" in error_str.lower():
+                        error_code = "23505"
+                    
                     logging.error(
-                        f"[SECURITY][RECLAIM][ONEDRIVE][CONNECT] Ownership transfer failed: {type(e).__name__}"
+                        f"[RECLAIM][FAIL] Ownership transfer exception: "
+                        f"error_type={type(e).__name__} code={error_code} "
+                        f"details={error_str[:500]}"
                     )
                     return RedirectResponse(f"{frontend_origin}/app?error=reconnect_failed")
             else:
