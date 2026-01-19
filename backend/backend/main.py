@@ -3542,6 +3542,103 @@ async def get_user_slots(user_id: str = Depends(verify_supabase_jwt)):
         raise HTTPException(status_code=500, detail=f"Failed to fetch slots: {str(e)}")
 
 
+@app.get("/me/transfer-events")
+async def get_transfer_events(
+    limit: int = 20,
+    unacknowledged_only: bool = False,
+    user_id: str = Depends(verify_supabase_jwt)
+):
+    """
+    Get transfer events for the authenticated user (accounts they lost).
+    
+    Transfer events notify users when their cloud accounts were transferred to other users.
+    
+    Query params:
+        - limit: max number of events to return (default 20, max 50)
+        - unacknowledged_only: only return events user hasn't dismissed (default false)
+    
+    Returns:
+        {
+            "events": [
+                {
+                    "id": "uuid",
+                    "provider": "onedrive",
+                    "account_email": "user@outlook.com", 
+                    "event_type": "ownership_transferred",
+                    "created_at": "2026-01-18T12:00:00Z",
+                    "acknowledged_at": null
+                }
+            ]
+        }
+    
+    Security:
+        - RLS ensures users only see their own from_user_id events
+        - to_user_id is NOT exposed (privacy)
+        - Only returns provider and account_email (no sensitive data)
+    """
+    try:
+        # Validar límite
+        limit = min(max(1, limit), 50)
+        
+        # Construir query base
+        query = supabase.table("cloud_transfer_events").select(
+            "id,provider,account_email,event_type,created_at,acknowledged_at"
+        ).eq("from_user_id", user_id).order("created_at", desc=True).limit(limit)
+        
+        # Filtrar solo no-acknowledged si se solicita
+        if unacknowledged_only:
+            query = query.is_("acknowledged_at", "null")
+        
+        result = query.execute()
+        
+        return {"events": result.data or []}
+    except Exception as e:
+        logging.error(f"[TRANSFER EVENTS FETCH ERROR] user_id={user_id} error={str(e)[:300]}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch transfer events: {str(e)[:200]}"
+        )
+
+
+@app.patch("/me/transfer-events/{event_id}/acknowledge")
+async def acknowledge_transfer_event(
+    event_id: str,
+    user_id: str = Depends(verify_supabase_jwt)
+):
+    """
+    Mark a transfer event as acknowledged (dismissed by user).
+    
+    Path params:
+        - event_id: UUID of the event to acknowledge
+    
+    Returns:
+        {"success": true}
+    
+    Security:
+        - RLS ensures users can only update their own events (from_user_id = auth.uid())
+    """
+    try:
+        result = supabase.table("cloud_transfer_events").update({
+            "acknowledged_at": datetime.now(timezone.utc).isoformat()
+        }).eq("id", event_id).eq("from_user_id", user_id).execute()
+        
+        if not result.data or len(result.data) == 0:
+            raise HTTPException(
+                status_code=404,
+                detail="Event not found or not owned by current user"
+            )
+        
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[TRANSFER EVENT ACK ERROR] event_id={event_id} user_id={user_id} error={str(e)[:300]}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to acknowledge event: {str(e)[:200]}"
+        )
+
+
 def classify_account_status(slot: dict, cloud_account: dict) -> dict:
     """
     Determina el estado de conexión de una cuenta basado en slot y cloud_account.
@@ -4327,6 +4424,7 @@ async def transfer_cloud_ownership(
         # ═══════════════════════════════════════════════════════════════════════════
         # Evita doble conteo de slots si el endpoint se reintenta (refresh, retry, etc.)
         # Si el owner actual ya es el nuevo owner, significa que se transfirió previamente
+        was_idempotent = False  # Flag para evitar doble aplicación de tokens
         try:
             pre_check_result = supabase.table("cloud_provider_accounts").select(
                 "user_id, is_active"
@@ -4390,6 +4488,7 @@ async def transfer_cloud_ownership(
                             f"[TRANSFER OWNERSHIP] Idempotent token application failed: {str(idempotent_err)[:300]}"
                         )
                     
+                    was_idempotent = True  # Mark as idempotent to skip PASO 4.5
                     return {
                         "success": True,
                         "account_id": "already_transferred",
@@ -4574,6 +4673,10 @@ async def transfer_cloud_ownership(
                 logging.error(
                     f"[TRANSFER OWNERSHIP] Fallback reactivation failed: {str(fallback_err)[:300]}"
                 )
+        else:
+            logging.info(
+                f"[TRANSFER OWNERSHIP] Skipping PASO 4.5: tokens already applied in idempotent path"
+            )
         
         # ═══════════════════════════════════════════════════════════════════════════
         # PASO 5: Ajustar clouds_slots_used (replicar lógica SAFE RECLAIM)
@@ -4648,6 +4751,50 @@ async def transfer_cloud_ownership(
             f"[TRANSFER OWNERSHIP] Transfer completed successfully: "
             f"account_id={account_id} from_user={existing_owner_id} to_user={user_id}"
         )
+        
+        # ═══════════════════════════════════════════════════════════════════════════
+        # PASO 6: Registrar evento de transferencia para notificar al propietario anterior
+        # ═══════════════════════════════════════════════════════════════════════════
+        # IMPORTANTE: Solo insertar si fue un transfer real (no idempotente)
+        # El UNIQUE constraint previene duplicados si se reintenta
+        
+        if pre_owner_user_id and pre_owner_user_id != user_id:
+            try:
+                # Insertar evento para el from_user (propietario anterior)
+                # El to_user NO se expone en queries RLS del from_user (privacidad)
+                supabase.table("cloud_transfer_events").insert({
+                    "provider": provider,
+                    "provider_account_id": provider_account_id,
+                    "account_email": account_email if account_email else None,
+                    "from_user_id": existing_owner_id,
+                    "to_user_id": user_id,
+                    "event_type": "ownership_transferred",
+                    "display_message": None  # Frontend generará el mensaje
+                }).execute()
+                
+                logging.info(
+                    f"[TRANSFER OWNERSHIP] Transfer event created for notification: "
+                    f"from_user={existing_owner_id} provider={provider}"
+                )
+            except Exception as event_err:
+                # No fatal: el transfer ya ocurrió exitosamente
+                # Si falla por UNIQUE constraint, significa que ya existe el evento (idempotente)
+                error_str = str(event_err).lower()
+                if "unique" in error_str or "23505" in error_str:
+                    logging.info(
+                        f"[TRANSFER OWNERSHIP] Transfer event already exists (idempotent): "
+                        f"{str(event_err)[:200]}"
+                    )
+                else:
+                    logging.warning(
+                        f"[TRANSFER OWNERSHIP] Failed to create transfer event (non-fatal): "
+                        f"{str(event_err)[:300]}"
+                    )
+        else:
+            logging.info(
+                f"[TRANSFER OWNERSHIP] Skipping event creation: "
+                f"transfer was idempotent or no prior owner"
+            )
         
         return {
             "success": True,

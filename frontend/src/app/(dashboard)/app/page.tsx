@@ -148,6 +148,8 @@ function DashboardContent({
   const [loadingTimeout, setLoadingTimeout] = useState(false);
   const [showOwnershipTransferModal, setShowOwnershipTransferModal] = useState(false);
   const [ownershipTransferToken, setOwnershipTransferToken] = useState<string | null>(null);
+  const [transferEvents, setTransferEvents] = useState<any[]>([]);
+  const [showTransferNotification, setShowTransferNotification] = useState(false);
   const router = useRouter();
   
   // Use React Query for cloudStatus (single source of truth)
@@ -552,6 +554,53 @@ function DashboardContent({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeParamsKey]);
 
+  // OWNERSHIP TRANSFER NOTIFICATIONS: Check for unacknowledged transfer events
+  useEffect(() => {
+    const fetchTransferEvents = async () => {
+      try {
+        const res = await authenticatedFetch("/me/transfer-events?unacknowledged_only=true");
+        if (res.ok) {
+          const data = await res.json();
+          const events = data.events || [];
+          
+          if (events.length > 0) {
+            setTransferEvents(events);
+            setShowTransferNotification(true);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch transfer events:", err);
+        // Silent fail - notification is optional
+      }
+    };
+    
+    // Only fetch if user is authenticated (userId is set)
+    if (userId) {
+      fetchTransferEvents();
+    }
+  }, [userId]);
+
+  const handleAcknowledgeTransferEvents = async () => {
+    try {
+      // Acknowledge all events in batch
+      const promises = transferEvents.map(event =>
+        authenticatedFetch(`/me/transfer-events/${event.id}/acknowledge`, {
+          method: "PATCH"
+        })
+      );
+      
+      await Promise.all(promises);
+      
+      // Hide notification
+      setShowTransferNotification(false);
+      setTransferEvents([]);
+    } catch (err) {
+      console.error("Failed to acknowledge transfer events:", err);
+      // Still hide notification on error (best effort)
+      setShowTransferNotification(false);
+    }
+  };
+
   const handleConnectGoogle = async () => {
     if (!userId) {
       setHardError("No hay sesión de usuario activa. Recarga la página.");
@@ -730,6 +779,41 @@ function DashboardContent({
           type={toast.type}
           onClose={() => setToast(null)}
         />
+      )}
+
+      {/* Transfer Events Notification */}
+      {showTransferNotification && transferEvents.length > 0 && (
+        <div className="fixed top-6 right-6 z-50 bg-gradient-to-br from-amber-500 to-orange-600 text-white p-4 rounded-lg shadow-2xl max-w-md border border-amber-400/50 animate-slide-in-right">
+          <div className="flex items-start gap-3">
+            <div className="text-2xl">⚠️</div>
+            <div className="flex-1">
+              <h3 className="font-bold text-lg mb-1">Cuenta Transferida</h3>
+              {transferEvents.length === 1 ? (
+                <p className="text-sm leading-relaxed">
+                  Tu cuenta <strong>{transferEvents[0].account_email}</strong> de {transferEvents[0].provider === 'onedrive' ? 'OneDrive' : 'Google Drive'} fue transferida a otro usuario de Cloud Aggregator. 
+                  Ya no tenés acceso a esta cuenta en tu panel.
+                </p>
+              ) : (
+                <div className="text-sm leading-relaxed">
+                  <p className="mb-2">Las siguientes cuentas fueron transferidas a otros usuarios:</p>
+                  <ul className="list-disc list-inside space-y-1 text-xs">
+                    {transferEvents.map((event, idx) => (
+                      <li key={idx}>
+                        {event.account_email} ({event.provider === 'onedrive' ? 'OneDrive' : 'Google Drive'})
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <button
+                onClick={handleAcknowledgeTransferEvents}
+                className="mt-3 w-full bg-white text-amber-700 font-semibold py-2 rounded-md hover:bg-amber-50 transition text-sm"
+              >
+                Entendido
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       <div className="w-full max-w-6xl space-y-6">
