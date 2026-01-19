@@ -5654,55 +5654,66 @@ async def onedrive_callback(request: Request):
                 reclaimed_slot_id = existing_slot.data[0]["id"]
                 
                 # ═══════════════════════════════════════════════════════════════════════════
-                # IDEMPOTENCE GUARD: Check if account already belongs to current user
-                # This prevents 23505 (UNIQUE constraint violation) on subsequent reconnects
+                # IDEMPOTENCE GUARD: Check if account already exists (by provider + provider_account_id)
+                # This prevents 23505 (UNIQUE constraint violation) by handling existing rows
                 # ═══════════════════════════════════════════════════════════════════════════
                 try:
                     idempotence_check = supabase.table("cloud_provider_accounts").select(
                         "id, user_id"
-                    ).eq("user_id", user_id).eq("provider", "onedrive").eq(
+                    ).eq("provider", "onedrive").eq(
                         "provider_account_id", microsoft_account_id
                     ).limit(1).execute()
                     
                     if idempotence_check.data and len(idempotence_check.data) > 0:
-                        # Account already belongs to current user - idempotent success
-                        logging.info(
-                            f"[RECLAIM][IDEMPOTENT_EXISTS] Account already owned by current user. "
-                            f"user_id={user_id} provider_account_id={microsoft_account_id} "
-                            f"slot_id={reclaimed_slot_id} (avoiding 23505)"
-                        )
+                        existing_row_user_id = idempotence_check.data[0]["user_id"]
                         
-                        # Update tokens and ensure active state (idempotent refresh)
-                        try:
-                            update_data = {
-                                "is_active": True,
-                                "disconnected_at": None,
-                                "access_token": encrypt_token(access_token),
-                                "token_expiry": expiry_iso,
-                                "account_email": account_email
-                            }
-                            # Only include refresh_token if present (avoid overwriting with None)
-                            if refresh_token:
-                                update_data["refresh_token"] = encrypt_token(refresh_token)
-                            
-                            supabase.table("cloud_provider_accounts").update(
-                                update_data
-                            ).eq("user_id", user_id).eq("provider", "onedrive").eq(
-                                "provider_account_id", microsoft_account_id
-                            ).execute()
-                            
+                        if existing_row_user_id == user_id:
+                            # Account already belongs to current user - idempotent success
                             logging.info(
-                                f"[RECLAIM][IDEMPOTENT_EXISTS] Tokens refreshed. "
-                                f"user_id={user_id} provider_account_id={microsoft_account_id}"
+                                f"[RECLAIM][IDEMPOTENT] Account already owned by current user. "
+                                f"user_id={user_id} provider_account_id={microsoft_account_id} "
+                                f"slot_id={reclaimed_slot_id} (avoiding 23505)"
                             )
-                        except Exception as refresh_err:
-                            # Non-fatal: tokens not updated but account exists
-                            logging.warning(
-                                f"[RECLAIM][IDEMPOTENT_EXISTS] Token refresh failed (non-fatal): {type(refresh_err).__name__}"
+                            
+                            # Update tokens and ensure active state (idempotent refresh)
+                            try:
+                                update_data = {
+                                    "is_active": True,
+                                    "disconnected_at": None,
+                                    "access_token": encrypt_token(access_token),
+                                    "token_expiry": expiry_iso,
+                                    "account_email": account_email
+                                }
+                                # Only include refresh_token if present (avoid overwriting with None)
+                                if refresh_token:
+                                    update_data["refresh_token"] = encrypt_token(refresh_token)
+                                
+                                supabase.table("cloud_provider_accounts").update(
+                                    update_data
+                                ).eq("provider", "onedrive").eq(
+                                    "provider_account_id", microsoft_account_id
+                                ).execute()
+                                
+                                logging.info(
+                                    f"[RECLAIM][IDEMPOTENT] Tokens refreshed. "
+                                    f"user_id={user_id} provider_account_id={microsoft_account_id}"
+                                )
+                            except Exception as refresh_err:
+                                # Non-fatal: tokens not updated but account exists
+                                logging.warning(
+                                    f"[RECLAIM][IDEMPOTENT] Token refresh failed (non-fatal): {type(refresh_err).__name__}"
+                                )
+                            
+                            # CRITICAL: Return immediately to avoid duplicate operations
+                            return RedirectResponse(f"{frontend_origin}/app?connection=success")
+                        else:
+                            # Account belongs to different user - will transfer via RPC (UPDATE, not INSERT)
+                            logging.info(
+                                f"[RECLAIM][TRANSFER_NEEDED] Account owned by different user. "
+                                f"provider_account_id={microsoft_account_id} "
+                                f"current_owner={existing_row_user_id} new_owner={user_id}"
                             )
-                        
-                        # CRITICAL: Return immediately to avoid duplicate operations
-                        return RedirectResponse(f"{frontend_origin}/app?connection=success")
+                            # Continue to RPC transfer below (will UPDATE existing row)
                 
                 except Exception as check_err:
                     # Non-fatal: log and continue with transfer flow
@@ -5712,7 +5723,7 @@ async def onedrive_callback(request: Request):
                 
                 # ═══════════════════════════════════════════════════════════════════════════
                 # OWNERSHIP TRANSFER: Use RPC for atomic transfer between users
-                # This avoids 23505 by using database transaction
+                # RPC does UPDATE (not INSERT) to avoid 23505
                 # ═══════════════════════════════════════════════════════════════════════════
                 try:
                     logging.info(
