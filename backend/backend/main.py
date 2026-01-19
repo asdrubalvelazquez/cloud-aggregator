@@ -5553,8 +5553,6 @@ async def onedrive_callback(request: Request):
                 
                 # Save encrypted tokens temporarily for ownership transfer (10 min TTL)
                 try:
-                    from backend.crypto import encrypt_token
-                    
                     # Validate tokens before encryption
                     if not access_token:
                         logging.warning(
@@ -5651,8 +5649,6 @@ async def onedrive_callback(request: Request):
             
             # Save encrypted tokens temporarily for ownership transfer (10 min TTL)
             try:
-                from backend.crypto import encrypt_token
-                
                 # Validate tokens before encryption
                 if not access_token:
                     logging.warning(
