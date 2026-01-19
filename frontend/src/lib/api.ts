@@ -80,6 +80,10 @@ export type CloudAccountStatus = {
   cloud_account_id: number | null;
   has_refresh_token: boolean;
   account_is_active: boolean;
+  auth_notice?: {
+    type: string;
+    reason?: string;
+  } | null;
 };
 
 export type CloudStatusResponse = {
