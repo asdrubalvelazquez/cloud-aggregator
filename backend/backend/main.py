@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any, Callable
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import httpx
 import stripe
@@ -5285,6 +5286,68 @@ async def onedrive_callback(request: Request):
     # Prevent orphan cloud_provider_accounts without user_id
     if not user_id:
         return RedirectResponse(f"{frontend_origin}/app?error=missing_user_id")
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # GLOBAL OWNERSHIP GUARD: Block attempts to link OneDrive accounts already owned by another user
+    # Prevents automatic transfers - enforces single-owner policy
+    # ═══════════════════════════════════════════════════════════════════════════
+    if microsoft_account_id:
+        try:
+            existing_account = supabase.table("cloud_provider_accounts").select(
+                "id, user_id, provider_email, is_active"
+            ).eq("provider", "onedrive").eq(
+                "provider_account_id", microsoft_account_id
+            ).limit(1).execute()
+            
+            if existing_account.data and len(existing_account.data) > 0:
+                existing_user_id = existing_account.data[0]["user_id"]
+                existing_email = existing_account.data[0].get("provider_email", "")
+                
+                # Block if account belongs to another user
+                if existing_user_id != user_id:
+                    # Mask email for privacy: show first + last char and domain
+                    masked_email = ""
+                    if existing_email and "@" in existing_email:
+                        local, domain = existing_email.split("@", 1)
+                        if len(local) > 2:
+                            masked_email = f"{local[0]}***{local[-1]}@{domain}"
+                        else:
+                            masked_email = f"{local[0]}***@{domain}"
+                    
+                    # Hash for secure logging
+                    existing_user_hash = hashlib.sha256(existing_user_id.encode()).hexdigest()[:8]
+                    current_user_hash = hashlib.sha256(user_id.encode()).hexdigest()[:8]
+                    account_hash = hashlib.sha256(microsoft_account_id.encode()).hexdigest()[:8]
+                    
+                    logging.warning(
+                        f"[ONEDRIVE][OWNERSHIP_BLOCKED] Account already linked to another user. "
+                        f"account_hash={account_hash} current_user_hash={current_user_hash} "
+                        f"owner_user_hash={existing_user_hash} mode={mode}"
+                    )
+                    
+                    # Redirect with error and metadata (no PII in URL)
+                    safe_masked_email = quote(masked_email) if masked_email else "unknown"
+                    redirect_url = (
+                        f"{frontend_origin}/app?error=account_already_linked"
+                        f"&provider=onedrive"
+                        f"&masked_email={safe_masked_email}"
+                    )
+                    return RedirectResponse(redirect_url)
+                
+                # Same user: allow reconnect/token refresh (idempotent flow)
+                current_user_hash = hashlib.sha256(user_id.encode()).hexdigest()[:8]
+                account_hash = hashlib.sha256(microsoft_account_id.encode()).hexdigest()[:8]
+                logging.info(
+                    f"[ONEDRIVE][OWNERSHIP_GUARD] Account already owned by current user. "
+                    f"user_hash={current_user_hash} account_hash={account_hash} "
+                    f"mode={mode} (allowing idempotent flow)"
+                )
+        except Exception as guard_err:
+            # Non-fatal: log and continue to preserve existing functionality
+            logging.error(
+                f"[ONEDRIVE][OWNERSHIP_GUARD] Exception during guard check: "
+                f"{type(guard_err).__name__} - {str(guard_err)[:300]}"
+            )
     
     # Handle reconnect mode
     if mode == "reconnect":

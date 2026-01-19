@@ -517,6 +517,21 @@ function DashboardContent({
       fetchQuota(abortController.signal);
       fetchBillingQuota(abortController.signal);
       fetchCloudStatusData();
+    } else if (authError === "account_already_linked") {
+      // OWNERSHIP BLOCKED: OneDrive account already linked to another Cloud Aggregator user
+      const maskedEmail = routeParams.masked_email || "desconocida";
+      
+      setToast({
+        message: `❌ Esta cuenta de OneDrive (${maskedEmail}) ya está vinculada a otro usuario de Cloud Aggregator. Si necesitas recuperarla, contacta soporte.`,
+        type: "error",
+      });
+      
+      // Clean URL and load dashboard data
+      window.history.replaceState({}, "", window.location.pathname);
+      fetchSummary(abortController.signal);
+      fetchQuota(abortController.signal);
+      fetchBillingQuota(abortController.signal);
+      fetchCloudStatusData();
     } else if (authError) {
       // Handle errors (both Google and OneDrive)
       let errorMessage = `Error de autenticación: ${authError}`;
