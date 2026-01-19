@@ -1545,13 +1545,23 @@ export default function DriveFilesPage() {
       <div className="w-full max-w-6xl space-y-6">
         {/* Header */}
         <header className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Link
-              href="/app"
-              className="text-emerald-400 hover:text-emerald-300 transition font-medium"
-            >
-              Dashboard
-            </Link>
+          <div>
+            <h1 className="text-2xl md:text-3xl font-bold">Archivos de Google Drive</h1>
+
+            <div className="text-sm text-slate-400 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+              {copyOptions ? (
+                <span>{`Cuenta: ${copyOptions.source_account.email}`}</span>
+              ) : (
+                <span>Cargando...</span>
+              )}
+
+              {pickerFiles.length > 0 && (
+                <span className="text-xs text-slate-400">Picker: {pickerFiles.length}</span>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
             {breadcrumb.length > 1 && (
               <button
                 type="button"
@@ -1561,27 +1571,21 @@ export default function DriveFilesPage() {
                 ← Atrás
               </button>
             )}
-            <h1 className="text-2xl md:text-3xl font-bold">
-              Archivos de Google Drive
-            </h1>
-          </div>
-          <div className="flex items-center gap-4">
+
             <GooglePickerButton
               accountId={parseInt(accountId)}
               onFilesPicked={(files) => setPickerFiles(files)}
               disabled={copying || batchCopying}
             />
-            {pickerFiles.length > 0 && (
-              <span className="text-xs text-slate-400">
-                Picker: {pickerFiles.length}
-              </span>
-            )}
+
             <QuotaBadge refreshKey={quotaRefreshKey} />
-            {copyOptions && (
-              <div className="text-sm text-slate-400">
-                {copyOptions.source_account.email}
-              </div>
-            )}
+
+            <Link
+              href="/app"
+              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium transition"
+            >
+              ← Volver al Dashboard
+            </Link>
           </div>
         </header>
 
