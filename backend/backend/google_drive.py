@@ -69,22 +69,23 @@ async def try_refresh_google_token(cloud_account: dict) -> dict:
                     f"(status={token_res.status_code})"
                 )
                 
-                # Handle invalid_grant as permanent revocation
+                # SOFT-FAIL: MultCloud-style - NO mark is_active=False, but clear refresh_token
+                # to prevent retry loops. Without refresh_token, classify_account_status() will
+                # detect needs_reconnect, and future auto-refresh attempts will be skipped.
                 if error_type == "invalid_grant":
-                    logger.error(
+                    logger.warning(
                         f"[SILENT_REFRESH] account_id={account_id} REVOKED (invalid_grant). "
-                        f"Marking is_active=False and clearing tokens to prevent retry loops."
+                        f"Clearing tokens to prevent retry loops, user must reconnect manually."
                     )
                     try:
-                        # Mark account as inactive and clear tokens to prevent loops
+                        # Clear tokens but keep is_active=true (soft-fail state)
                         supabase.table("cloud_accounts").update({
-                            "is_active": False,
-                            "access_token": None,
                             "refresh_token": None,
+                            "access_token": None,
                             "token_expiry": None
                         }).eq("id", account_id).execute()
                     except Exception as db_err:
-                        logger.error(f"[SILENT_REFRESH] Failed to mark account inactive: {db_err}")
+                        logger.error(f"[SILENT_REFRESH] Failed to clear tokens: {db_err}")
                 
                 return {"success": False, "error_type": error_type, "updated_account": None}
 
