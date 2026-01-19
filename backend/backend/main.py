@@ -5908,7 +5908,43 @@ async def onedrive_callback(request: Request):
         # Do NOT set refresh_token field - this preserves existing refresh_token in database
         logging.warning(f"[ONEDRIVE][CONNECT] No refresh_token in response, preserving existing for slot_id={slot_id}")
 
-    # Save to database
+    # ═══════════════════════════════════════════════════════════════════════════
+    # DUPLICATE GUARD: Prevent creating duplicate rows in cloud_provider_accounts
+    # ═══════════════════════════════════════════════════════════════════════════
+    existing_check = supabase.table("cloud_provider_accounts").select("id, user_id").eq(
+        "provider", "onedrive"
+    ).eq("provider_account_id", microsoft_account_id).limit(1).execute()
+    
+    if existing_check.data and len(existing_check.data) > 0:
+        existing_owner_id = existing_check.data[0]["user_id"]
+        
+        if existing_owner_id != user_id:
+            # Account already belongs to another user
+            logging.warning(
+                f"[ONEDRIVE] Duplicate prevention hit: provider_account_id={microsoft_account_id} "
+                f"owner={existing_owner_id} current={user_id}"
+            )
+            
+            # Generate transfer_token for ownership transfer flow
+            transfer_token = create_transfer_token(
+                provider="onedrive",
+                provider_account_id=microsoft_account_id,
+                requesting_user_id=user_id,
+                existing_owner_id=existing_owner_id,
+                account_email=account_email
+            )
+            
+            from urllib.parse import quote
+            return RedirectResponse(
+                f"{frontend_origin}/app?error=ownership_conflict#transfer_token={quote(transfer_token)}"
+            )
+        else:
+            # Same user: idempotent update (normal reconnection)
+            logging.info(
+                f"[ONEDRIVE] Idempotent update: provider_account_id={microsoft_account_id} user_id={user_id}"
+            )
+    
+    # Save to database (only if no duplicate conflict detected)
     resp = supabase.table("cloud_provider_accounts").upsert(
         upsert_data,
         on_conflict="user_id,provider,provider_account_id",
