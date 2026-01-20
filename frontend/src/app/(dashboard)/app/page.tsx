@@ -14,6 +14,7 @@ import AccountStatusBadge from "@/components/AccountStatusBadge";
 import { formatStorage, formatStorageFromGB } from "@/lib/formatStorage";
 import ReconnectSlotsModal from "@/components/ReconnectSlotsModal";
 import OwnershipTransferModal from "@/components/OwnershipTransferModal";
+import DashboardOverview from "@/components/dashboard/DashboardOverview";
 
 type Account = {
   id: number;
@@ -124,6 +125,9 @@ function SearchParamsBridge({
 
   return null;
 }
+
+// Feature flag: cambiar a true para habilitar DashboardOverview
+const ENABLE_OVERVIEW = false;
 
 function DashboardContent({
   routeParams,
@@ -834,42 +838,57 @@ function DashboardContent({
       )}
 
       <div className="w-full max-w-6xl space-y-6">
-        <div className="flex items-center justify-end gap-3">
-          <button
-            onClick={() => setShowReconnectModal(true)}
-            className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-700"
-          >
-            📊 Tus Nubes
-          </button>
-          
-          <button
-            onClick={handleConnectGoogle}
-            className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-600"
-            title="Conectar una nueva cuenta de Google Drive"
-          >
-            Conectar Google Drive
-          </button>
-          
-          <button
-            onClick={handleConnectOneDrive}
-            className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-blue-500 hover:bg-blue-600"
-            title="Conectar una nueva cuenta de OneDrive"
-          >
-            Conectar OneDrive
-          </button>
-          
-          <button
-            onClick={handleLogout}
-            className="rounded-lg bg-slate-700 hover:bg-slate-600 transition px-4 py-2 text-sm font-semibold"
-          >
-            Salir
-          </button>
-        </div>
+        {ENABLE_OVERVIEW ? (
+          // Nueva vista: DashboardOverview
+          <DashboardOverview
+            cloudStatus={cloudStatus}
+            cloudStorage={cloudStorage}
+            isLoading={loading || isCloudStatusLoading}
+            error={hardError}
+            onConnectGoogle={handleConnectGoogle}
+            onConnectOneDrive={handleConnectOneDrive}
+            onOpenSlotsModal={() => setShowReconnectModal(true)}
+            userEmail={userEmail}
+          />
+        ) : (
+          // Vista existente: tabla de cuentas
+          <>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowReconnectModal(true)}
+                className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-700"
+              >
+                📊 Tus Nubes
+              </button>
+              
+              <button
+                onClick={handleConnectGoogle}
+                className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-600"
+                title="Conectar una nueva cuenta de Google Drive"
+              >
+                Conectar Google Drive
+              </button>
+              
+              <button
+                onClick={handleConnectOneDrive}
+                className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-blue-500 hover:bg-blue-600"
+                title="Conectar una nueva cuenta de OneDrive"
+              >
+                Conectar OneDrive
+              </button>
+              
+              <button
+                onClick={handleLogout}
+                className="rounded-lg bg-slate-700 hover:bg-slate-600 transition px-4 py-2 text-sm font-semibold"
+              >
+                Salir
+              </button>
+            </div>
 
-        {/* Loading state: solo bloquear UI si cloudStatus no existe o si loading summary sin data */}
-        {(loading || softTimeout) && !cloudStatus && (
-          <DashboardLoadingState />
-        )}
+            {/* Loading state: solo bloquear UI si cloudStatus no existe o si loading summary sin data */}
+            {(loading || softTimeout) && !cloudStatus && (
+              <DashboardLoadingState />
+            )}
         
         {/* Fallback UX: Si cloudStatus tarda > 8s, mostrar botón reintentar */}
         {isCloudStatusLoading && loadingTimeout && (
