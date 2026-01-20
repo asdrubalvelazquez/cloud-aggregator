@@ -1,12 +1,12 @@
 import { redirect } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
+import { createServerClient } from "@supabase/auth-helpers-nextjs";
 import type { User } from "@supabase/supabase-js";
 
 export async function adminGuard(): Promise<User> {
   const cookieStore = await cookies();
   
-  const supabase = createClient(
+  const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
