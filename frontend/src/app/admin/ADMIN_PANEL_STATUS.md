@@ -2,6 +2,8 @@
 
 **Estado actual:** UI + Guards + Actions MOCK
 
+Production route: /admin (and /admin/*)
+
 ## Implementado
 
 - Ruta protegida `/admin` con auth server-side (ADMIN_EMAILS)
