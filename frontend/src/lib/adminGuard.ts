@@ -28,11 +28,19 @@ export async function adminGuard(): Promise<User> {
 
   const adminEmails = process.env.ADMIN_EMAILS || "";
   const adminList = adminEmails
-    .split(",")
+    .split(/[,\s]+/)
     .map((e) => e.trim().toLowerCase())
-    .filter((e) => e.length > 0);
+    .filter(Boolean);
 
-  if (!adminList.includes(session.user.email.toLowerCase())) {
+  const isAuthorized = adminList.includes(session.user.email.toLowerCase());
+
+  if (!isAuthorized) {
+    const debugMode = process.env.ADMIN_DEBUG === "1";
+    if (debugMode) {
+      const email = encodeURIComponent(session.user.email);
+      const count = adminList.length;
+      redirect(`/admin/denied?email=${email}&admins=${count}`);
+    }
     redirect("/app");
   }
 
