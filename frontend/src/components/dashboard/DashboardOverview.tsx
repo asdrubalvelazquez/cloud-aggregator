@@ -83,30 +83,36 @@ type QuickActionCardProps = {
   description: string;
   onClick: () => void;
   disabled?: boolean;
+  disabledReason?: string;
 };
 
-function QuickActionCard({ icon, title, description, onClick, disabled = false }: QuickActionCardProps) {
+function QuickActionCard({ icon, title, description, onClick, disabled = false, disabledReason }: QuickActionCardProps) {
   return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className={`
-        bg-slate-800 rounded-lg p-6 border border-slate-700 text-left
-        transition-all duration-200
-        ${disabled 
-          ? 'opacity-50 cursor-not-allowed' 
-          : 'hover:border-emerald-500 hover:bg-slate-700 hover:shadow-lg hover:shadow-emerald-500/10'
-        }
-      `}
-    >
-      <div className="flex items-start gap-4">
-        <span className="text-3xl flex-shrink-0">{icon}</span>
-        <div className="flex-1 min-w-0">
-          <h3 className="text-lg font-semibold text-white mb-1">{title}</h3>
-          <p className="text-sm text-slate-400">{description}</p>
+    <div className="relative group">
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        className={`
+          w-full bg-slate-800 rounded-lg p-6 border border-slate-700 text-left
+          transition-all duration-200
+          ${disabled 
+            ? 'opacity-50 cursor-not-allowed' 
+            : 'hover:border-emerald-500 hover:bg-slate-700 hover:shadow-lg hover:shadow-emerald-500/10'
+          }
+        `}
+        title={disabled && disabledReason ? disabledReason : undefined}
+      >
+        <div className="flex items-start gap-4">
+          <span className="text-3xl flex-shrink-0">{icon}</span>
+          <div className="flex-1 min-w-0">
+            <h3 className="text-lg font-semibold text-white mb-1">{title}</h3>
+            <p className={`text-sm ${disabled ? 'text-slate-500' : 'text-slate-400'}`}>
+              {disabled && disabledReason ? disabledReason : description}
+            </p>
+          </div>
         </div>
-      </div>
-    </button>
+      </button>
+    </div>
   );
 }
 
@@ -195,7 +201,7 @@ export default function DashboardOverview({
         <StatsCard
           icon="☁️"
           label="Almacenamiento Total"
-          value={totals ? formatStorage(totals.total_bytes) : "—"}
+          value={totals ? formatStorage(totals.total_bytes) : (connectedAccounts.length === 0 ? "Sin cuentas" : "Cargando...")}
         >
           {totals && totals.total_bytes > 0 && (
             <ProgressBar
@@ -217,7 +223,7 @@ export default function DashboardOverview({
         <StatsCard
           icon="🔗"
           label="Cuentas Conectadas"
-          value={summary?.connected ?? 0}
+          value={connectedAccounts.length}
         >
           {summary && summary.needs_reconnect > 0 && (
             <div className="bg-amber-500/20 border border-amber-500/50 rounded-lg px-3 py-2">
@@ -258,6 +264,7 @@ export default function DashboardOverview({
             description="Navega y gestiona tus archivos de Google Drive"
             onClick={onOpenGoogleExplorer || (() => {})}
             disabled={!firstGoogleAccount}
+            disabledReason={!firstGoogleAccount ? "Conecta una cuenta de Google Drive para explorar archivos" : undefined}
           />
           
           <QuickActionCard
@@ -266,6 +273,7 @@ export default function DashboardOverview({
             description="Navega y gestiona tus archivos de OneDrive"
             onClick={onOpenOneDriveExplorer || (() => {})}
             disabled={!firstOneDriveAccount}
+            disabledReason={!firstOneDriveAccount ? "Conecta una cuenta de OneDrive para explorar archivos" : undefined}
           />
           
           <QuickActionCard
@@ -274,6 +282,7 @@ export default function DashboardOverview({
             description="Copia archivos entre tus cuentas de nube"
             onClick={onOpenTransferExplorer || (() => {})}
             disabled={connectedAccounts.length === 0}
+            disabledReason={connectedAccounts.length === 0 ? "Necesitas al menos una cuenta conectada para transferir archivos" : undefined}
           />
           
           <QuickActionCard
@@ -301,11 +310,39 @@ export default function DashboardOverview({
 
         {storageAccounts.length === 0 ? (
           <div className="bg-slate-800 rounded-lg border-2 border-dashed border-slate-700 p-12 text-center">
-            <div className="text-5xl mb-4">☁️</div>
-            <p className="text-slate-300 text-lg mb-2">Aún no hay cuentas conectadas</p>
-            <p className="text-slate-400 text-sm">
-              Haz clic en los botones de arriba para conectar tu primera cuenta
-            </p>
+            {connectedAccounts.length === 0 ? (
+              // Caso A: Sin cuentas conectadas
+              <>
+                <div className="text-5xl mb-4">☁️</div>
+                <p className="text-slate-300 text-lg font-semibold mb-2">Aún no tienes nubes conectadas</p>
+                <p className="text-slate-400 text-sm mb-6">
+                  Conecta tu primera cuenta de Google Drive o OneDrive para comenzar
+                </p>
+                <div className="flex items-center justify-center gap-3">
+                  <button
+                    onClick={onConnectGoogle}
+                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white font-medium rounded-lg transition-colors text-sm"
+                  >
+                    Conectar Google Drive
+                  </button>
+                  <button
+                    onClick={onConnectOneDrive}
+                    className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white font-medium rounded-lg transition-colors text-sm"
+                  >
+                    Conectar OneDrive
+                  </button>
+                </div>
+              </>
+            ) : (
+              // Caso C: Hay cuentas conectadas pero sin cloudStorage
+              <>
+                <div className="text-5xl mb-4">⏳</div>
+                <p className="text-slate-300 text-lg font-semibold mb-2">Cargando información de almacenamiento...</p>
+                <p className="text-slate-400 text-sm">
+                  Esto puede tomar unos segundos mientras obtenemos los datos de tus cuentas
+                </p>
+              </>
+            )}
           </div>
         ) : (
           <div className="bg-slate-800 rounded-lg border border-slate-700 overflow-hidden">
