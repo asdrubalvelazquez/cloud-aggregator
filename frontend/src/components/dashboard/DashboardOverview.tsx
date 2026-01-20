@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import ProgressBar from "@/components/ProgressBar";
 import QuotaBadge from "@/components/QuotaBadge";
 import AccountStatusBadge from "@/components/AccountStatusBadge";
@@ -42,6 +41,10 @@ export type DashboardOverviewProps = {
   onConnectGoogle: () => void;
   onConnectOneDrive: () => void;
   onOpenSlotsModal: () => void;
+  onOpenGoogleExplorer?: () => void;
+  onOpenOneDriveExplorer?: () => void;
+  onOpenTransferExplorer?: () => void;
+  onViewAllAccounts?: () => void;
   userEmail?: string | null;
 };
 
@@ -121,9 +124,12 @@ export default function DashboardOverview({
   onConnectGoogle,
   onConnectOneDrive,
   onOpenSlotsModal,
+  onOpenGoogleExplorer,
+  onOpenOneDriveExplorer,
+  onOpenTransferExplorer,
+  onViewAllAccounts,
   userEmail,
 }: DashboardOverviewProps) {
-  const router = useRouter();
 
   // Loading state
   if (isLoading) {
@@ -250,11 +256,7 @@ export default function DashboardOverview({
             icon="📁"
             title="Explorar Google Drive"
             description="Navega y gestiona tus archivos de Google Drive"
-            onClick={() => {
-              if (firstGoogleAccount?.provider_account_uuid) {
-                router.push(`/drive/${firstGoogleAccount.provider_account_uuid}`);
-              }
-            }}
+            onClick={onOpenGoogleExplorer || (() => {})}
             disabled={!firstGoogleAccount}
           />
           
@@ -262,11 +264,7 @@ export default function DashboardOverview({
             icon="📂"
             title="Explorar OneDrive"
             description="Navega y gestiona tus archivos de OneDrive"
-            onClick={() => {
-              if (firstOneDriveAccount?.provider_account_uuid) {
-                router.push(`/onedrive/${firstOneDriveAccount.provider_account_uuid}`);
-              }
-            }}
+            onClick={onOpenOneDriveExplorer || (() => {})}
             disabled={!firstOneDriveAccount}
           />
           
@@ -274,13 +272,7 @@ export default function DashboardOverview({
             icon="🔄"
             title="Transferir Archivos"
             description="Copia archivos entre tus cuentas de nube"
-            onClick={() => {
-              if (firstGoogleAccount?.provider_account_uuid) {
-                router.push(`/drive/${firstGoogleAccount.provider_account_uuid}`);
-              } else if (firstOneDriveAccount?.provider_account_uuid) {
-                router.push(`/onedrive/${firstOneDriveAccount.provider_account_uuid}`);
-              }
-            }}
+            onClick={onOpenTransferExplorer || (() => {})}
             disabled={connectedAccounts.length === 0}
           />
           
@@ -299,7 +291,7 @@ export default function DashboardOverview({
           <h2 className="text-2xl font-bold text-white">Tus Nubes</h2>
           {hasMoreAccounts && (
             <button
-              onClick={() => router.push("/app")}
+              onClick={onViewAllAccounts || (() => {})}
               className="text-emerald-400 hover:text-emerald-300 text-sm font-medium transition-colors"
             >
               Ver todas →
@@ -396,7 +388,7 @@ export default function DashboardOverview({
             {hasMoreAccounts && (
               <div className="bg-slate-900/50 border-t border-slate-700 p-4 text-center">
                 <button
-                  onClick={() => router.push("/app")}
+                  onClick={onViewAllAccounts || (() => {})}
                   className="text-emerald-400 hover:text-emerald-300 font-medium text-sm transition-colors"
                 >
                   Ver todas las cuentas ({cloudStorage?.accounts.length}) →

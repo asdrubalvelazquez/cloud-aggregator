@@ -791,6 +791,36 @@ function DashboardContent({
   // Cuentas conectadas (multi-provider)
   const connectedAccounts = (cloudStatus?.accounts ?? []).filter(a => a.connection_status === "connected");
 
+  // ========== ROUTING HANDLERS FOR OVERVIEW ==========
+  // Resolver IDs de cuentas para navegación
+  const firstGoogleAccount = connectedAccounts.find(acc => acc.provider === "google_drive");
+  const firstOneDriveAccount = connectedAccounts.find(acc => acc.provider === "onedrive");
+
+  const handleOpenGoogleExplorer = () => {
+    if (firstGoogleAccount?.provider_account_uuid) {
+      router.push(`/drive/${firstGoogleAccount.provider_account_uuid}`);
+    }
+  };
+
+  const handleOpenOneDriveExplorer = () => {
+    if (firstOneDriveAccount?.provider_account_uuid) {
+      router.push(`/onedrive/${firstOneDriveAccount.provider_account_uuid}`);
+    }
+  };
+
+  const handleOpenTransferExplorer = () => {
+    // Priorizar Google Drive si existe, sino OneDrive
+    if (firstGoogleAccount?.provider_account_uuid) {
+      router.push(`/drive/${firstGoogleAccount.provider_account_uuid}`);
+    } else if (firstOneDriveAccount?.provider_account_uuid) {
+      router.push(`/onedrive/${firstOneDriveAccount.provider_account_uuid}`);
+    }
+  };
+
+  const handleViewAllAccounts = () => {
+    router.push("/app");
+  };
+
   // ========== VISTAS: OVERVIEW vs LEGACY ==========
   // Vista nueva: DashboardOverview
   const overviewView = (
@@ -802,6 +832,10 @@ function DashboardContent({
       onConnectGoogle={handleConnectGoogle}
       onConnectOneDrive={handleConnectOneDrive}
       onOpenSlotsModal={() => setShowReconnectModal(true)}
+      onOpenGoogleExplorer={handleOpenGoogleExplorer}
+      onOpenOneDriveExplorer={handleOpenOneDriveExplorer}
+      onOpenTransferExplorer={handleOpenTransferExplorer}
+      onViewAllAccounts={handleViewAllAccounts}
       userEmail={userEmail}
     />
   );
