@@ -791,6 +791,26 @@ function DashboardContent({
   // Cuentas conectadas (multi-provider)
   const connectedAccounts = (cloudStatus?.accounts ?? []).filter(a => a.connection_status === "connected");
 
+  // ========== VISTAS: OVERVIEW vs LEGACY ==========
+  // Vista nueva: DashboardOverview
+  const overviewView = (
+    <DashboardOverview
+      cloudStatus={cloudStatus}
+      cloudStorage={cloudStorage}
+      isLoading={loading || isCloudStatusLoading}
+      error={hardError}
+      onConnectGoogle={handleConnectGoogle}
+      onConnectOneDrive={handleConnectOneDrive}
+      onOpenSlotsModal={() => setShowReconnectModal(true)}
+      userEmail={userEmail}
+    />
+  );
+
+  // Vista existente: tabla de cuentas (legacy) - definida inline en JSX
+  
+  // Selección de vista según feature flag
+  const mainView = ENABLE_OVERVIEW ? overviewView : null;
+
   return (
     <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
       {/* Toast Notifications */}
@@ -839,17 +859,7 @@ function DashboardContent({
 
       <div className="w-full max-w-6xl space-y-6">
         {ENABLE_OVERVIEW ? (
-          // Nueva vista: DashboardOverview
-          <DashboardOverview
-            cloudStatus={cloudStatus}
-            cloudStorage={cloudStorage}
-            isLoading={loading || isCloudStatusLoading}
-            error={hardError}
-            onConnectGoogle={handleConnectGoogle}
-            onConnectOneDrive={handleConnectOneDrive}
-            onOpenSlotsModal={() => setShowReconnectModal(true)}
-            userEmail={userEmail}
-          />
+          mainView
         ) : (
           // Vista existente: tabla de cuentas
           <>
