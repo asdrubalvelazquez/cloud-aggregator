@@ -15,7 +15,6 @@ import { formatStorage, formatStorageFromGB } from "@/lib/formatStorage";
 import ReconnectSlotsModal from "@/components/ReconnectSlotsModal";
 import OwnershipTransferModal from "@/components/OwnershipTransferModal";
 import DashboardOverview from "@/components/dashboard/DashboardOverview";
-import DashboardHeader from "@/components/ui/DashboardHeader";
 
 type Account = {
   id: number;
@@ -157,7 +156,6 @@ function DashboardContent({
   const [ownershipTransferToken, setOwnershipTransferToken] = useState<string | null>(null);
   const [transferEvents, setTransferEvents] = useState<any[]>([]);
   const [showTransferNotification, setShowTransferNotification] = useState(false);
-  const [showAddCloudMenu, setShowAddCloudMenu] = useState(false);
   const router = useRouter();
   
   // Use React Query for cloudStatus (single source of truth)
@@ -734,21 +732,42 @@ function DashboardContent({
   };
 
   const handleLogout = async () => {
-    try {
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
-      router.push("/");
-    } catch (error) {
-      console.error("Logout error:", error);
-      setToast({
-        type: "error",
-        message: "Error al cerrar sesión. Intenta de nuevo.",
-      });
-    }
-  };
+    // CRITICAL: Clear UI state BEFORE sign-out to prevent visual glitches
+    setLoading(false);
+    setHardError(null);
+    setSoftTimeout(false);
+    setToast(null);
 
-  const handleAddCloudClick = () => {
-    setShowAddCloudMenu(!showAddCloudMenu);
+    try {
+      // Sign out with timeout to prevent hanging
+      const signOutPromise = supabase.auth.signOut();
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("SignOut timeout")), 3000)
+      );
+      
+      await Promise.race([signOutPromise, timeoutPromise]);
+    } catch (error) {
+      // Even if signOut fails, force navigation (handles network errors)
+      console.error("[LOGOUT] SignOut error (forcing navigation):", error);
+    }
+    
+    // ALWAYS navigate, regardless of signOut success
+    // Use replace() to prevent back button returning to authenticated view
+    router.replace("/");
+    
+    // Force refresh to clear any cached authenticated state
+    router.refresh();
+    
+    // FALLBACK: If still on /app after 500ms, force navigation with window.location
+    // This handles edge cases where Next.js router fails (hydration issues, etc.)
+    setTimeout(() => {
+      if (window.location.pathname.startsWith("/app") || 
+          window.location.pathname.startsWith("/drive") ||
+          window.location.pathname.startsWith("/onedrive")) {
+        console.warn("[LOGOUT] Router failed, using window.location fallback");
+        window.location.assign("/");
+      }
+    }, 500);
   };
 
   const getRelativeTime = (timestamp: number): string => {
@@ -772,95 +791,60 @@ function DashboardContent({
   // Cuentas conectadas (multi-provider)
   const connectedAccounts = (cloudStatus?.accounts ?? []).filter(a => a.connection_status === "connected");
 
+  // ========== ROUTING HANDLERS FOR OVERVIEW ==========
+  // Resolver IDs de cuentas para navegación
+  const firstGoogleAccount = connectedAccounts.find(acc => acc.provider === "google_drive");
+  const firstOneDriveAccount = connectedAccounts.find(acc => acc.provider === "onedrive");
+
+  const handleOpenGoogleExplorer = () => {
+    if (firstGoogleAccount?.provider_account_uuid) {
+      router.push(`/drive/${firstGoogleAccount.provider_account_uuid}`);
+    }
+  };
+
+  const handleOpenOneDriveExplorer = () => {
+    if (firstOneDriveAccount?.provider_account_uuid) {
+      router.push(`/onedrive/${firstOneDriveAccount.provider_account_uuid}`);
+    }
+  };
+
+  const handleOpenTransferExplorer = () => {
+    // Priorizar Google Drive si existe, sino OneDrive
+    if (firstGoogleAccount?.provider_account_uuid) {
+      router.push(`/drive/${firstGoogleAccount.provider_account_uuid}`);
+    } else if (firstOneDriveAccount?.provider_account_uuid) {
+      router.push(`/onedrive/${firstOneDriveAccount.provider_account_uuid}`);
+    }
+  };
+
+  const handleViewAllAccounts = () => {
+    router.push("/app");
+  };
+
   // ========== VISTAS: OVERVIEW vs LEGACY ==========
   // Vista nueva: DashboardOverview
   const overviewView = (
     <DashboardOverview
-      cloudStatus={cloudStatus ?? null}
+      cloudStatus={cloudStatus}
       cloudStorage={cloudStorage}
       isLoading={loading || isCloudStatusLoading}
       error={hardError}
       onConnectGoogle={handleConnectGoogle}
       onConnectOneDrive={handleConnectOneDrive}
       onOpenSlotsModal={() => setShowReconnectModal(true)}
+      onOpenGoogleExplorer={handleOpenGoogleExplorer}
+      onOpenOneDriveExplorer={handleOpenOneDriveExplorer}
+      onOpenTransferExplorer={handleOpenTransferExplorer}
+      onViewAllAccounts={handleViewAllAccounts}
       userEmail={userEmail}
     />
   );
 
   // Vista existente: tabla de cuentas (legacy) - definida inline en JSX
   
-  // Early return para overview (evita ternario problemático en Turbopack)
-  if (ENABLE_OVERVIEW) {
-    return (
-      <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
-        {/* Toast Notifications */}
-        {toast && (
-          <Toast
-            message={toast.message}
-            type={toast.type}
-            onClose={() => setToast(null)}
-          />
-        )}
+  // Selección de vista según feature flag
+  const mainView = ENABLE_OVERVIEW ? overviewView : null;
 
-        {/* Transfer Events Notification */}
-        {showTransferNotification && transferEvents.length > 0 && (
-          <div className="fixed top-6 right-6 z-50 bg-gradient-to-br from-amber-500 to-orange-600 text-white p-4 rounded-lg shadow-2xl max-w-md border border-amber-400/50 animate-slide-in-right">
-            <div className="flex items-start gap-3">
-              <div className="text-2xl">⚠️</div>
-              <div className="flex-1">
-                <h3 className="font-bold text-lg mb-1">Cuenta Transferida</h3>
-                {transferEvents.length === 1 ? (
-                  <p className="text-sm leading-relaxed">
-                    Tu cuenta <strong>{transferEvents[0].account_email}</strong> de {transferEvents[0].provider === 'onedrive' ? 'OneDrive' : 'Google Drive'} fue transferida a otro usuario de Cloud Aggregator. 
-                    Ya no tenés acceso a esta cuenta en tu panel.
-                  </p>
-                ) : (
-                  <div className="text-sm leading-relaxed">
-                    <p className="mb-2">Las siguientes cuentas fueron transferidas a otros usuarios:</p>
-                    <ul className="list-disc list-inside space-y-1 text-xs">
-                      {transferEvents.map((event, idx) => (
-                        <li key={idx}>
-                          {event.account_email} ({event.provider === 'onedrive' ? 'OneDrive' : 'Google Drive'})
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                <button
-                  onClick={handleAcknowledgeTransferEvents}
-                  className="mt-3 w-full bg-white text-amber-700 font-semibold py-2 rounded-md hover:bg-amber-50 transition text-sm"
-                >
-                  Entendido
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div className="w-full max-w-6xl space-y-6">
-          {overviewView}
-        </div>
-
-        {/* Modal de slots históricos */}
-        <ReconnectSlotsModal
-          isOpen={showReconnectModal}
-          onClose={() => setShowReconnectModal(false)}
-        />
-
-        {/* Modal de transferencia de propiedad */}
-        {ownershipTransferToken && (
-          <OwnershipTransferModal
-            isOpen={showOwnershipTransferModal}
-            transferToken={ownershipTransferToken}
-            onClose={handleOwnershipTransferClose}
-            onSuccess={handleOwnershipTransferSuccess}
-          />
-        )}
-      </main>
-    );
-  }
-
-  // Legacy dashboard (sin feature flag)
   return (
     <main className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center p-6">
       {/* Toast Notifications */}
@@ -907,75 +891,43 @@ function DashboardContent({
         </div>
       )}
 
-      {/* Dashboard Header */}
-      <DashboardHeader
-        userName={userEmail}
-        totalUsedBytes={cloudStorage?.totals.used_bytes || data?.total_usage || 0}
-        totalLimitBytes={cloudStorage?.totals.total_bytes || data?.total_limit || 0}
-        connectedAccountsCount={connectedAccounts.length}
-        onAddCloud={handleAddCloudClick}
-        onLogout={handleLogout}
-      />
-
-      {/* Menú desplegable Add Cloud */}
-      {showAddCloudMenu && (
-        <div 
-          role="menu" 
-          aria-label="Opciones para conectar servicios en la nube"
-          className="w-full max-w-7xl mb-4"
-        >
-          <div className="bg-slate-800/90 backdrop-blur-sm rounded-xl border border-slate-700/50 shadow-xl p-4">
-            <div className="flex flex-col sm:flex-row gap-3">
+      <div className="w-full max-w-6xl space-y-6">
+        {ENABLE_OVERVIEW ? (
+          mainView
+        ) : (
+          // Vista existente: tabla de cuentas
+          <>
+            <div className="flex items-center justify-end gap-3">
               <button
-                role="menuitem"
-                aria-label="Conectar cuenta de Google Drive"
-                tabIndex={0}
-                onKeyDown={(e) => e.key === 'Enter' && (handleConnectGoogle(), setShowAddCloudMenu(false))}
-                onClick={() => {
-                  handleConnectGoogle();
-                  setShowAddCloudMenu(false);
-                }}
-                className="flex-1 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-semibold py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-opacity-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={() => setShowReconnectModal(true)}
+                className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-700"
               >
-                <span aria-hidden="true" className="text-xl">🔵</span>
-                <span>Google Drive</span>
+                📊 Tus Nubes
               </button>
               
               <button
-                role="menuitem"
-                aria-label="Conectar cuenta de OneDrive"
-                tabIndex={0}
-                onKeyDown={(e) => e.key === 'Enter' && (handleConnectOneDrive(), setShowAddCloudMenu(false))}
-                onClick={() => {
-                  handleConnectOneDrive();
-                  setShowAddCloudMenu(false);
-                }}
-                className="flex-1 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={handleConnectGoogle}
+                className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-600"
+                title="Conectar una nueva cuenta de Google Drive"
               >
-                <span aria-hidden="true" className="text-xl">🟦</span>
-                <span>OneDrive</span>
+                Conectar Google Drive
               </button>
-
+              
               <button
-                role="menuitem"
-                aria-label="Ver todas mis cuentas conectadas"
-                tabIndex={0}
-                onKeyDown={(e) => e.key === 'Enter' && (setShowReconnectModal(true), setShowAddCloudMenu(false))}
-                onClick={() => {
-                  setShowReconnectModal(true);
-                  setShowAddCloudMenu(false);
-                }}
-                className="flex-1 bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-white font-semibold py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-opacity-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={handleConnectOneDrive}
+                className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-blue-500 hover:bg-blue-600"
+                title="Conectar una nueva cuenta de OneDrive"
               >
-                <span aria-hidden="true" className="text-xl">📊</span>
-                <span>Ver Mis Cuentas</span>
+                Conectar OneDrive
+              </button>
+              
+              <button
+                onClick={handleLogout}
+                className="rounded-lg bg-slate-700 hover:bg-slate-600 transition px-4 py-2 text-sm font-semibold"
+              >
+                Salir
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      <div className="w-full max-w-6xl space-y-6">
 
             {/* Loading state: solo bloquear UI si cloudStatus no existe o si loading summary sin data */}
             {(loading || softTimeout) && !cloudStatus && (

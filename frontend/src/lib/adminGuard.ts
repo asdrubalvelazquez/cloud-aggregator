@@ -23,10 +23,10 @@ export async function adminGuard(): Promise<User> {
   } = await supabase.auth.getSession();
 
   if (!session || !session.user?.email) {
-    redirect("/");
+    redirect("/admin/login");
   }
 
-  const adminEmails = process.env.ADMIN_EMAILS || "";
+  const adminEmails = process.env.ADMIN_PANEL_EMAILS || "";
   const adminList = adminEmails
     .split(/[,\s]+/)
     .map((e) => e.trim().toLowerCase())
@@ -35,12 +35,6 @@ export async function adminGuard(): Promise<User> {
   const isAuthorized = adminList.includes(session.user.email.toLowerCase());
 
   if (!isAuthorized) {
-    const debugMode = process.env.ADMIN_DEBUG === "1";
-    if (debugMode) {
-      const email = encodeURIComponent(session.user.email);
-      const count = adminList.length;
-      redirect(`/admin/denied?email=${email}&admins=${count}`);
-    }
     redirect("/app");
   }
 

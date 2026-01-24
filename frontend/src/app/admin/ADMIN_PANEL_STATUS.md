@@ -3,6 +3,8 @@
 **Estado actual:** UI + Guards + Actions MOCK
 
 Production route: /admin (and /admin/*)
+Admin login: /admin/login (email+password via Supabase)
+Access control: ADMIN_PANEL_EMAILS
 
 ## Implementado
 
