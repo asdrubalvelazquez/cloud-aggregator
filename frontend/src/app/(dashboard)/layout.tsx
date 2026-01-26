@@ -4,6 +4,7 @@ import { TransferQueuePanel } from "@/components/transfer-queue/TransferQueuePan
 import { TransferQueueButton } from "@/components/transfer-queue/TransferQueueButton";
 import { DashboardTopBar } from "@/components/DashboardTopBar";
 import { Providers } from "./providers";
+import { Toaster } from "react-hot-toast";
 
 /**
  * Layout for authenticated dashboard routes
@@ -32,6 +33,29 @@ export default function DashboardLayout({
         <TransferQueuePanel />
         <TransferQueueButton />
       </DashboardContextMenuBlocker>
+      <Toaster
+        position="bottom-right"
+        toastOptions={{
+          duration: 4000,
+          style: {
+            background: "#1e293b",
+            color: "#e2e8f0",
+            border: "1px solid #334155",
+          },
+          success: {
+            iconTheme: {
+              primary: "#10b981",
+              secondary: "#1e293b",
+            },
+          },
+          error: {
+            iconTheme: {
+              primary: "#ef4444",
+              secondary: "#1e293b",
+            },
+          },
+        }}
+      />
     </Providers>
   );
 }

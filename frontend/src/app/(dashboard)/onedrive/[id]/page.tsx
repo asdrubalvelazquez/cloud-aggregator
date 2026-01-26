@@ -5,6 +5,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useCloudStatusQuery } from "@/queries/useCloudStatusQuery";
 import { fetchOneDriveFiles, fetchOneDriveAccountInfo, renameOneDriveItem, getOneDriveDownloadUrl } from "@/lib/api";
+import { authenticatedFetch } from "@/lib/api";
 import type { OneDriveListResponse, OneDriveItem, CloudAccountStatus } from "@/lib/api";
 import OnedriveRowActionsMenu from "@/components/OnedriveRowActionsMenu";
 import OneDriveRenameModal from "@/components/OneDriveRenameModal";
@@ -405,6 +406,52 @@ export default function OneDriveFilesPage() {
       window.location.reload();
     }
   };
+
+  // Recargar archivos cuando cambia la cuenta
+  useEffect(() => {
+    if (!accountId) {
+      console.log("[DEBUG] No accountId, skipping files fetch");
+      return;
+    }
+
+    console.log("[DEBUG] AccountId changed, fetching files for:", accountId);
+
+    // Limpiar estado anterior
+    setFiles([]);
+    setError(null);
+    setIsSwitchingAccount(true);
+
+    const loadFiles = async () => {
+      try {
+        const response = await authenticatedFetch(`/onedrive/${accountId}/files?folder_id=root`);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        console.log("[DEBUG] Files loaded:", data.items?.length || 0);
+
+        setFiles(data.items || []);
+        setIsSwitchingAccount(false);
+      } catch (err: any) {
+        console.error("[DEBUG] Error loading files:", err);
+
+        // Si es error 401 o token expirado, mostrar aviso de reconexión
+        if (err.message && (err.message.includes('401') || err.message.includes('TOKEN'))) {
+          console.log('[DEBUG] Token expirado, cuenta necesita reconexión');
+          setError("Esta cuenta necesita reconexión");
+          setShowReconnectModal(true); // Activar modal de reconexión
+        } else {
+          setError("Error al cargar archivos");
+        }
+
+        setIsSwitchingAccount(false);
+      }
+    };
+
+    loadFiles();
+  }, [accountId]);
 
   return (
     <main 

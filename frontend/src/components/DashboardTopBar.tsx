@@ -6,6 +6,7 @@ import { authenticatedFetch } from "@/lib/api";
 import { formatStorageFromGB } from "@/lib/formatStorage";
 import { supabase } from "@/lib/supabaseClient";
 import type { User } from "@supabase/supabase-js";
+import { usePathname } from "next/navigation";
 
 type BillingQuota = {
   plan: string;
@@ -20,10 +21,10 @@ type BillingQuota = {
 } | null;
 
 const TABS = [
-  { id: "cloud-to-cloud", label: "Cloud-to-cloud Transfer" },
-  { id: "instagram", label: "Instagram Downloader" },
-  { id: "video", label: "Video Downloader" },
-  { id: "web-image", label: "Web Image Downloader" },
+  { id: "cloud-to-cloud", label: "Cloud-to-cloud Transfer", href: "/app/transfer" },
+  { id: "instagram", label: "Instagram Downloader", href: "#" },
+  { id: "video", label: "Video Downloader", href: "#" },
+  { id: "web-image", label: "Web Image Downloader", href: "#" },
 ];
 
 export function DashboardTopBar() {
@@ -31,6 +32,7 @@ export function DashboardTopBar() {
   const [user, setUser] = useState<User | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const pathname = usePathname();
 
   useEffect(() => {
     const fetchBillingQuota = async () => {
@@ -115,14 +117,29 @@ export function DashboardTopBar() {
 
         {/* CENTER: Tabs (placeholders) */}
         <nav className="hidden md:flex items-center gap-6 text-sm text-slate-400">
-          {TABS.map((tab) => (
-            <span
-              key={tab.id}
-              className="hover:text-slate-200 transition-colors cursor-default"
-            >
-              {tab.label}
-            </span>
-          ))}
+          {TABS.map((tab) =>
+            tab.href && tab.href !== "#" ? (
+              <Link
+                key={tab.id}
+                href={tab.href}
+                className={`transition-colors ${
+                  pathname === tab.href
+                    ? "text-slate-200 font-semibold"
+                    : "hover:text-slate-200"
+                }`}
+              >
+                {tab.label}
+              </Link>
+            ) : (
+              <span
+                key={tab.id}
+                className="opacity-60 cursor-not-allowed select-none"
+                title="Próximamente"
+              >
+                {tab.label}
+              </span>
+            )
+          )}
         </nav>
 
         {/* RIGHT: Avatar + Traffic */}
