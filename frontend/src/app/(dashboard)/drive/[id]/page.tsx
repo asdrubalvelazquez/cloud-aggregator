@@ -1839,35 +1839,8 @@ export default function DriveFilesPage() {
           </p>
         )}
 
-        {/* Selection Controls - Minimal UI */}
-        {!loading && !error && files.length > 0 && (
-          <div className="mb-3 flex items-center justify-between text-sm">
-            <div className="flex items-center gap-4">
-              <button
-                type="button"
-                onClick={selectAllFiles}
-                className="text-emerald-400 hover:text-emerald-300 transition font-medium"
-              >
-                {selectedFiles.size === files.filter(f => f.mimeType !== "application/vnd.google-apps.folder").length && selectedFiles.size > 0
-                  ? "Deseleccionar todos"
-                  : "Seleccionar todos"}
-              </button>
-              {selectedFiles.size > 0 && (
-                <span className="text-slate-400">
-                  {selectedFiles.size} archivo{selectedFiles.size > 1 ? "s" : ""} seleccionado{selectedFiles.size > 1 ? "s" : ""}
-                </span>
-              )}
-            </div>
-            {selectedFiles.size > 0 && (
-              <div className="text-xs text-slate-400 flex items-center gap-1.5">
-                <span>⏱️</span>
-                <span>La copia puede tardar ~11s por archivo debido a límites de Google API</span>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* File Action Bar - MultCloud style */}
+        {/* File Action Bar - Hidden, only for copy functionality */}
+        <div className="hidden">
         <FileActionBar
           provider="google_drive"
           selectedCount={selectedFiles.size}
@@ -1938,6 +1911,7 @@ export default function DriveFilesPage() {
               : undefined
           }
         />
+        </div>
 
         {/* Batch Results Toast */}
         {batchResults && (

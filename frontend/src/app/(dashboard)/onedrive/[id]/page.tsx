@@ -859,7 +859,8 @@ export default function OneDriveFilesPage() {
           </div>
         )}
 
-        {/* File Action Bar - MultCloud style */}
+        {/* File Action Bar - Hidden, only for refresh functionality */}
+        <div className="hidden">
         <FileActionBar
           provider="onedrive"
           selectedCount={selectedFiles.size}
@@ -909,6 +910,7 @@ export default function OneDriveFilesPage() {
           copyDisabled={true}
           copyDisabledReason="OneDrive → otras nubes aún no disponible (solo Google Drive → OneDrive en Phase 1)"
         />
+        </div>
 
         {/* Files View - Google Drive Style (List or Grid) */}
         {!loading && !error && (
