@@ -828,9 +828,7 @@ export default function DriveFilesPage() {
 
   // Multi-select handlers
   const toggleFileSelection = useCallback((fileId: string, mimeType: string) => {
-    // Only allow selection of files (not folders)
-    if (mimeType === "application/vnd.google-apps.folder") return;
-
+    // Allow selection of both files and folders
     setSelectedFiles(prev => {
       const newSet = new Set(prev);
       if (newSet.has(fileId)) {
@@ -1243,7 +1241,7 @@ export default function DriveFilesPage() {
   };
 
   // Row click handlers
-  const handleRowClick = (fileId: string) => {
+  const handleRowClick = (fileId: string, mimeType: string) => {
     // Debounce to distinguish from double click
     if (clickTimerRef.current) {
       clearTimeout(clickTimerRef.current);
@@ -1251,6 +1249,8 @@ export default function DriveFilesPage() {
     
     clickTimerRef.current = setTimeout(() => {
       setSelectedRowId(fileId);
+      // Single-select behavior: clear previous selections and select only this file
+      setSelectedFiles(new Set([fileId]));
     }, 250);
   };
 
@@ -1936,7 +1936,7 @@ export default function DriveFilesPage() {
                       const target = e.target as HTMLElement;
                       if (target.tagName === 'INPUT' || target.closest('input')) return;
                       e.stopPropagation();
-                      handleRowClick(file.id);
+                      handleRowClick(file.id, file.mimeType);
                     }}
                     onDoubleClick={(e) => {
                       const target = e.target as HTMLElement;
@@ -2078,7 +2078,9 @@ export default function DriveFilesPage() {
                         return;
                       }
                       e.stopPropagation();
-                      toggleFileSelection(file.id, file.mimeType);
+                      // Single-select behavior: replace previous selection
+                      setSelectedRowId(file.id);
+                      setSelectedFiles(new Set([file.id]));
                     }}
                     onDoubleClick={(e) => {
                       const target = e.target as HTMLElement;

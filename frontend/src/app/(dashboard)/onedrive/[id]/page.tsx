@@ -99,19 +99,6 @@ export default function OneDriveFilesPage() {
   const [displayFiles, setDisplayFiles] = useState<any[]>([]);
   const [isSwitchingAccount, setIsSwitchingAccount] = useState(false);
 
-  // Multi-select handler
-  const toggleFileSelection = useCallback((fileId: string) => {
-    setSelectedFiles(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(fileId)) {
-        newSet.delete(fileId);
-      } else {
-        newSet.add(fileId);
-      }
-      return newSet;
-    });
-  }, []);
-
   // Reset UI state when cloud account changes (prevents stale menu/actionbar)
   useEffect(() => {
     setIsSwitchingAccount(true);  // Activate switching indicator
@@ -306,6 +293,18 @@ export default function OneDriveFilesPage() {
       setBreadcrumb(newTrail);
       fetchFiles(parent.id);
     }
+  };
+
+  // Single-select handler (replaces previous selection)
+  const toggleFileSelection = (fileId: string) => {
+    setSelectedFiles(prev => {
+      // If clicking the same file, toggle it off
+      if (prev.has(fileId) && prev.size === 1) {
+        return new Set();
+      }
+      // Otherwise, replace selection with only this file (single-select)
+      return new Set([fileId]);
+    });
   };
 
   const handleRename = (itemId: string, itemName: string) => {
