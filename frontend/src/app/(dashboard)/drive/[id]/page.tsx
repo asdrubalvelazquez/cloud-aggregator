@@ -1770,42 +1770,6 @@ export default function DriveFilesPage() {
           </div>
         </div>
 
-        {/* Header - Moved below filters */}
-        <header className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl md:text-3xl font-bold">Archivos de Google Drive</h1>
-
-            <div className="text-sm text-slate-400 mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-              {copyOptions ? (
-                <span>{`Cuenta: ${copyOptions.source_account.email}`}</span>
-              ) : (
-                <span>Cargando...</span>
-              )}
-
-              {pickerFiles.length > 0 && (
-                <span className="text-xs text-slate-400">Picker: {pickerFiles.length}</span>
-              )}
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <GooglePickerButton
-              accountId={parseInt(accountId)}
-              onFilesPicked={(files) => setPickerFiles(files)}
-              disabled={copying || batchCopying}
-            />
-
-            {false && <QuotaBadge refreshKey={quotaRefreshKey} />}
-
-            <Link
-              href="/app"
-              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium transition"
-            >
-              ← Volver al Dashboard
-            </Link>
-          </div>
-        </header>
-
         {/* Copy Status with Progress Bar */}
         {/* (Progreso ahora en floating bar sticky abajo) */}
 
@@ -1839,8 +1803,9 @@ export default function DriveFilesPage() {
           </p>
         )}
 
-        {/* File Action Bar - Hidden, only for copy functionality */}
-        <div className="hidden">
+        {/* File Action Bar - Show when files selected (Google Drive style) */}
+        {selectedFiles.size > 0 && (
+        <div className="sticky top-0 z-10 bg-slate-900/95 backdrop-blur-sm py-3 border-b border-slate-700 mb-4">
         <FileActionBar
           provider="google_drive"
           selectedCount={selectedFiles.size}
@@ -1912,6 +1877,7 @@ export default function DriveFilesPage() {
           }
         />
         </div>
+        )}
 
         {/* Batch Results Toast */}
         {batchResults && (
@@ -2043,7 +2009,6 @@ export default function DriveFilesPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left border-b border-slate-700 text-slate-400">
-                  <th className="py-3 px-2 w-10"></th>
                   <th className="py-3 px-4">
                     <button
                       type="button"
@@ -2107,45 +2072,31 @@ export default function DriveFilesPage() {
                     onClick={(e) => {
                       const target = e.target as HTMLElement;
                       if (
-                        target.tagName === 'INPUT' ||
                         target.tagName === 'BUTTON' ||
-                        target.closest('button') ||
-                        target.closest('input')
+                        target.closest('button')
                       ) {
                         return;
                       }
                       e.stopPropagation();
-                      handleRowClick(file.id);
+                      toggleFileSelection(file.id, file.mimeType);
                     }}
                     onDoubleClick={(e) => {
                       const target = e.target as HTMLElement;
                       if (
-                        target.tagName === 'INPUT' ||
                         target.tagName === 'BUTTON' ||
-                        target.closest('button') ||
-                        target.closest('input')
+                        target.closest('button')
                       ) {
                         return;
                       }
                       e.stopPropagation();
-                      handleRowDoubleClick(file);
+                      if (file.mimeType === "application/vnd.google-apps.folder") {
+                        handleOpenFolder(file.id, file.name);
+                      } else if (file.webViewLink) {
+                        window.open(file.webViewLink, "_blank", "noopener,noreferrer");
+                      }
                     }}
                     onContextMenu={(e) => handleRowContextMenu(e, file)}
                   >
-                    {/* Checkbox */}
-                    <td className="px-2 py-2.5">
-                      <input
-                        type="checkbox"
-                        checked={selectedFiles.has(file.id)}
-                        onChange={() => toggleFileSelection(file.id, file.mimeType)}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={(e) => e.stopPropagation()}
-                        disabled={file.mimeType === "application/vnd.google-apps.folder"}
-                        title={file.mimeType === "application/vnd.google-apps.folder" ? "No se pueden copiar carpetas" : ""}
-                        className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-emerald-500 focus:ring-2 focus:ring-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed"
-                      />
-                    </td>
-
                     {/* Nombre con icono - Google Drive style */}
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-3">

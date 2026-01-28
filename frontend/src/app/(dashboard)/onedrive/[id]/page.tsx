@@ -810,25 +810,6 @@ export default function OneDriveFilesPage() {
             </div>
           </div>
 
-          {/* Header - Moved below filters */}
-          <header className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl md:text-3xl font-bold">OneDrive Files 🟦</h1>
-              <p className="text-sm text-slate-400 mt-1">
-                {accountEmail ? `Cuenta: ${accountEmail}` : `Cargando...`}
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              <Link
-                href="/app"
-                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium transition"
-              >
-                ← Volver al Dashboard
-              </Link>
-            </div>
-          </header>
-
-        {/* Rename status banner */}
         {renameStatus && (
           <div className={`rounded-lg p-4 ${
             renameStatus === "success" 
@@ -859,8 +840,9 @@ export default function OneDriveFilesPage() {
           </div>
         )}
 
-        {/* File Action Bar - Hidden, only for refresh functionality */}
-        <div className="hidden">
+        {/* File Action Bar - Show when files selected (Google Drive style) */}
+        {selectedFiles.size > 0 && (
+        <div className="sticky top-0 z-10 bg-slate-900/95 backdrop-blur-sm py-3 border-b border-slate-700 mb-4">
         <FileActionBar
           provider="onedrive"
           selectedCount={selectedFiles.size}
@@ -911,6 +893,7 @@ export default function OneDriveFilesPage() {
           copyDisabledReason="OneDrive → otras nubes aún no disponible (solo Google Drive → OneDrive en Phase 1)"
         />
         </div>
+        )}
 
         {/* Files View - Google Drive Style (List or Grid) */}
         {!loading && !error && (
@@ -957,13 +940,13 @@ export default function OneDriveFilesPage() {
                       `}
                       onClick={(e) => {
                         const target = e.target as HTMLElement;
-                        if (target.tagName === 'INPUT' || target.closest('input')) return;
+                        if (target.tagName === 'BUTTON' || target.closest('button')) return;
                         e.stopPropagation();
                         toggleFileSelection(file.id);
                       }}
                       onDoubleClick={(e) => {
                         const target = e.target as HTMLElement;
-                        if (target.tagName === 'INPUT' || target.closest('input')) return;
+                        if (target.tagName === 'BUTTON' || target.closest('button')) return;
                         e.stopPropagation();
                         if (file.kind === "folder") {
                           handleOpenFolder(file.id, file.name);
@@ -973,26 +956,7 @@ export default function OneDriveFilesPage() {
                       }}
                       onContextMenu={(e) => handleRowContextMenu(e, file)}
                     >
-                      {/* Checkbox - top left corner */}
-                      <div className={`absolute top-2 left-2 transition-opacity ${
-                        selectedFiles.has(file.id) 
-                          ? 'opacity-100' 
-                          : 'opacity-0 group-hover:opacity-100'
-                      }`}>
-                        <input
-                          type="checkbox"
-                          checked={selectedFiles.has(file.id)}
-                          onChange={(e) => {
-                            e.stopPropagation();
-                            toggleFileSelection(file.id);
-                          }}
-                          onMouseDown={(e) => e.stopPropagation()}
-                          onClick={(e) => e.stopPropagation()}
-                          className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                        />
-                      </div>
-
-                      {/* File Icon - Large centered */}
+                    {/* File Icon - Large centered */}
                       <div className="flex justify-center items-center h-20 mb-3">
                         <span className="text-5xl">{getFileIcon(file)}</span>
                       </div>
@@ -1030,7 +994,6 @@ export default function OneDriveFilesPage() {
               <table className="w-full">
                 <thead>
                   <tr className="text-left border-b border-slate-700/50">
-                    <th className="py-3 px-2 w-10"></th>
                     <th className="py-3 px-4 text-slate-400 font-normal text-xs tracking-wide">Nombre</th>
                     <th className="py-3 px-4 text-slate-400 font-normal text-xs tracking-wide">Propietario</th>
                     <th className="py-3 px-4 text-slate-400 font-normal text-xs tracking-wide">Fecha de modificación</th>
@@ -1047,38 +1010,29 @@ export default function OneDriveFilesPage() {
                           ? 'bg-blue-600/20' 
                           : 'hover:bg-slate-800/30'
                       }`}
+                      onClick={(e) => {
+                        const target = e.target as HTMLElement;
+                        if (target.tagName === 'BUTTON' || target.closest('button')) return;
+                        e.stopPropagation();
+                        toggleFileSelection(file.id);
+                      }}
+                      onDoubleClick={(e) => {
+                        const target = e.target as HTMLElement;
+                        if (target.tagName === 'BUTTON' || target.closest('button')) return;
+                        e.stopPropagation();
+                        if (file.kind === "folder") {
+                          handleOpenFolder(file.id, file.name);
+                        } else if (file.webViewLink) {
+                          window.open(file.webViewLink, "_blank", "noopener,noreferrer");
+                        }
+                      }}
                       onContextMenu={(e) => handleRowContextMenu(e, file)}
                     >
-                      {/* Checkbox */}
-                      <td className="px-2 py-3">
-                        <input
-                          type="checkbox"
-                          checked={selectedFiles.has(file.id)}
-                          onChange={(e) => {
-                            e.stopPropagation();
-                            toggleFileSelection(file.id);
-                          }}
-                          onMouseDown={(e) => e.stopPropagation()}
-                          onClick={(e) => e.stopPropagation()}
-                          className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-600 focus:ring-blue-500 focus:ring-offset-slate-900 cursor-pointer"
-                        />
-                      </td>
-                      
                       {/* Nombre */}
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-3">
                           <span className="text-xl">{getFileIcon(file)}</span>
-                          {file.kind === "folder" ? (
-                            <button
-                              onClick={() => handleOpenFolder(file.id, file.name)}
-                              onMouseDown={(e) => e.stopPropagation()}
-                              className="font-normal text-slate-200 hover:text-blue-400 hover:underline transition text-sm"
-                            >
-                              {file.name}
-                            </button>
-                          ) : (
-                            <span className="font-normal text-slate-200 text-sm">{file.name}</span>
-                          )}
+                          <span className="font-normal text-slate-200 text-sm">{file.name}</span>
                         </div>
                       </td>
 
