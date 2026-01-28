@@ -37,8 +37,6 @@ export function ClientNavProbe() {
     // one-time per tab load
     if (!w.__CA_PROBE_SESSION_LOGGED) {
       w.__CA_PROBE_SESSION_LOGGED = true;
-      console.log("[SESSION_START]", "session=" + sessionId);
-      console.log("[NAV_TYPE]", "type=" + getNavType(), "visibility=" + document.visibilityState);
     }
   }, []);
 

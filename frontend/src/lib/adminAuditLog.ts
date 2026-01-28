@@ -6,5 +6,5 @@ export type AdminAuditEvent = {
 };
 
 export function logAdminAction(event: AdminAuditEvent): void {
-  console.log("[ADMIN_AUDIT]", event);
+  // console.log("[ADMIN_AUDIT]", event);
 }

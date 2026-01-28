@@ -52,11 +52,6 @@ export function ExplorerSidebar({ onNavigate }: Props) {
   // Group accounts by normalized provider (safe: cloudStatus can be undefined)
   const accounts = cloudStatus?.accounts ?? [];
   
-  // Debug log (temporary - helps diagnose provider mismatches)
-  if (accounts.length > 0 && process.env.NODE_ENV === "development") {
-    console.log("[ExplorerSidebar] Provider values:", accounts.map(a => ({ email: a.provider_email, provider: a.provider })));
-  }
-  
   const googleAccounts = accounts.filter(a => normalizeProvider(a.provider) === "google");
   const onedriveAccounts = accounts.filter(a => normalizeProvider(a.provider) === "onedrive");
 

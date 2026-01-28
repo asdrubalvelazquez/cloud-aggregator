@@ -256,18 +256,6 @@ function DashboardContent({
   const fetchCloudStatusData = async (forceRefresh = false) => {
     try {
       const data = await fetchCloudStatus(forceRefresh);
-      // TEMPORAL DEBUG: Verificar que needs_reconnect baja después de reconectar
-      console.log("[DEBUG - fetchCloudStatus]", {
-        connected: data.summary.connected,
-        needs_reconnect: data.summary.needs_reconnect,
-        disconnected: data.summary.disconnected,
-        forceRefresh,
-        accounts: data.accounts.map(a => ({
-          email: a.provider_email,
-          status: a.connection_status,
-          reason: a.reason,
-        }))
-      });
       // Note: cloudStatus now comes from React Query (useCloudStatusQuery)
       // No need to setCloudStatus here - refetchQueries handles it
     } catch (e) {
@@ -771,7 +759,7 @@ function DashboardContent({
     if (seconds < 60) return "hace un momento";
     const minutes = Math.floor(seconds / 60);
     if (minutes < 60) return `hace ${minutes} min`;
-    const hours = Math.floor(minutes / 60);
+    const hours = Math.floor(minutes / 66);
     if (hours < 24) return `hace ${hours}h`;
     return `hace ${Math.floor(hours / 24)}d`;
   };

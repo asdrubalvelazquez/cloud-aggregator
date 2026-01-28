@@ -442,32 +442,76 @@ async def try_refresh_onedrive_token(provider_account: dict) -> dict:
         error_msg_lower = error_msg.lower()
         
         # Caso 1: invalid_grant (token revocado permanentemente)
-        # SOFT-FAIL: NO marcar is_active=false, solo retornar error para que UI muestre "needs reconnect"
+        # Clear tokens from DB so they can't be used anymore
         if "invalid_grant" in error_code_lower or "invalid_grant" in error_msg_lower:
             logger.warning(
                 f"[ONEDRIVE_REFRESH] invalid_grant detected for account_id={account_id}. "
-                f"Soft-fail: NOT disconnecting automatically, user must reconnect manually."
+                f"Clearing tokens from database to force reconnection."
             )
             
-            return {
-                "success": False,
-                "error_type": "invalid_grant",
-                "updated_account": provider_account
-            }
+            # Clear tokens from database
+            try:
+                supabase.table("cloud_provider_accounts").update({
+                    "access_token": None,
+                    "refresh_token": None,
+                    "token_expiry": None
+                }).eq("id", account_id).execute()
+                logger.info(f"[ONEDRIVE_REFRESH] Tokens cleared from DB for account_id={account_id}")
+                
+                # Update provider_account to reflect cleared tokens
+                provider_account_cleared = provider_account.copy()
+                provider_account_cleared["access_token"] = None
+                provider_account_cleared["refresh_token"] = None
+                provider_account_cleared["token_expiry"] = None
+                
+                return {
+                    "success": False,
+                    "error_type": "invalid_grant",
+                    "updated_account": provider_account_cleared
+                }
+            except Exception as db_err:
+                logger.error(f"[ONEDRIVE_REFRESH] Failed to clear tokens from DB for account_id={account_id}: {db_err}")
+                return {
+                    "success": False,
+                    "error_type": "invalid_grant",
+                    "updated_account": provider_account
+                }
         
         # Caso 2: interaction_required (requiere consentimiento usuario)
-        # SOFT-FAIL: NO marcar is_active=false, solo retornar error
+        # Clear tokens from DB so they can't be used anymore
         if "interaction_required" in error_code_lower or "interaction_required" in error_msg_lower:
             logger.warning(
                 f"[ONEDRIVE_REFRESH] interaction_required detected for account_id={account_id}. "
-                f"Soft-fail: NOT disconnecting automatically, user must reconnect manually."
+                f"Clearing tokens from database to force reconnection."
             )
             
-            return {
-                "success": False,
-                "error_type": "interaction_required",
-                "updated_account": provider_account
-            }
+            # Clear tokens from database
+            try:
+                supabase.table("cloud_provider_accounts").update({
+                    "access_token": None,
+                    "refresh_token": None,
+                    "token_expiry": None
+                }).eq("id", account_id).execute()
+                logger.info(f"[ONEDRIVE_REFRESH] Tokens cleared from DB for account_id={account_id}")
+                
+                # Update provider_account to reflect cleared tokens
+                provider_account_cleared = provider_account.copy()
+                provider_account_cleared["access_token"] = None
+                provider_account_cleared["refresh_token"] = None
+                provider_account_cleared["token_expiry"] = None
+                
+                return {
+                    "success": False,
+                    "error_type": "interaction_required",
+                    "updated_account": provider_account_cleared
+                }
+            except Exception as db_err:
+                logger.error(f"[ONEDRIVE_REFRESH] Failed to clear tokens from DB for account_id={account_id}: {db_err}")
+                return {
+                    "success": False,
+                    "error_type": "interaction_required",
+                    "updated_account": provider_account
+                }
         
         # Caso 3: invalid_client o unauthorized_client (config OAuth incorrecta)
         if "invalid_client" in error_code_lower or "invalid_client" in error_msg_lower or \

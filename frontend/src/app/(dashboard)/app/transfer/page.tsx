@@ -11,6 +11,12 @@ interface CloudAccount {
   id: string;
   provider: "google_drive" | "onedrive";
   email: string;
+  provider_email: string; // Email associated with the provider account
+  cloud_account_id: string; // UUID string from cloud_provider_accounts.id
+  can_reconnect?: boolean; // Optional property for reconnection status
+  connection_status?: "connected" | "needs_reconnect" | "disconnected"; // Optional connection status
+  provider_account_uuid?: string | null; // Optional UUID for routing
+  has_refresh_token?: boolean; // Optional refresh token status
 }
 
 interface FileItem {
@@ -37,38 +43,19 @@ export default function CloudTransferPage() {
 
   // Cargar cuentas conectadas
   useEffect(() => {
-    console.log('[DEBUG] Iniciando carga de cuentas...');
-
     authenticatedFetch("/me/cloud-status")
       .then(async (res) => {
-        console.log('[DEBUG] Respuesta recibida, status:', res.status);
-
         if (!res.ok) throw new Error("Error al cargar cuentas");
 
         const data = await res.json();
-        console.log('[DEBUG] Data completa del backend:', data);
-        if (data.accounts && data.accounts.length > 0) {
-          console.log('[DEBUG] Primera cuenta COMPLETA:', JSON.stringify(data.accounts[0], null, 2));
-          console.log('[DEBUG] Todas las cuentas:', data.accounts);
-          console.log('[DEBUG] Campos disponibles en primera cuenta:', Object.keys(data.accounts[0]));
-        }
-
         const accountsArray = Array.isArray(data) ? data : data.accounts || [];
-        console.log('[DEBUG] Array de cuentas a setear:', accountsArray);
-        console.log('[DEBUG] Cantidad de cuentas:', accountsArray.length);
-
         setAccounts(accountsArray);
       })
       .catch((err) => {
-        console.error('[DEBUG] Error al cargar cuentas:', err);
+        console.error('Error al cargar cuentas:', err);
         setError("No se pudieron cargar las cuentas conectadas");
       });
   }, []);
-
-  useEffect(() => {
-    console.log('[DEBUG] Estado de accounts cambió:', accounts);
-    console.log('[DEBUG] Cantidad en estado:', accounts.length);
-  }, [accounts]);
 
   // Cargar archivos de la cuenta origen
   useEffect(() => {
@@ -88,37 +75,23 @@ export default function CloudTransferPage() {
 
     setSelectedAccountNeedsReconnect(false);
 
-    console.log('[DEBUG] Cargando archivos para cuenta:', sourceAccount);
-    console.log('[DEBUG] Account completa:', account);
-    console.log('[DEBUG] Provider:', account?.provider);
-
     // Usar endpoint correcto según provider
     const provider = account?.provider;
     const endpoint = provider === 'onedrive' 
       ? `/onedrive/${sourceAccount}/files?folder_id=root`
       : `/drive/${sourceAccount}/files?folder_id=root`;
-    
-    console.log('[DEBUG] Endpoint a llamar:', endpoint);
 
     authenticatedFetch(endpoint)
       .then(async (res) => {
-        console.log('[DEBUG] Response status:', res.status);
-        
         if (!res.ok) {
           const errorText = await res.text();
-          console.error('[DEBUG] Error response:', errorText);
           throw new Error(`HTTP ${res.status}: ${errorText}`);
         }
         
         const data = await res.json();
-        console.log('[DEBUG] Response data:', data);
-        console.log('[DEBUG] Files count:', data.files?.length || 0);
         
         // OneDrive usa "items", Google Drive usa "files"
         const filesList = data.items || data.files || [];
-
-        console.log('[DEBUG] Lista de archivos/items:', filesList);
-        console.log('[DEBUG] Cantidad:', filesList.length);
 
         setSourceFiles(
           filesList.map((f: any) => ({
@@ -131,7 +104,7 @@ export default function CloudTransferPage() {
         );
       })
       .catch((err) => {
-        console.error('[DEBUG] Error al cargar archivos:', err);
+        console.error('Error al cargar archivos:', err);
         setError("No se pudieron cargar los archivos de origen");
       });
   }, [sourceAccount, accounts]);
@@ -143,27 +116,19 @@ export default function CloudTransferPage() {
       return;
     }
 
-    console.log('[DEBUG] Cargando carpetas para cuenta destino:', destAccount);
-
     const account = accounts.find(a => a.cloud_account_id === destAccount);
     const endpoint = account?.provider === 'onedrive'
       ? `/onedrive/${destAccount}/folders?parent_id=${destPath}`
       : `/drive/${destAccount}/folders?parent_id=${destPath}`;
 
-    console.log('[DEBUG] Endpoint a llamar para carpetas destino:', endpoint);
-
     authenticatedFetch(endpoint)
       .then(async (res) => {
-        console.log('[DEBUG] Response status:', res.status);
-
         if (!res.ok) {
           const errorText = await res.text();
-          console.error('[DEBUG] Error response:', errorText);
           throw new Error(`HTTP ${res.status}: ${errorText}`);
         }
 
         const data = await res.json();
-        console.log('[DEBUG] Response data:', data);
 
         const foldersList = data.items || data.folders || [];
 
@@ -176,7 +141,7 @@ export default function CloudTransferPage() {
         );
       })
       .catch((err) => {
-        console.error('[DEBUG] Error al cargar carpetas destino:', err);
+        console.error('Error al cargar carpetas destino:', err);
         setError("No se pudieron cargar las carpetas de destino");
       });
   }, [destAccount, destPath, accounts]);
@@ -243,16 +208,12 @@ export default function CloudTransferPage() {
     // OneDrive usa un endpoint diferente al de Google
     if (account.provider === 'onedrive') {
       reconnectUrl = `${apiBaseUrl}/auth/onedrive/login-url?mode=reconnect&reconnect_account_id=${accountId}`;
-    } else if (account.provider === 'google' || account.provider === 'google_drive') {
+    } else if (account.provider === 'google_drive') {
       reconnectUrl = `${apiBaseUrl}/auth/google?mode=reconnect&reconnect_account_id=${accountId}`;
     } else {
       console.error('[ERROR] Provider no soportado:', account.provider);
       return;
     }
-    
-    console.log('[DEBUG] Redirigiendo a reconexión:', reconnectUrl);
-    console.log('[DEBUG] Provider:', account.provider);
-    console.log('[DEBUG] Account ID:', accountId);
     
     // Para OneDrive, el endpoint devuelve JSON con la URL, necesitamos hacer fetch primero
     if (account.provider === 'onedrive') {
@@ -266,7 +227,6 @@ export default function CloudTransferPage() {
         }
         
         const data = await response.json();
-        console.log('[DEBUG] Respuesta de login-url:', data);
         
         if (data.login_url) {
           window.location.href = data.login_url;
@@ -292,11 +252,6 @@ export default function CloudTransferPage() {
           {/* Panel Origen */}
           <div className="bg-slate-800 rounded-lg p-4 flex flex-col h-full">
             <div className="mb-2 font-semibold">Cuenta Origen</div>
-            <div className="text-xs text-yellow-400 mb-2">
-              DEBUG: {accounts.length} cuentas en estado
-              <br />
-              Providers: {accounts.map(a => a.provider).join(', ')}
-            </div>
             <select
               className="mb-4 p-2 rounded bg-slate-700 text-slate-200"
               value={sourceAccount || ""}
@@ -305,13 +260,12 @@ export default function CloudTransferPage() {
               <option value="">Selecciona una cuenta</option>
               {accounts
                 .filter(a => 
-                  a.provider === "google" || 
                   a.provider === "google_drive" || 
                   a.provider === "onedrive"
                 )
                 .map(a => (
                   <option key={a.cloud_account_id} value={a.cloud_account_id}>
-                    {a.provider === "google" || a.provider === "google_drive" ? "Google Drive" : "OneDrive"} - {a.provider_email}
+                    {a.provider === "google_drive" ? "Google Drive" : "OneDrive"} - {a.provider_email}
                   </option>
                 ))}
             </select>
@@ -332,8 +286,6 @@ export default function CloudTransferPage() {
                       </p>
                       <button
                         onClick={() => {
-                          console.log('[DEBUG] Account ID seleccionado:', sourceAccount);
-                          console.log('[DEBUG] Account completa:', accounts.find(a => a.cloud_account_id === sourceAccount));
                           handleReconnect(sourceAccount);
                         }}
                         className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
@@ -375,12 +327,11 @@ export default function CloudTransferPage() {
               <option value="">Selecciona una cuenta</option>
               {accounts
                 .filter(a => 
-                  a.provider === "google" || 
                   a.provider === "google_drive" || 
                   a.provider === "onedrive"
                 )
                 .map(a => (
-                  <option key={a.cloud_account_id} value={a.cloud_account_id}>{a.provider === "google" || a.provider === "google_drive" ? "Google Drive" : "OneDrive"} - {a.provider_email}</option>
+                  <option key={a.cloud_account_id} value={a.cloud_account_id}>{a.provider === "google_drive" ? "Google Drive" : "OneDrive"} - {a.provider_email}</option>
                 ))}
             </select>
             <div className="flex-1 overflow-y-auto border rounded bg-slate-900">

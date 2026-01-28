@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ExplorerSidebar } from "./ExplorerSidebar";
+import { SimpleSidebar } from "./SimpleSidebar";
 
 /**
  * Main sidebar layout wrapper with desktop/mobile support
@@ -20,7 +20,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
       {/* Desktop Sidebar - Fixed */}
       <aside className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 md:z-30">
         <div className="flex-1 flex flex-col">
-          <ExplorerSidebar />
+          <SimpleSidebar />
         </div>
         <div className="mt-4 px-4 py-2 text-[10px] text-slate-500 select-none">
           build: {buildId}
@@ -38,7 +38,7 @@ export function SidebarLayout({ children }: { children: React.ReactNode }) {
       {/* Mobile Drawer */}
       {mobileOpen && (
         <aside className="fixed inset-y-0 left-0 w-64 z-50 md:hidden">
-          <ExplorerSidebar onNavigate={() => setMobileOpen(false)} />
+          <SimpleSidebar onNavigate={() => setMobileOpen(false)} />
         </aside>
       )}
 

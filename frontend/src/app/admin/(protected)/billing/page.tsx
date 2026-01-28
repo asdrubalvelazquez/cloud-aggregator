@@ -219,21 +219,6 @@ export default function BillingPage() {
                     >
                       Resync
                     </button>
-                    <button
-                      onClick={() => console.log("Cancel not implemented")}
-                      style={{
-                        padding: "0.375rem 0.75rem",
-                        fontSize: "0.75rem",
-                        fontWeight: "500",
-                        color: "#374151",
-                        backgroundColor: "#f9fafb",
-                        border: "1px solid #d1d5db",
-                        borderRadius: "4px",
-                        cursor: "pointer",
-                      }}
-                    >
-                      Cancel
-                    </button>
                   </div>
                 </td>
               </tr>

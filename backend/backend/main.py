@@ -1,3 +1,67 @@
+async def ensure_valid_token(account_id: str, provider: str) -> bool:
+    """
+    Verifica si el token de una cuenta es válido.
+    SOLO refresca si realmente es necesario.
+
+    Condiciones para NO refrescar:
+    - Token válido por más de 10 minutos
+    - Se refrescó hace menos de 5 minutos
+    - Cuenta no está activa
+
+    Returns:
+        True si el token es válido
+        False si el refresh falló
+    """
+    try:
+        # Obtener cuenta de la DB
+        result = supabase.table("cloud_accounts")\
+            .select("token_expiry, refresh_token, is_active, last_token_refresh")\
+            .eq("id", account_id)\
+            .single()\
+            .execute()
+
+        if not result.data or not result.data.get('is_active'):
+            logging.warning(f"[TOKEN] Account {account_id} not found or inactive")
+            return False
+
+        account = result.data
+        now = datetime.utcnow()
+
+        # Si no hay expires_at, asumir válido pero loggear warning
+        if not account.get('token_expiry'):
+            logging.warning(f"[TOKEN] No expires_at for {account_id}")
+            # NO refrescar automáticamente, dejar que falle naturalmente
+            return True
+
+        # Parsear timestamps
+        expires_at = datetime.fromisoformat(account['token_expiry'].replace('Z', '+00:00'))
+        last_refresh = None
+        if account.get('last_token_refresh'):
+            last_refresh = datetime.fromisoformat(account['last_token_refresh'].replace('Z', '+00:00'))
+        
+        # REGLA 1: Si token válido por más de 10 minutos, no hacer nada
+        if expires_at > (now + timedelta(minutes=10)):
+            logging.debug(f"[TOKEN] Token for {account_id} valid until {expires_at}, no refresh needed")
+            return True
+        
+        # REGLA 2: Si se refrescó hace menos de 5 minutos, no reintentar
+        if last_refresh and (now - last_refresh) < timedelta(minutes=5):
+            logging.debug(f"[TOKEN] Token for {account_id} was refreshed {(now - last_refresh).seconds}s ago, skipping")
+            # Si ya expiró y no se pudo refrescar, retornar False
+            return expires_at > now
+        
+        # REGLA 3: Token expira pronto y no se ha refrescado recientemente
+        if expires_at < (now + timedelta(minutes=5)):
+            logging.info(f"[TOKEN] Token for {account_id} expiring soon ({expires_at}), refreshing...")
+            return await attempt_token_refresh(account_id, provider)
+        
+        # Token válido
+        return True
+        
+    except Exception as e:
+        logging.error(f"[TOKEN] Error checking token for {account_id}: {e}")
+        # En caso de error, asumir válido y dejar que falle naturalmente
+        return True
 import os
 import hashlib
 import logging
@@ -1956,57 +2020,87 @@ async def get_onedrive_files(
                 }
             )
         
-        # 2. Check if token is expired and refresh if needed
-        token_expiry = account.get("token_expiry")
+        # 2. PROACTIVE TOKEN REFRESH - Always refresh if token is expired or missing
+        # OneDrive tokens expire after 1 hour, so we must check and refresh before using
+        token_is_expired = False
+        token_needs_refresh = False
         
-        if token_expiry:
-            expiry_dt = datetime.fromisoformat(token_expiry.replace("Z", "+00:00"))
-            now = datetime.now(timezone.utc)
-            
-            # Refresh if token expires in less than 5 minutes
-            if expiry_dt <= now + timedelta(minutes=5):
-                logging.info(f"[ONEDRIVE] Token expired/expiring for account {account_id}, refreshing...")
+        # Check if token is missing
+        if not access_token:
+            token_needs_refresh = True
+            logging.warning(f"[ONEDRIVE] Missing access token for account {account_id}")
+        
+        # Check if token is expired
+        if account.get("token_expiry") and not token_needs_refresh:
+            try:
+                expiry_dt = datetime.fromisoformat(account["token_expiry"].replace("Z", "+00:00"))
+                time_until_expiry = expiry_dt - datetime.now(timezone.utc)
                 
-                # Validate refresh_token exists
-                if not refresh_token or not refresh_token.strip():
-                    logging.error(f"[ONEDRIVE] Missing refresh_token for account {account_id}")
-                    raise HTTPException(
-                        status_code=401,
-                        detail={
-                            "error_code": "MISSING_REFRESH_TOKEN",
-                            "message": "OneDrive needs reconnect",
-                            "detail": "No refresh token available"
-                        }
-                    )
-                
-                try:
-                    refresh_result = await refresh_onedrive_token(refresh_token)
-                    
-                    # Build update payload (always update access_token and expiry)
-                    update_payload = {
-                        "access_token": encrypt_token(refresh_result["access_token"]),
-                        "token_expiry": refresh_result["token_expiry"].isoformat(),
-                        "updated_at": datetime.utcnow().isoformat()
-                    }
-                    
-                    # CRITICAL: Only update refresh_token if Microsoft rotated it
-                    # Prevents double encryption bug when Microsoft returns the same token
-                    new_refresh = refresh_result.get("refresh_token")
-                    if new_refresh and new_refresh != refresh_token:
-                        update_payload["refresh_token"] = encrypt_token(new_refresh)
-                        logging.info(f"[ONEDRIVE] Microsoft rotated refresh_token for account {account_id}")
+                # Token is expired or expires very soon (< 2 minutes)
+                if time_until_expiry.total_seconds() < 120:
+                    token_is_expired = time_until_expiry.total_seconds() <= 0
+                    token_needs_refresh = True
+                    if token_is_expired:
+                        logging.info(f"[ONEDRIVE] Token EXPIRED for account {account_id}, refreshing before use")
                     else:
-                        logging.info(f"[ONEDRIVE] Preserving existing refresh_token (not rotated) for account {account_id}")
+                        logging.info(f"[ONEDRIVE] Token expires soon ({time_until_expiry.total_seconds()}s) for account {account_id}, refreshing proactively")
+            except Exception as parse_err:
+                logging.warning(f"[ONEDRIVE] Could not parse token_expiry: {parse_err}, will attempt refresh")
+                token_needs_refresh = True
+        
+        # Attempt refresh if needed
+        if token_needs_refresh and refresh_token:
+            try:
+                from backend.onedrive import try_refresh_onedrive_token
+                refresh_result = await try_refresh_onedrive_token(provider_account={"id": account_id, **account})
+                
+                if refresh_result.get("success"):
+                    # Decrypt new tokens from updated account
+                    updated_account = refresh_result["updated_account"]
+                    try:
+                        access_token = decrypt_token(updated_account["access_token"]) if updated_account.get("access_token") else None
+                        if updated_account.get("refresh_token"):
+                            refresh_token = decrypt_token(updated_account["refresh_token"])
+                        logging.info(f"[ONEDRIVE] Token refresh successful for account {account_id}")
+                    except Exception as decrypt_err:
+                        logging.error(f"[ONEDRIVE] Failed to decrypt refreshed tokens: {decrypt_err}")
+                        raise HTTPException(
+                            status_code=500,
+                            detail={"error_code": "DECRYPTION_ERROR", "message": "Failed to decrypt refreshed tokens"}
+                        )
+                else:
+                    # Refresh failed - tokens are invalid
+                    error_type = refresh_result.get("error_type", "unknown")
+                    logging.warning(f"[ONEDRIVE] Token refresh failed for account {account_id}: {error_type}")
                     
-                    supabase.table("cloud_provider_accounts").update(update_payload).eq("id", account_id).execute()
-                    
-                    access_token = refresh_result["access_token"]  # Use fresh plaintext token
-                    logging.info(f"[ONEDRIVE] Token refreshed successfully for account {account_id}")
-                    
-                except HTTPException as refresh_error:
-                    # Propagate 401 errors from refresh_onedrive_token
-                    logging.error(f"[ONEDRIVE] Token refresh failed for account {account_id}: {refresh_error.detail}")
-                    raise
+                    # If tokens are permanently invalid (invalid_grant, no_refresh_token), return 401
+                    if error_type in ["invalid_grant", "interaction_required", "no_refresh_token"]:
+                        raise HTTPException(
+                            status_code=401,
+                            detail={
+                                "error_code": "ONEDRIVE_NEEDS_RECONNECT",
+                                "message": "OneDrive account needs reconnection",
+                                "detail": f"Token refresh failed: {error_type}"
+                            }
+                        )
+                    # For other errors, try with current token (might still work)
+                    logging.info(f"[ONEDRIVE] Will try with current token despite refresh failure")
+            except HTTPException:
+                raise
+            except Exception as refresh_err:
+                logging.error(f"[ONEDRIVE] Unexpected error during token refresh: {refresh_err}")
+                # Try with current token
+        elif token_needs_refresh and not refresh_token:
+            # No refresh token available - account needs reconnection
+            logging.error(f"[ONEDRIVE] No refresh token available for account {account_id}")
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error_code": "ONEDRIVE_NEEDS_RECONNECT",
+                    "message": "OneDrive account needs reconnection",
+                    "detail": "No refresh token available"
+                }
+            )
         
         # 3. List files from OneDrive
         try:
@@ -2017,7 +2111,21 @@ async def get_onedrive_files(
             )
             logging.info(f"[ONEDRIVE] Successfully listed files for account {account_id}, items={len(files_result['items'])}")
         except HTTPException as graph_error:
-            # Propagate structured errors from list_onedrive_files (401, 404, etc.)
+            # If 401 Unauthorized, tokens are invalid - clear them from DB and mark account inactive
+            if graph_error.status_code == 401:
+                logging.warning(f"[ONEDRIVE] 401 Unauthorized for account {account_id}, clearing tokens and marking inactive")
+                try:
+                    supabase.table("cloud_provider_accounts").update({
+                        "access_token": None,
+                        "refresh_token": None,
+                        "token_expiry": None,
+                        "is_active": False  # Mark account as inactive so UI shows needs_reconnect
+                    }).eq("id", account_id).execute()
+                    logging.info(f"[ONEDRIVE] Tokens cleared and account marked inactive for account {account_id}")
+                except Exception as db_err:
+                    logging.error(f"[ONEDRIVE] Failed to clear tokens: {db_err}")
+            
+            # Propagate error to frontend
             logging.error(f"[ONEDRIVE] Graph API error for account {account_id}: {graph_error.detail}")
             raise
         
@@ -3646,7 +3754,7 @@ def classify_account_status(slot: dict, cloud_account: dict) -> dict:
     
     REGLAS DE ESTADO (MultCloud-style):
     1. "disconnected": Usuario desconectó manualmente (is_active=false en SLOT)
-    2. "needs_reconnect": Tokens inválidos/expirados (soft state, NO modifica is_active)
+    2. "needs_reconnect": Tokens inválidos/expirados/faltantes (soft state, NO modifica is_active)
     3. "connected": Tokens válidos y operacionales
     
     IMPORTANTE: Esta función NO modifica datos - solo lee y clasifica.
@@ -3673,30 +3781,88 @@ def classify_account_status(slot: dict, cloud_account: dict) -> dict:
             "auth_notice": None
         }
 
-    # Siempre "connected" si slot activo
-    connection_status = "connected"
-    reason = None
-    can_reconnect = False
-    auth_notice = None
+    # Caso 2: Slot activo pero sin cloud_account (cuenta nunca conectada o eliminada)
+    if not cloud_account:
+        return {
+            "connection_status": "needs_reconnect",
+            "reason": "account_not_found",
+            "can_reconnect": True,
+            "auth_notice": {"type": "reauth_required", "reason": "account_not_found"}
+        }
 
-    # Si no hay cloud_account, no auth_notice (solo connected)
-    if cloud_account is not None:
-        access_token = cloud_account.get("access_token")
-        refresh_token = cloud_account.get("refresh_token")
+    # Caso 3: Validar tokens
+    access_token = cloud_account.get("access_token")
+    refresh_token = cloud_account.get("refresh_token")
+    token_expiry = cloud_account.get("token_expiry")
+    is_account_active = cloud_account.get("is_active", True)
 
-        # Señales confiables de revocación: falta access_token o refresh_token
-        if not access_token:
-            auth_notice = {"type": "reauth_required", "reason": "missing_access_token"}
-            can_reconnect = True
-        elif not refresh_token:
-            auth_notice = {"type": "reauth_required", "reason": "missing_refresh_token"}
-            can_reconnect = True
+    # Si la cuenta está marcada como inactiva en la tabla de cuentas
+    if not is_account_active:
+        return {
+            "connection_status": "needs_reconnect",
+            "reason": "account_inactive",
+            "can_reconnect": True,
+            "auth_notice": {"type": "reauth_required", "reason": "account_inactive"}
+        }
 
+    # Validar que existan los tokens necesarios
+    if not access_token:
+        return {
+            "connection_status": "needs_reconnect",
+            "reason": "missing_access_token",
+            "can_reconnect": True,
+            "auth_notice": {"type": "reauth_required", "reason": "missing_access_token"}
+        }
+
+    if not refresh_token:
+        return {
+            "connection_status": "needs_reconnect",
+            "reason": "missing_refresh_token",
+            "can_reconnect": True,
+            "auth_notice": {"type": "reauth_required", "reason": "missing_refresh_token"}
+        }
+
+    # Caso 4: Verificar si el token está expirado
+    # IMPORTANTE: Para OneDrive, los tokens access_token expiran en 1 hora y refresh_token en 90 días.
+    # Si el token expiró hace mucho tiempo (ej: 2+ días sin uso), el refresh_token también puede estar inválido.
+    # Por lo tanto, NO asumir que la cuenta está "connected" solo porque hay refresh_token.
+    # Marcar como "needs_reconnect" si el access_token está expirado - el endpoint de archivos intentará
+    # refrescar automáticamente, y si falla, pedirá OAuth de nuevo.
+    if token_expiry:
+        try:
+            expiry_dt = datetime.fromisoformat(token_expiry.replace("Z", "+00:00"))
+            # Si el token expiró
+            if expiry_dt < datetime.now(timezone.utc):
+                # Token expirado - marcar como needs_reconnect
+                # El sistema intentará refrescar automáticamente en el próximo uso
+                # Si el refresh falla, pedirá OAuth completo
+                logging.info(
+                    f"[classify_account_status] Token expired for slot {slot.get('id')}, marking as needs_reconnect"
+                )
+                return {
+                    "connection_status": "needs_reconnect",
+                    "reason": "token_expired",
+                    "can_reconnect": True,
+                    "auth_notice": {"type": "reauth_required", "reason": "token_expired"}
+                }
+        except (ValueError, AttributeError) as e:
+            # If can't parse expiry date, log warning and mark as needs_reconnect to be safe
+            logging.warning(
+                f"[classify_account_status] Could not parse token_expiry for slot_log_id={slot.get('id')}: {e}"
+            )
+            return {
+                "connection_status": "needs_reconnect",
+                "reason": "invalid_token_expiry",
+                "can_reconnect": True,
+                "auth_notice": {"type": "reauth_required", "reason": "invalid_expiry"}
+            }
+
+    # Caso 5: Todo OK - cuenta conectada y operacional
     return {
-        "connection_status": connection_status,
-        "reason": reason,
-        "can_reconnect": can_reconnect,
-        "auth_notice": auth_notice
+        "connection_status": "connected",
+        "reason": None,
+        "can_reconnect": False,
+        "auth_notice": None
     }
 
 
@@ -3786,111 +3952,10 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
                 # OneDrive/Dropbox/others use cloud_provider_accounts
                 cloud_account = provider_accounts_map.get((slot_provider, slot_provider_id))
             
-            # 4b. AUTOMATIC REFRESH for Google Drive (MultCloud-style persistence)
-            # If token expired but refresh_token exists, try silent refresh before classifying
-            if slot_provider == "google_drive" and cloud_account:
-                token_expiry = cloud_account.get("token_expiry")
-                refresh_token = cloud_account.get("refresh_token")
-                is_active = cloud_account.get("is_active", True)
-                
-                # Skip auto-refresh if account already marked inactive (needs manual reconnect)
-                if not is_active:
-                    logging.info(
-                        f"[CLOUD_STATUS] Skipping auto-refresh for account_id={cloud_account.get('id')} "
-                        f"(is_active=False, needs manual reconnect)"
-                    )
-                # Check if token is expired or about to expire (<120s buffer)
-                elif refresh_token:  # Only try refresh if refresh_token exists
-                    token_needs_refresh = False
-                    if token_expiry:
-                        try:
-                            expiry_dt = datetime.fromisoformat(token_expiry.replace("Z", "+00:00"))
-                            buffer = timedelta(seconds=120)
-                            token_needs_refresh = expiry_dt < (datetime.now(timezone.utc) + buffer)
-                        except (ValueError, AttributeError):
-                            token_needs_refresh = True
-                    else:
-                        token_needs_refresh = True  # No expiry info
-                    
-                    # If token expired, try refresh (we already know refresh_token exists)
-                    if token_needs_refresh:
-                        logging.info(
-                            f"[CLOUD_STATUS] Auto-refresh attempt for account_id={cloud_account.get('id')} "
-                            f"email={cloud_account.get('account_email')}"
-                        )
-                        
-                        refresh_result = await try_refresh_google_token(cloud_account)
-                        
-                        if refresh_result["success"]:
-                            # Refresh succeeded - update cloud_account with new token data
-                            cloud_account = refresh_result["updated_account"]
-                            # Update accounts_map for subsequent slots (avoid re-refresh)
-                            accounts_map[slot_provider_id] = cloud_account
-                            logging.info(
-                                f"[CLOUD_STATUS] Auto-refresh SUCCESS for account_id={cloud_account.get('id')}"
-                            )
-                        else:
-                            # Refresh failed - log but don't crash (classify_account_status will handle)
-                            error_type = refresh_result.get("error_type", "unknown")
-                            logging.warning(
-                                f"[CLOUD_STATUS] Auto-refresh FAILED for account_id={cloud_account.get('id')} "
-                                f"error={error_type}"
-                            )
-                            # If invalid_grant, tokens were cleared - user must reconnect
-                            if error_type == "invalid_grant":
-                                logging.warning(
-                                    f"[CLOUD_STATUS] Token revoked for account_id={cloud_account.get('id')}, "
-                                    f"user must reconnect"
-                                )
-            
-            # 4c. AUTOMATIC REFRESH for OneDrive (MultCloud-style persistence)
-            # If token expired but refresh_token exists, try silent refresh before classifying
-            if slot_provider == "onedrive" and cloud_account:
-                token_expiry = cloud_account.get("token_expiry")
-                refresh_token = cloud_account.get("refresh_token")
-                
-                # Check if token is expired or about to expire (<120s buffer)
-                token_needs_refresh = False
-                if token_expiry:
-                    try:
-                        expiry_dt = datetime.fromisoformat(token_expiry.replace("Z", "+00:00"))
-                        buffer = timedelta(seconds=120)
-                        token_needs_refresh = expiry_dt < (datetime.now(timezone.utc) + buffer)
-                    except (ValueError, AttributeError):
-                        token_needs_refresh = True
-                else:
-                    token_needs_refresh = True  # No expiry info
-                
-                # If token expired and refresh_token exists, try refresh
-                if token_needs_refresh and refresh_token:
-                    logging.info(
-                        f"[CLOUD_STATUS][ONEDRIVE] Auto-refresh attempt for account_id={cloud_account.get('id')} "
-                        f"email={cloud_account.get('account_email')}"
-                    )
-                    
-                    refresh_result = await try_refresh_onedrive_token(cloud_account)
-                    
-                    if refresh_result["success"]:
-                        # Refresh succeeded - update cloud_account with new token data
-                        cloud_account = refresh_result["updated_account"]
-                        # Update provider_accounts_map for subsequent slots (avoid re-refresh)
-                        provider_accounts_map[(slot_provider, slot_provider_id)] = cloud_account
-                        logging.info(
-                            f"[CLOUD_STATUS][ONEDRIVE] Auto-refresh SUCCESS for account_id={cloud_account.get('id')}"
-                        )
-                    else:
-                        # Refresh failed - log but don't crash (classify_account_status will handle)
-                        error_type = refresh_result.get("error_type", "unknown")
-                        logging.warning(
-                            f"[CLOUD_STATUS][ONEDRIVE] Auto-refresh FAILED for account_id={cloud_account.get('id')} "
-                            f"error={error_type}"
-                        )
-                        # If invalid_grant or interaction_required, user must reconnect
-                        if error_type in ("invalid_grant", "interaction_required"):
-                            logging.warning(
-                                f"[CLOUD_STATUS][ONEDRIVE] Token revoked/interaction required for account_id={cloud_account.get('id')}, "
-                                f"user must reconnect"
-                            )
+            # 4b. NO AUTO-REFRESH - Simple approach
+            # Let tokens expire naturally, then user reconnects with fresh OAuth flow
+            # This is simpler, more predictable, and avoids refresh failures
+            # When tokens expire and API calls fail with 401, they'll be cleared and user prompted to reconnect
             
             # 5. Classify status (after potential refresh)
             status = classify_account_status(slot, cloud_account)

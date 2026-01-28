@@ -3,7 +3,8 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { useCloudStatusQuery } from "@/queries/useCloudStatusQuery";
+import { useQueryClient } from "@tanstack/react-query";
+import { useCloudStatusQuery, CLOUD_STATUS_KEY } from "@/queries/useCloudStatusQuery";
 import { fetchOneDriveFiles, fetchOneDriveAccountInfo, renameOneDriveItem, getOneDriveDownloadUrl } from "@/lib/api";
 import { authenticatedFetch } from "@/lib/api";
 import type { OneDriveListResponse, OneDriveItem, CloudAccountStatus } from "@/lib/api";
@@ -18,6 +19,7 @@ export default function OneDriveFilesPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const accountId = params.id as string;
+  const queryClient = useQueryClient();
 
   // Debug mode (persistent via localStorage)
   const debug =
@@ -50,6 +52,14 @@ export default function OneDriveFilesPage() {
   const [files, setFiles] = useState<OneDriveItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // View mode state (list or grid)
+  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
+  
+  // Filter states
+  const [filterType, setFilterType] = useState<string>("all");
+  const [filterOwner, setFilterOwner] = useState<string>("all");
+  const [filterModified, setFilterModified] = useState<string>("all");
 
   // Rename modal state
   const [showRenameModal, setShowRenameModal] = useState(false);
@@ -132,31 +142,30 @@ export default function OneDriveFilesPage() {
   }, [files]);
 
   // Consume cloud status from React Query (replaces CloudStatusContext)
-  const { data: cloudStatus, error: cloudError, refetch: refetchCloudStatus } = useCloudStatusQuery();
+  const { data: cloudStatus, error: cloudError } = useCloudStatusQuery();
 
-  // Track last loaded account to prevent re-fetch when cloudStatus refreshes
-  const lastLoadedAccountRef = useRef<string | null>(null);
-
-  // Check connection status before loading files
+  // Check connection status and load files
   useEffect(() => {
     if (!accountId) return;
     
-    // Wait for cloudStatus to load from React Query
+    console.log("[OneDrive] Loading account:", accountId);
+    
+    // Clear state immediately for smooth transition
+    setFiles([]);
+    setCurrentFolderId("root");
+    setSelectedFiles(new Set());
+    setError(null);
+    setLoading(true);
+    
+    // Wait for cloudStatus to load from React Query (cached, no refetch needed)
     if (!cloudStatus) {
-      // Stop spinner if there's an error loading cloudStatus
+      console.log("[OneDrive] Waiting for cloudStatus...");
+      setCheckingConnection(true);
       if (cloudError) {
         setCheckingConnection(false);
+        setLoading(false);
         console.error("[OneDrive] CloudStatus error:", cloudError);
-        return;
       }
-      
-      // Request cloudStatus if not loaded yet (prevents infinite loading)
-      console.log("[OneDrive] CloudStatus not loaded, requesting refresh...");
-      setCheckingConnection(true);
-      refetchCloudStatus().catch(err => {
-        console.error("[OneDrive] Failed to refresh cloudStatus:", err);
-        setCheckingConnection(false);
-      });
       return;
     }
 
@@ -165,41 +174,43 @@ export default function OneDriveFilesPage() {
       (acc) => acc.provider_account_uuid === accountId
     );
     
-    // Always stop checking spinner
     setCheckingConnection(false);
     
     // Handle account not found
     if (!account) {
-      console.warn("[OneDrive] Account not found in cloudStatus:", accountId);
+      console.warn("[OneDrive] Account not found:", accountId);
       setAccountStatus(null);
-      setError("Cuenta no encontrada o no disponible");
+      setError("Cuenta no encontrada");
+      setLoading(false);
       return;
     }
     
     setAccountStatus(account);
 
-    const isConnected = account && account.connection_status === "connected";
-    const hasLoadedThisAccount = lastLoadedAccountRef.current === accountId;
+    const isConnected = account.connection_status === "connected";
     
-    // Only proceed if account exists, is connected, and we haven't loaded it yet
-    if (isConnected && !hasLoadedThisAccount) {
-      lastLoadedAccountRef.current = accountId;
-      
-      // Fetch account info
-      fetchOneDriveAccountInfo(accountId)
-        .then((info) => setAccountEmail(info.account_email))
-        .catch((err) => console.error("Failed to fetch account info:", err));
-      
-      // Fetch files
-      fetchFiles(null);
+    // Show reconnect modal if account needs reconnection
+    if (!isConnected) {
+      console.warn("[OneDrive] Account not connected:", account.connection_status);
+      setShowReconnectModal(true);
+      setError(`Esta cuenta ${account.connection_status === "disconnected" ? "está desconectada" : "necesita reconexión"}`);
+      setLoading(false);
+      return;
     }
-
-    // Reset ref if account disconnected (allow reload after reconnection)
-    if (!isConnected && hasLoadedThisAccount) {
-      lastLoadedAccountRef.current = null;
-    }
+    
+    // Load files immediately
+    console.log("[OneDrive] Fetching files...");
+    
+    // Fetch account info
+    fetchOneDriveAccountInfo(accountId)
+      .then((info) => setAccountEmail(info.account_email))
+      .catch((err) => console.error("Failed to fetch account info:", err));
+    
+    // Fetch files
+    fetchFiles(null);
+    
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accountId, cloudStatus]);
+  }, [accountId]);
 
   // Close context menu when account changes
   useEffect(() => {
@@ -240,7 +251,16 @@ export default function OneDriveFilesPage() {
       }
     } catch (e: any) {
       if (seq === fetchSeqRef.current) {
-        setError(e.message || "Error al cargar archivos de OneDrive");
+        const errorMessage = e.message || "Error al cargar archivos de OneDrive";
+        setError(errorMessage);
+        
+        // If 401 error, invalidate cloud status cache to update modal
+        if (errorMessage.includes("401") || errorMessage.includes("HTTP 401")) {
+          console.log("[OneDrive] 401 detected, invalidating cloud status cache");
+          queryClient.invalidateQueries({ queryKey: [CLOUD_STATUS_KEY] });
+          // Show reconnect modal
+          setShowReconnectModal(true);
+        }
       }
     } finally {
       if (seq === fetchSeqRef.current) {
@@ -410,11 +430,8 @@ export default function OneDriveFilesPage() {
   // Recargar archivos cuando cambia la cuenta
   useEffect(() => {
     if (!accountId) {
-      console.log("[DEBUG] No accountId, skipping files fetch");
       return;
     }
-
-    console.log("[DEBUG] AccountId changed, fetching files for:", accountId);
 
     // Limpiar estado anterior
     setFiles([]);
@@ -430,16 +447,14 @@ export default function OneDriveFilesPage() {
         }
 
         const data = await response.json();
-        console.log("[DEBUG] Files loaded:", data.items?.length || 0);
 
         setFiles(data.items || []);
         setIsSwitchingAccount(false);
       } catch (err: any) {
-        console.error("[DEBUG] Error loading files:", err);
+        console.error("Error loading files:", err);
 
         // Si es error 401 o token expirado, mostrar aviso de reconexión
         if (err.message && (err.message.includes('401') || err.message.includes('TOKEN'))) {
-          console.log('[DEBUG] Token expirado, cuenta necesita reconexión');
           setError("Esta cuenta necesita reconexión");
           setShowReconnectModal(true); // Activar modal de reconexión
         } else {
@@ -569,8 +584,114 @@ export default function OneDriveFilesPage() {
             </button>
           </div>
         )}
-        <div className="w-full max-w-6xl space-y-6">
-          {/* Header */}
+        <div className="w-full max-w-6xl space-y-4">
+          {/* Breadcrumb Navigation */}
+          <div className="flex items-center gap-2 text-sm">
+            {breadcrumb.map((crumb, index) => (
+              <div key={crumb.id || "root"} className="flex items-center gap-2">
+                {index > 0 && <span className="text-slate-600">/</span>}
+                <button
+                  onClick={() => handleBreadcrumbClick(index)}
+                  className={`${
+                    index === breadcrumb.length - 1
+                      ? "text-slate-300 font-medium"
+                      : "text-slate-400 hover:text-slate-200"
+                  } transition`}
+                >
+                  {crumb.name}
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {/* Filters Bar - Google Drive Style */}
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              {/* Tipo Filter */}
+              <select
+                value={filterType}
+                onChange={(e) => setFilterType(e.target.value)}
+                className="px-3 py-1.5 bg-transparent border border-slate-700 rounded-lg text-sm text-slate-300 hover:bg-slate-800 transition cursor-pointer"
+              >
+                <option value="all">Tipo</option>
+                <option value="folder">Carpetas</option>
+                <option value="document">Documentos</option>
+                <option value="spreadsheet">Hojas de cálculo</option>
+                <option value="pdf">PDF</option>
+                <option value="image">Imágenes</option>
+                <option value="video">Videos</option>
+              </select>
+
+              {/* Personas Filter */}
+              <select
+                value={filterOwner}
+                onChange={(e) => setFilterOwner(e.target.value)}
+                className="px-3 py-1.5 bg-transparent border border-slate-700 rounded-lg text-sm text-slate-300 hover:bg-slate-800 transition cursor-pointer"
+              >
+                <option value="all">Personas</option>
+                <option value="me">yo</option>
+                <option value="shared">Compartidos conmigo</option>
+              </select>
+
+              {/* Modificado Filter */}
+              <select
+                value={filterModified}
+                onChange={(e) => setFilterModified(e.target.value)}
+                className="px-3 py-1.5 bg-transparent border border-slate-700 rounded-lg text-sm text-slate-300 hover:bg-slate-800 transition cursor-pointer"
+              >
+                <option value="all">Modificado</option>
+                <option value="today">Hoy</option>
+                <option value="week">Esta semana</option>
+                <option value="month">Este mes</option>
+                <option value="year">Este año</option>
+              </select>
+            </div>
+
+            {/* View Toggle & Actions */}
+            <div className="flex items-center gap-2">
+              {/* View Mode Toggle */}
+              <div className="flex items-center border border-slate-700 rounded-lg overflow-hidden">
+                <button
+                  onClick={() => setViewMode("list")}
+                  className={`p-2 transition ${
+                    viewMode === "list"
+                      ? "bg-blue-600 text-white"
+                      : "text-slate-400 hover:bg-slate-800"
+                  }`}
+                  title="Vista de lista"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => setViewMode("grid")}
+                  className={`p-2 transition ${
+                    viewMode === "grid"
+                      ? "bg-blue-600 text-white"
+                      : "text-slate-400 hover:bg-slate-800"
+                  }`}
+                  title="Vista de cuadrícula"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Info Button */}
+              <button
+                className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition"
+                title="Información"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          {/* Header - Moved below filters */}
           <header className="flex items-center justify-between">
             <div>
               <h1 className="text-2xl md:text-3xl font-bold">OneDrive Files 🟦</h1>
@@ -579,15 +700,6 @@ export default function OneDriveFilesPage() {
               </p>
             </div>
             <div className="flex items-center gap-3">
-              {breadcrumb.length > 1 && (
-                <button
-                  type="button"
-                  onClick={handleBack}
-                  className="text-sm text-slate-400 hover:text-white transition"
-                >
-                  ← Atrás
-                </button>
-              )}
               <Link
                 href="/app"
                 className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium transition"
@@ -683,7 +795,7 @@ export default function OneDriveFilesPage() {
         {!loading && !error && (
           <div 
             ref={filesContainerRef}
-            className="bg-slate-800 rounded-lg shadow-lg overflow-hidden"
+            className="bg-transparent rounded-lg overflow-hidden"
           >
             {displayFiles.length === 0 ? (
               <div className="py-12 text-center text-slate-400">
@@ -693,20 +805,20 @@ export default function OneDriveFilesPage() {
               <div onClick={() => closeContextMenu()}>
               <table className="w-full">
                 <thead>
-                  <tr className="text-left border-b border-slate-700">
+                  <tr className="text-left border-b border-slate-700/50">
                     <th className="py-3 px-2 w-10"></th>
-                    <th className="py-3 px-4 text-slate-300 font-semibold">Nombre</th>
-                    <th className="py-3 px-4 text-slate-300 font-semibold">Tipo</th>
-                    <th className="py-3 px-4 text-slate-300 font-semibold">Tamaño</th>
-                    <th className="py-3 px-4 text-slate-300 font-semibold">Modificado</th>
-                    <th className="py-3 px-4 text-slate-300 font-semibold text-center">Acciones</th>
+                    <th className="py-3 px-4 text-slate-400 font-normal text-xs tracking-wide">Nombre</th>
+                    <th className="py-3 px-4 text-slate-400 font-normal text-xs tracking-wide">Propietario</th>
+                    <th className="py-3 px-4 text-slate-400 font-normal text-xs tracking-wide">Fecha de modificación</th>
+                    <th className="py-3 px-4 text-slate-400 font-normal text-xs tracking-wide">Tamaño del archivo</th>
+                    <th className="py-3 px-4 text-slate-400 font-normal text-xs tracking-wide text-center">Acciones</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="bg-transparent">
                   {displayFiles.map((file) => (
                     <tr
                       key={`${accountId}:${file.id}`}
-                      className="border-b border-slate-800 hover:bg-slate-700/40 transition"
+                      className="border-b border-slate-800/30 hover:bg-slate-800/30 transition cursor-pointer"
                       onContextMenu={(e) => handleRowContextMenu(e, file)}
                     >
                       {/* Checkbox */}
@@ -723,8 +835,10 @@ export default function OneDriveFilesPage() {
                           className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-600 focus:ring-blue-500 focus:ring-offset-slate-900 cursor-pointer"
                         />
                       </td>
-                      <td className="py-4 px-4">
-                        <div className="flex items-center gap-2">
+                      
+                      {/* Nombre */}
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-3">
                           <span className="text-xl">
                             {file.kind === "folder" ? "📁" : "📄"}
                           </span>
@@ -732,33 +846,38 @@ export default function OneDriveFilesPage() {
                             <button
                               onClick={() => handleOpenFolder(file.id, file.name)}
                               onMouseDown={(e) => e.stopPropagation()}
-                              className="font-medium text-blue-400 hover:text-blue-300 hover:underline transition"
+                              className="font-normal text-slate-200 hover:text-blue-400 hover:underline transition text-sm"
                             >
                               {file.name}
                             </button>
                           ) : (
-                            <span className="font-medium text-white">{file.name}</span>
+                            <span className="font-normal text-slate-200 text-sm">{file.name}</span>
                           )}
                         </div>
                       </td>
-                      <td className="py-4 px-4">
-                        <span
-                          className={`px-2 py-0.5 rounded text-xs font-medium ${
-                            file.kind === "folder"
-                              ? "bg-blue-500/20 text-blue-300"
-                              : "bg-slate-700 text-slate-300"
-                          }`}
-                        >
-                          {file.kind === "folder" ? "Carpeta" : "Archivo"}
-                        </span>
+
+                      {/* Propietario */}
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-xs font-semibold">
+                            {accountEmail ? accountEmail.charAt(0).toUpperCase() : "?"}
+                          </div>
+                          <span className="text-slate-400 text-sm">yo</span>
+                        </div>
                       </td>
-                      <td className="py-4 px-4 text-slate-300">
-                        {file.kind === "folder" ? "-" : formatSize(file.size)}
-                      </td>
-                      <td className="py-4 px-4 text-slate-300">
+
+                      {/* Fecha de modificación */}
+                      <td className="py-3 px-4 text-slate-400 text-sm">
                         {formatDate(file.modifiedTime)}
                       </td>
-                      <td className="py-4 px-4 text-center">
+
+                      {/* Tamaño del archivo */}
+                      <td className="py-3 px-4 text-slate-400 text-sm">
+                        {file.kind === "folder" ? "-" : formatSize(file.size)}
+                      </td>
+
+                      {/* Acciones */}
+                      <td className="py-3 px-4 text-center">
                         <OnedriveRowActionsMenu
                           fileId={file.id}
                           fileName={file.name}
