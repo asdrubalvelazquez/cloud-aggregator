@@ -397,6 +397,100 @@ export default function OneDriveFilesPage() {
     });
   };
 
+  // Get file icon based on file type
+  const getFileIcon = (file: OneDriveItem): string => {
+    if (file.kind === "folder") return "📁";
+    const name = file.name?.toLowerCase() || "";
+    
+    if (name.endsWith(".pdf")) return "📕";
+    if (name.endsWith(".docx") || name.endsWith(".doc")) return "📄";
+    if (name.endsWith(".xlsx") || name.endsWith(".xls")) return "📊";
+    if (name.endsWith(".pptx") || name.endsWith(".ppt")) return "📽️";
+    if (name.match(/\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)$/)) return "🖼️";
+    if (name.match(/\.(mp4|avi|mov|mkv|wmv|webm)$/)) return "🎥";
+    if (name.match(/\.(mp3|wav|ogg|m4a|flac|aac)$/)) return "🎵";
+    if (name.match(/\.(zip|rar|7z|tar|gz|bz2)$/)) return "📦";
+    if (name.match(/\.(txt|md|json|xml|csv|log)$/)) return "📝";
+    return "📄";
+  };
+
+  // Derived filtered files (with filters applied)
+  const filteredFiles = (() => {
+    if (!displayFiles) return displayFiles;
+    
+    let filtered = [...displayFiles];
+    
+    // Filter by type
+    if (filterType !== "all") {
+      filtered = filtered.filter(file => {
+        const name = file.name?.toLowerCase() || "";
+        
+        switch (filterType) {
+          case "folder":
+            return file.kind === "folder";
+          case "document":
+            return name.endsWith(".docx") || name.endsWith(".doc") || name.endsWith(".txt") || name.endsWith(".rtf");
+          case "spreadsheet":
+            return name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".csv");
+          case "pdf":
+            return name.endsWith(".pdf");
+          case "image":
+            return !!name.match(/\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)$/);
+          case "video":
+            return !!name.match(/\.(mp4|avi|mov|mkv|wmv|webm)$/);
+          default:
+            return true;
+        }
+      });
+    }
+    
+    // Filter by owner (for now "yo" shows all, "shared" shows nothing since we don't have shared info)
+    if (filterOwner !== "all") {
+      if (filterOwner === "shared") {
+        // OneDrive items don't have a shared property yet, so show nothing for "shared"
+        filtered = [];
+      }
+    }
+    
+    // Filter by modification date
+    if (filterModified !== "all") {
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const monthAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const yearAgo = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate());
+      
+      filtered = filtered.filter(file => {
+        if (!file.modifiedTime) return false;
+        const modDate = new Date(file.modifiedTime);
+        switch (filterModified) {
+          case "today":
+            return modDate >= today;
+          case "week":
+            return modDate >= weekAgo;
+          case "month":
+            return modDate >= monthAgo;
+          case "year":
+            return modDate >= yearAgo;
+          default:
+            return true;
+        }
+      });
+    }
+    
+    return filtered;
+  })();
+  
+  // Check if any filters are active
+  const hasActiveFilters = filterType !== "all" || filterOwner !== "all" || filterModified !== "all";
+  
+  // Clear all filters function
+  const clearFilters = () => {
+    setFilterType("all");
+    setFilterOwner("all");
+    setFilterModified("all");
+  };
+
   // Reset UI handler (debug only)
   const handleResetUI = async () => {
     if (!debug) return;
@@ -611,40 +705,65 @@ export default function OneDriveFilesPage() {
               <select
                 value={filterType}
                 onChange={(e) => setFilterType(e.target.value)}
-                className="px-3 py-1.5 bg-transparent border border-slate-700 rounded-lg text-sm text-slate-300 hover:bg-slate-800 transition cursor-pointer"
+                className={`px-3 py-1.5 border rounded-lg text-sm transition cursor-pointer ${
+                  filterType !== "all" 
+                    ? "bg-blue-600/20 border-blue-500 text-blue-300" 
+                    : "bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800"
+                }`}
               >
                 <option value="all">Tipo</option>
-                <option value="folder">Carpetas</option>
-                <option value="document">Documentos</option>
-                <option value="spreadsheet">Hojas de cálculo</option>
-                <option value="pdf">PDF</option>
-                <option value="image">Imágenes</option>
-                <option value="video">Videos</option>
+                <option value="folder">📁 Carpetas</option>
+                <option value="document">📄 Documentos</option>
+                <option value="spreadsheet">📊 Hojas de cálculo</option>
+                <option value="pdf">📕 PDF</option>
+                <option value="image">🖼️ Imágenes</option>
+                <option value="video">🎥 Videos</option>
               </select>
 
               {/* Personas Filter */}
               <select
                 value={filterOwner}
                 onChange={(e) => setFilterOwner(e.target.value)}
-                className="px-3 py-1.5 bg-transparent border border-slate-700 rounded-lg text-sm text-slate-300 hover:bg-slate-800 transition cursor-pointer"
+                className={`px-3 py-1.5 border rounded-lg text-sm transition cursor-pointer ${
+                  filterOwner !== "all" 
+                    ? "bg-blue-600/20 border-blue-500 text-blue-300" 
+                    : "bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800"
+                }`}
               >
                 <option value="all">Personas</option>
-                <option value="me">yo</option>
-                <option value="shared">Compartidos conmigo</option>
+                <option value="me">👤 yo</option>
+                <option value="shared">👥 Compartidos conmigo</option>
               </select>
 
               {/* Modificado Filter */}
               <select
                 value={filterModified}
                 onChange={(e) => setFilterModified(e.target.value)}
-                className="px-3 py-1.5 bg-transparent border border-slate-700 rounded-lg text-sm text-slate-300 hover:bg-slate-800 transition cursor-pointer"
+                className={`px-3 py-1.5 border rounded-lg text-sm transition cursor-pointer ${
+                  filterModified !== "all" 
+                    ? "bg-blue-600/20 border-blue-500 text-blue-300" 
+                    : "bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800"
+                }`}
               >
                 <option value="all">Modificado</option>
-                <option value="today">Hoy</option>
-                <option value="week">Esta semana</option>
-                <option value="month">Este mes</option>
-                <option value="year">Este año</option>
+                <option value="today">📅 Hoy</option>
+                <option value="week">📅 Esta semana</option>
+                <option value="month">📅 Este mes</option>
+                <option value="year">📅 Este año</option>
               </select>
+
+              {/* Clear Filters Button - Only show when filters are active */}
+              {hasActiveFilters && (
+                <button
+                  onClick={clearFilters}
+                  className="px-3 py-1.5 bg-red-600/20 border border-red-500 text-red-300 rounded-lg text-sm hover:bg-red-600/30 transition flex items-center gap-1.5"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                  Limpiar filtros
+                </button>
+              )}
             </div>
 
             {/* View Toggle & Actions */}
@@ -791,17 +910,120 @@ export default function OneDriveFilesPage() {
           copyDisabledReason="OneDrive → otras nubes aún no disponible (solo Google Drive → OneDrive en Phase 1)"
         />
 
-        {/* Files table */}
+        {/* Files View - Google Drive Style (List or Grid) */}
         {!loading && !error && (
           <div 
             ref={filesContainerRef}
             className="bg-transparent rounded-lg overflow-hidden"
           >
-            {displayFiles.length === 0 ? (
+            {/* Show filter results count when filters are active */}
+            {hasActiveFilters && filteredFiles.length > 0 && (
+              <div className="mb-3 text-sm text-slate-400">
+                Mostrando {filteredFiles.length} de {displayFiles.length} archivos
+              </div>
+            )}
+
+            {filteredFiles.length === 0 ? (
               <div className="py-12 text-center text-slate-400">
-                <p>Esta carpeta está vacía</p>
+                <p>{hasActiveFilters ? "No hay archivos que coincidan con los filtros" : "Esta carpeta está vacía"}</p>
+                {hasActiveFilters && (
+                  <button 
+                    onClick={clearFilters}
+                    className="mt-3 text-blue-400 hover:text-blue-300 text-sm"
+                  >
+                    Limpiar filtros
+                  </button>
+                )}
               </div>
             ) : (
+              <>
+              {/* GRID VIEW */}
+              {viewMode === "grid" && (
+                <div 
+                  className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 p-4"
+                  onClick={() => closeContextMenu()}
+                >
+                  {filteredFiles.map((file) => (
+                    <div
+                      key={`${accountId}:${file.id}`}
+                      className={`
+                        group relative rounded-xl p-3 transition-all cursor-pointer
+                        ${selectedFiles.has(file.id) 
+                          ? 'bg-blue-600/20 ring-2 ring-blue-500' 
+                          : 'bg-slate-800/30 hover:bg-slate-800/50'
+                        }
+                      `}
+                      onClick={(e) => {
+                        const target = e.target as HTMLElement;
+                        if (target.tagName === 'INPUT' || target.closest('input')) return;
+                        e.stopPropagation();
+                        toggleFileSelection(file.id);
+                      }}
+                      onDoubleClick={(e) => {
+                        const target = e.target as HTMLElement;
+                        if (target.tagName === 'INPUT' || target.closest('input')) return;
+                        e.stopPropagation();
+                        if (file.kind === "folder") {
+                          handleOpenFolder(file.id, file.name);
+                        } else if (file.webViewLink) {
+                          window.open(file.webViewLink, "_blank", "noopener,noreferrer");
+                        }
+                      }}
+                      onContextMenu={(e) => handleRowContextMenu(e, file)}
+                    >
+                      {/* Checkbox - top left corner */}
+                      <div className={`absolute top-2 left-2 transition-opacity ${
+                        selectedFiles.has(file.id) 
+                          ? 'opacity-100' 
+                          : 'opacity-0 group-hover:opacity-100'
+                      }`}>
+                        <input
+                          type="checkbox"
+                          checked={selectedFiles.has(file.id)}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            toggleFileSelection(file.id);
+                          }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={(e) => e.stopPropagation()}
+                          className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
+                      </div>
+
+                      {/* File Icon - Large centered */}
+                      <div className="flex justify-center items-center h-20 mb-3">
+                        <span className="text-5xl">{getFileIcon(file)}</span>
+                      </div>
+
+                      {/* File Name - truncated */}
+                      <div className="text-sm text-slate-200 text-center truncate px-1" title={file.name}>
+                        {file.name}
+                      </div>
+
+                      {/* File Info - smaller text */}
+                      <div className="text-xs text-slate-500 text-center mt-1">
+                        {formatDate(file.modifiedTime)}
+                      </div>
+
+                      {/* Kebab menu - top right corner */}
+                      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <OnedriveRowActionsMenu
+                          fileId={file.id}
+                          fileName={file.name}
+                          webViewLink={file.webViewLink || undefined}
+                          isFolder={file.kind === "folder"}
+                          onOpenFolder={handleOpenFolder}
+                          onRename={handleRename}
+                          onDownload={handleDownload}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* LIST VIEW (Table) */}
+              {viewMode === "list" && (
               <div onClick={() => closeContextMenu()}>
               <table className="w-full">
                 <thead>
@@ -815,10 +1037,14 @@ export default function OneDriveFilesPage() {
                   </tr>
                 </thead>
                 <tbody className="bg-transparent">
-                  {displayFiles.map((file) => (
+                  {filteredFiles.map((file) => (
                     <tr
                       key={`${accountId}:${file.id}`}
-                      className="border-b border-slate-800/30 hover:bg-slate-800/30 transition cursor-pointer"
+                      className={`border-b border-slate-800/30 transition cursor-pointer ${
+                        selectedFiles.has(file.id) 
+                          ? 'bg-blue-600/20' 
+                          : 'hover:bg-slate-800/30'
+                      }`}
                       onContextMenu={(e) => handleRowContextMenu(e, file)}
                     >
                       {/* Checkbox */}
@@ -839,9 +1065,7 @@ export default function OneDriveFilesPage() {
                       {/* Nombre */}
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-3">
-                          <span className="text-xl">
-                            {file.kind === "folder" ? "📁" : "📄"}
-                          </span>
+                          <span className="text-xl">{getFileIcon(file)}</span>
                           {file.kind === "folder" ? (
                             <button
                               onClick={() => handleOpenFolder(file.id, file.name)}
@@ -893,6 +1117,8 @@ export default function OneDriveFilesPage() {
                 </tbody>
               </table>
               </div>
+              )}
+              </>
             )}
           </div>
         )}

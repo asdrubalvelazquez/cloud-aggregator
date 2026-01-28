@@ -1345,12 +1345,79 @@ export default function DriveFilesPage() {
     return parts[parts.length - 1].toUpperCase();
   };
 
-  // Derived sorted files (use displayFiles for smooth transitions)
+  // Derived filtered and sorted files (use displayFiles for smooth transitions)
   const sortedFiles = (() => {
-    if (!displayFiles || !sortBy) return displayFiles;
+    if (!displayFiles) return displayFiles;
+    
+    // First apply filters
+    let filtered = [...displayFiles];
+    
+    // Filter by type
+    if (filterType !== "all") {
+      filtered = filtered.filter(file => {
+        const mimeType = file.mimeType || "";
+        switch (filterType) {
+          case "folder":
+            return mimeType.includes("folder");
+          case "document":
+            return mimeType.includes("document") || mimeType.includes("text") || mimeType.includes("word");
+          case "spreadsheet":
+            return mimeType.includes("spreadsheet") || mimeType.includes("excel");
+          case "presentation":
+            return mimeType.includes("presentation") || mimeType.includes("powerpoint");
+          case "pdf":
+            return mimeType.includes("pdf");
+          case "image":
+            return mimeType.includes("image");
+          case "video":
+            return mimeType.includes("video");
+          default:
+            return true;
+        }
+      });
+    }
+    
+    // Filter by owner (for now "yo" shows all, "shared" shows none since we only have own files)
+    if (filterOwner !== "all") {
+      // In the future, this would filter by file.owners or file.shared property
+      // For now, all files are "mine" so "shared" shows nothing
+      if (filterOwner === "shared") {
+        filtered = filtered.filter(file => file.shared === true);
+      }
+      // "me" shows all files (default behavior)
+    }
+    
+    // Filter by modification date
+    if (filterModified !== "all") {
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const monthAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const yearAgo = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate());
+      
+      filtered = filtered.filter(file => {
+        if (!file.modifiedTime) return false;
+        const modDate = new Date(file.modifiedTime);
+        switch (filterModified) {
+          case "today":
+            return modDate >= today;
+          case "week":
+            return modDate >= weekAgo;
+          case "month":
+            return modDate >= monthAgo;
+          case "year":
+            return modDate >= yearAgo;
+          default:
+            return true;
+        }
+      });
+    }
+    
+    // Then apply sorting if specified
+    if (!sortBy) return filtered;
+    
     const collator = new Intl.Collator("es", { sensitivity: "base", numeric: true });
-    const arr = [...displayFiles];
-    arr.sort((a, b) => {
+    filtered.sort((a, b) => {
       let av: any;
       let bv: any;
       switch (sortBy) {
@@ -1372,9 +1439,19 @@ export default function DriveFilesPage() {
           return 0;
       }
     });
-    if (sortDir === "desc") arr.reverse();
-    return arr;
+    if (sortDir === "desc") filtered.reverse();
+    return filtered;
   })();
+  
+  // Check if any filters are active
+  const hasActiveFilters = filterType !== "all" || filterOwner !== "all" || filterModified !== "all";
+  
+  // Clear all filters function
+  const clearFilters = () => {
+    setFilterType("all");
+    setFilterOwner("all");
+    setFilterModified("all");
+  };
 
   const toggleSort = (key: "name" | "size" | "modifiedTime" | "mimeType") => {
     if (sortBy === key) {
@@ -1587,41 +1664,66 @@ export default function DriveFilesPage() {
             <select
               value={filterType}
               onChange={(e) => setFilterType(e.target.value)}
-              className="px-3 py-1.5 bg-transparent border border-slate-700 rounded-lg text-sm text-slate-300 hover:bg-slate-800 transition cursor-pointer"
+              className={`px-3 py-1.5 border rounded-lg text-sm transition cursor-pointer ${
+                filterType !== "all" 
+                  ? "bg-blue-600/20 border-blue-500 text-blue-300" 
+                  : "bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800"
+              }`}
             >
               <option value="all">Tipo</option>
-              <option value="folder">Carpetas</option>
-              <option value="document">Documentos</option>
-              <option value="spreadsheet">Hojas de cálculo</option>
-              <option value="presentation">Presentaciones</option>
-              <option value="pdf">PDF</option>
-              <option value="image">Imágenes</option>
-              <option value="video">Videos</option>
+              <option value="folder">📁 Carpetas</option>
+              <option value="document">📄 Documentos</option>
+              <option value="spreadsheet">📊 Hojas de cálculo</option>
+              <option value="presentation">📽️ Presentaciones</option>
+              <option value="pdf">📕 PDF</option>
+              <option value="image">🖼️ Imágenes</option>
+              <option value="video">🎥 Videos</option>
             </select>
 
             {/* Personas Filter */}
             <select
               value={filterOwner}
               onChange={(e) => setFilterOwner(e.target.value)}
-              className="px-3 py-1.5 bg-transparent border border-slate-700 rounded-lg text-sm text-slate-300 hover:bg-slate-800 transition cursor-pointer"
+              className={`px-3 py-1.5 border rounded-lg text-sm transition cursor-pointer ${
+                filterOwner !== "all" 
+                  ? "bg-blue-600/20 border-blue-500 text-blue-300" 
+                  : "bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800"
+              }`}
             >
               <option value="all">Personas</option>
-              <option value="me">yo</option>
-              <option value="shared">Compartidos conmigo</option>
+              <option value="me">👤 yo</option>
+              <option value="shared">👥 Compartidos conmigo</option>
             </select>
 
             {/* Modificado Filter */}
             <select
               value={filterModified}
               onChange={(e) => setFilterModified(e.target.value)}
-              className="px-3 py-1.5 bg-transparent border border-slate-700 rounded-lg text-sm text-slate-300 hover:bg-slate-800 transition cursor-pointer"
+              className={`px-3 py-1.5 border rounded-lg text-sm transition cursor-pointer ${
+                filterModified !== "all" 
+                  ? "bg-blue-600/20 border-blue-500 text-blue-300" 
+                  : "bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800"
+              }`}
             >
               <option value="all">Modificado</option>
-              <option value="today">Hoy</option>
-              <option value="week">Esta semana</option>
-              <option value="month">Este mes</option>
-              <option value="year">Este año</option>
+              <option value="today">📅 Hoy</option>
+              <option value="week">📅 Esta semana</option>
+              <option value="month">📅 Este mes</option>
+              <option value="year">📅 Este año</option>
             </select>
+
+            {/* Clear Filters Button - Only show when filters are active */}
+            {hasActiveFilters && (
+              <button
+                onClick={clearFilters}
+                className="px-3 py-1.5 bg-red-600/20 border border-red-500 text-red-300 rounded-lg text-sm hover:bg-red-600/30 transition flex items-center gap-1.5"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                Limpiar filtros
+              </button>
+            )}
           </div>
 
           {/* View Toggle & Actions */}
@@ -1857,13 +1959,109 @@ export default function DriveFilesPage() {
           </div>
         )}
 
-        {/* Files Table - Google Drive Style */}
+        {/* Files View - Google Drive Style (List or Grid) */}
         {!loading && !error && files.length > 0 && (
           <div 
             ref={filesContainerRef}
             key={accountId} 
             className="bg-transparent rounded-xl overflow-hidden"
           >
+            {/* Show filter results count when filters are active */}
+            {hasActiveFilters && (
+              <div className="mb-3 text-sm text-slate-400">
+                Mostrando {sortedFiles.length} de {files.length} archivos
+              </div>
+            )}
+
+            {/* GRID VIEW */}
+            {viewMode === "grid" && (
+              <div 
+                className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 p-4"
+                onClick={() => setSelectedRowId(null)}
+                onPointerDownCapture={() => contextMenu?.visible && closeContextMenu()}
+              >
+                {sortedFiles.map((file) => (
+                  <div
+                    key={`${accountId}:${file.id}`}
+                    className={`
+                      group relative rounded-xl p-3 transition-all cursor-pointer
+                      ${selectedFiles.has(file.id) 
+                        ? 'bg-blue-600/20 ring-2 ring-blue-500' 
+                        : selectedRowId === file.id 
+                        ? 'bg-slate-800/60' 
+                        : 'bg-slate-800/30 hover:bg-slate-800/50'
+                      }
+                    `}
+                    onClick={(e) => {
+                      const target = e.target as HTMLElement;
+                      if (target.tagName === 'INPUT' || target.closest('input')) return;
+                      e.stopPropagation();
+                      handleRowClick(file.id);
+                    }}
+                    onDoubleClick={(e) => {
+                      const target = e.target as HTMLElement;
+                      if (target.tagName === 'INPUT' || target.closest('input')) return;
+                      e.stopPropagation();
+                      handleRowDoubleClick(file);
+                    }}
+                    onContextMenu={(e) => handleRowContextMenu(e, file)}
+                  >
+                    {/* Checkbox - top left corner */}
+                    <div className={`absolute top-2 left-2 transition-opacity ${
+                      selectedFiles.has(file.id) || selectedRowId === file.id 
+                        ? 'opacity-100' 
+                        : 'opacity-0 group-hover:opacity-100'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedFiles.has(file.id)}
+                        onChange={() => toggleFileSelection(file.id, file.mimeType)}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => e.stopPropagation()}
+                        disabled={file.mimeType === "application/vnd.google-apps.folder"}
+                        className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-emerald-500 focus:ring-2 focus:ring-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed"
+                      />
+                    </div>
+
+                    {/* File Icon - Large centered */}
+                    <div className="flex justify-center items-center h-20 mb-3">
+                      <span className="text-5xl">{getFileIcon(file.mimeType)}</span>
+                    </div>
+
+                    {/* File Name - truncated */}
+                    <div className="text-sm text-slate-200 text-center truncate px-1" title={file.name}>
+                      {file.name}
+                    </div>
+
+                    {/* File Info - smaller text */}
+                    <div className="text-xs text-slate-500 text-center mt-1">
+                      {file.modifiedTime ? formatDate(file.modifiedTime) : ""}
+                    </div>
+
+                    {/* Kebab menu - top right corner */}
+                    <div className={`absolute top-2 right-2 transition-opacity ${
+                      selectedRowId === file.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                    }`}>
+                      <RowActionsMenu
+                        fileId={file.id}
+                        fileName={file.name}
+                        mimeType={file.mimeType}
+                        webViewLink={file.webViewLink}
+                        isFolder={file.mimeType === "application/vnd.google-apps.folder"}
+                        onOpenFolder={handleOpenFolder}
+                        onCopy={openCopyModal}
+                        onRename={openRenameModal}
+                        onDownload={handleDownloadFile}
+                        copyDisabled={copying || !copyOptions || copyOptions.target_accounts.length === 0}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* LIST VIEW (Table) */}
+            {viewMode === "list" && (
             <div 
               onClick={() => setSelectedRowId(null)}
               onPointerDownCapture={() => contextMenu?.visible && closeContextMenu()}
@@ -1925,7 +2123,9 @@ export default function DriveFilesPage() {
                       border-b border-slate-800/50
                       transition-colors
                       cursor-pointer
-                      ${selectedRowId === file.id 
+                      ${selectedFiles.has(file.id)
+                        ? 'bg-blue-600/20'
+                        : selectedRowId === file.id 
                         ? 'bg-slate-800/40' 
                         : 'hover:bg-slate-800/20'
                       }
@@ -2026,6 +2226,7 @@ export default function DriveFilesPage() {
               </tbody>
             </table>
             </div>
+            )}
           </div>
         )}
 
