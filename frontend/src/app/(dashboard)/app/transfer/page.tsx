@@ -12,10 +12,10 @@ interface CloudAccount {
   provider: "google_drive" | "onedrive";
   email: string;
   provider_email: string; // Email associated with the provider account
-  cloud_account_id: string; // UUID string from cloud_provider_accounts.id
+  cloud_account_id: string | number; // ID numérico para GD, UUID para OneDrive
+  provider_account_uuid?: string | null; // UUID for OneDrive routing
   can_reconnect?: boolean; // Optional property for reconnection status
   connection_status?: "connected" | "needs_reconnect" | "disconnected"; // Optional connection status
-  provider_account_uuid?: string | null; // Optional UUID for routing
   has_refresh_token?: boolean; // Optional refresh token status
 }
 
@@ -66,7 +66,7 @@ export default function CloudTransferPage() {
       return;
     }
 
-    const account = accounts.find(a => a.cloud_account_id === sourceAccount);
+    const account = accounts.find(a => String(a.cloud_account_id) === String(sourceAccount));
     
     if (account?.can_reconnect) {
       setSelectedAccountNeedsReconnect(true);
@@ -76,11 +76,17 @@ export default function CloudTransferPage() {
 
     setSelectedAccountNeedsReconnect(false);
 
-    // Usar endpoint correcto según provider
+    // Usar endpoint correcto según provider e ID correcto
     const provider = account?.provider;
+    const accountId = provider === 'onedrive' 
+      ? (account?.provider_account_uuid || sourceAccount)
+      : sourceAccount;
+    
     const endpoint = provider === 'onedrive' 
-      ? `/onedrive/${sourceAccount}/files?folder_id=root`
-      : `/drive/${sourceAccount}/files?folder_id=root`;
+      ? `/onedrive/${accountId}/files?folder_id=root`
+      : `/drive/${accountId}/files?folder_id=root`;
+
+    console.log('Cargando archivos:', { provider, accountId, endpoint });
 
     authenticatedFetch(endpoint)
       .then(async (res) => {
@@ -118,7 +124,7 @@ export default function CloudTransferPage() {
       return;
     }
 
-    const account = accounts.find(a => a.cloud_account_id === destAccount);
+    const account = accounts.find(a => String(a.cloud_account_id) === String(destAccount));
     
     // Verificar si la cuenta necesita reconexión
     if (account?.can_reconnect) {
@@ -129,11 +135,17 @@ export default function CloudTransferPage() {
 
     setDestAccountNeedsReconnect(false);
 
-    // Usar el endpoint correcto con parámetro folder_id o parent_id (NO /folders)
+    // Usar el endpoint correcto con ID correcto según provider
     const provider = account?.provider;
+    const accountId = provider === 'onedrive'
+      ? (account?.provider_account_uuid || destAccount)
+      : destAccount;
+    
     const endpoint = provider === 'onedrive'
-      ? `/onedrive/${destAccount}/files?parent_id=${destPath}`
-      : `/drive/${destAccount}/files?folder_id=${destPath}`;
+      ? `/onedrive/${accountId}/files?parent_id=${destPath}`
+      : `/drive/${accountId}/files?folder_id=${destPath}`;
+
+    console.log('Cargando carpetas:', { provider, accountId, endpoint });
 
     authenticatedFetch(endpoint)
       .then(async (res) => {
@@ -202,26 +214,38 @@ export default function CloudTransferPage() {
       return;
     }
 
-    // Obtener providers de las cuentas
-    const sourceAcc = accounts.find(a => a.cloud_account_id === sourceAccount);
-    const destAcc = accounts.find(a => a.cloud_account_id === destAccount);
+    // Obtener providers de las cuentas usando cloud_account_id
+    const sourceAcc = accounts.find(a => String(a.cloud_account_id) === String(sourceAccount));
+    const destAcc = accounts.find(a => String(a.cloud_account_id) === String(destAccount));
 
     if (!sourceAcc || !destAcc) {
-      setError("Cuentas no encontradas");
+      console.error("Cuentas no encontradas:", { sourceAccount, destAccount, accounts });
+      setError("Cuentas no encontradas. Por favor recarga la página.");
       return;
     }
 
     setIsTransferring(true);
     try {
-      // Payload correcto según el backend
+      // Construir payload correcto según provider
+      // Google Drive usa cloud_account_id (int), OneDrive usa provider_account_uuid (string)
+      const source_account_id = sourceAcc.provider === "google_drive" 
+        ? Number(sourceAcc.cloud_account_id)
+        : sourceAcc.provider_account_uuid || String(sourceAcc.cloud_account_id);
+
+      const target_account_id = destAcc.provider === "onedrive"
+        ? destAcc.provider_account_uuid || String(destAcc.cloud_account_id)
+        : Number(destAcc.cloud_account_id);
+
       const payload = {
         source_provider: sourceAcc.provider,
-        source_account_id: sourceAcc.provider === "google_drive" ? parseInt(sourceAccount) : sourceAccount,
+        source_account_id,
         target_provider: destAcc.provider,
-        target_account_id: destAccount,
+        target_account_id,
         file_ids: Array.from(selectedFiles),
         target_folder_id: destPath === "root" ? null : destPath,
       };
+
+      console.log("Enviando transferencia:", payload);
 
       const res = await authenticatedFetch("/transfer/create", {
         method: "POST",
@@ -231,7 +255,7 @@ export default function CloudTransferPage() {
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.detail?.message || "Error al crear transferencia");
+        throw new Error(errorData.detail?.message || errorData.message || "Error al crear transferencia");
       }
 
       const data = await res.json();
@@ -250,7 +274,7 @@ export default function CloudTransferPage() {
   const handleReconnect = async (accountId: string | null) => {
     if (!accountId) return;
 
-    const account = accounts.find(a => a.cloud_account_id === accountId);
+    const account = accounts.find(a => String(a.cloud_account_id) === String(accountId));
     if (!account) return;
 
     // Construir la URL base del API
