@@ -4,7 +4,7 @@
  */
 
 export type TransferItemStatus = "queued" | "running" | "done" | "failed" | "skipped";
-export type TransferJobStatus = "pending" | "preparing" | "queued" | "running" | "done" | "failed" | "partial" | "blocked_quota" | "cancelled";
+export type TransferJobStatus = "pending" | "preparing" | "queued" | "running" | "done" | "done_skipped" | "failed" | "partial" | "blocked_quota" | "cancelled";
 
 export interface TransferItem {
   id: string;
@@ -44,10 +44,10 @@ export interface PersistedQueue {
 }
 
 /**
- * Helper: Check if job is in terminal state (done, failed, partial, cancelled)
+ * Helper: Check if job is in terminal state (done, done_skipped, failed, partial, cancelled)
  */
 export function isTerminalState(job: JobWithItems): boolean {
-  const terminalStatuses: TransferJobStatus[] = ["done", "failed", "partial", "cancelled"];
+  const terminalStatuses: TransferJobStatus[] = ["done", "done_skipped", "failed", "partial", "cancelled"];
   if (terminalStatuses.includes(job.status)) return true;
 
   // Check if all items are processed

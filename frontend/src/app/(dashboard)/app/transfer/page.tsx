@@ -220,6 +220,8 @@ export default function CloudTransferPage() {
         }
         
         const job: JobWithItems = await res.json();
+        console.log("[Transfer] Poll status:", job.status, "completed:", job.completed_items, "/", job.total_items);
+        
         const progress = job.total_items > 0 ? (job.completed_items / job.total_items) * 100 : 0;
         
         setTransferProgress(progress);
@@ -232,8 +234,11 @@ export default function CloudTransferPage() {
           target_provider: job.target_provider,
         });
         
-        // Check if job is done
-        if (job.status === "done" || job.status === "partial" || job.status === "failed" || job.status === "cancelled") {
+        // Check if job is done - include all terminal states
+        const terminalStates = ["done", "done_skipped", "partial", "failed", "cancelled"];
+        if (terminalStates.includes(job.status)) {
+          console.log("[Transfer] Job completed with status:", job.status);
+          
           // Stop polling
           if (pollingRef.current) {
             clearInterval(pollingRef.current);
@@ -243,11 +248,14 @@ export default function CloudTransferPage() {
           setIsTransferring(false);
           setCurrentJobId(null);
           
-          if (job.status === "done") {
+          if (job.status === "done" || job.status === "done_skipped") {
             setTransferProgress(100);
             setTransferStatus("¡Transferencia completada!");
-            setSuccess(`✅ Se transfirieron ${job.completed_items} archivos exitosamente`);
-            toast.success(`✅ Transferencia completada - ${job.completed_items} archivos`);
+            const message = job.status === "done_skipped" 
+              ? `✅ ${job.total_items} archivos ya existían en destino`
+              : `✅ Se transfirieron ${job.completed_items} archivos exitosamente`;
+            setSuccess(message);
+            toast.success(message);
             
             // Mark files as recently transferred for highlighting
             setRecentlyTransferredFiles(new Set(selectedFileNames));
@@ -257,6 +265,7 @@ export default function CloudTransferPage() {
               setRecentlyTransferredFiles(new Set());
             }, 10000);
           } else if (job.status === "partial") {
+            setTransferProgress(100);
             setSuccess(`⚠️ Transferencia parcial: ${job.completed_items}/${job.total_items} archivos completados`);
             toast.success(`Transferencia parcial completada`);
           } else if (job.status === "failed") {
