@@ -29,6 +29,75 @@ interface FileItem {
   isFolder: boolean;
 }
 
+// Helper function to get file icon based on mime type or file extension
+function getFileIcon(file: FileItem): string {
+  // Folders
+  if (file.isFolder) {
+    return "📁";
+  }
+  
+  const mimeType = file.mimeType?.toLowerCase() || "";
+  const fileName = file.name?.toLowerCase() || "";
+  
+  // Images
+  if (mimeType.startsWith("image/") || /\.(jpg|jpeg|png|gif|bmp|svg|webp|ico)$/.test(fileName)) {
+    return "🖼️";
+  }
+  
+  // Videos
+  if (mimeType.startsWith("video/") || /\.(mp4|avi|mov|mkv|wmv|flv|webm|m4v|mpg|mpeg)$/.test(fileName)) {
+    return "🎬";
+  }
+  
+  // Audio
+  if (mimeType.startsWith("audio/") || /\.(mp3|wav|ogg|m4a|flac|aac|wma)$/.test(fileName)) {
+    return "🎵";
+  }
+  
+  // PDFs
+  if (mimeType.includes("pdf") || fileName.endsWith(".pdf")) {
+    return "📕";
+  }
+  
+  // Word documents
+  if (mimeType.includes("word") || mimeType.includes("msword") || /\.(doc|docx)$/.test(fileName)) {
+    return "📘";
+  }
+  
+  // Excel
+  if (mimeType.includes("excel") || mimeType.includes("spreadsheet") || /\.(xls|xlsx|csv)$/.test(fileName)) {
+    return "📊";
+  }
+  
+  // PowerPoint
+  if (mimeType.includes("powerpoint") || mimeType.includes("presentation") || /\.(ppt|pptx)$/.test(fileName)) {
+    return "📊";
+  }
+  
+  // Archives
+  if (/\.(zip|rar|7z|tar|gz|bz2)$/.test(fileName)) {
+    return "📦";
+  }
+  
+  // Code files
+  if (/\.(js|ts|jsx|tsx|py|java|c|cpp|cs|php|rb|go|rs|swift)$/.test(fileName)) {
+    return "💻";
+  }
+  
+  // Text files
+  if (mimeType.includes("text") || /\.(txt|md|log)$/.test(fileName)) {
+    return "📝";
+  }
+  
+  // APK/AAB (Android)
+  if (/\.(apk|aab)$/.test(fileName)) {
+    return "📱";
+  }
+  
+  // Default file icon
+  return "📄";
+}
+
 export default function CloudTransferPage() {
   const [accounts, setAccounts] = useState<CloudAccount[]>([]);
   const [sourceAccount, setSourceAccount] = useState<string | null>(null);
@@ -590,7 +659,7 @@ export default function CloudTransferPage() {
                         onChange={() => toggleFile(file.id)}
                         className="mr-2"
                       />
-                      <span className={file.isFolder ? "font-semibold" : ""}>{file.isFolder ? "📁" : "📄"} {file.name}</span>
+                      <span className={file.isFolder ? "font-semibold" : ""}>{getFileIcon(file)} {file.name}</span>
                     </li>
                   ))}
                 </ul>
@@ -664,7 +733,7 @@ export default function CloudTransferPage() {
                         onClick={() => file.isFolder && setDestPath(file.id)}
                       >
                         <span className={`${file.isFolder ? "font-semibold" : ""} ${isRecentlyTransferred ? "text-emerald-300" : ""}`}>
-                          {isRecentlyTransferred ? "✨ " : ""}{file.isFolder ? "📁" : "📄"} {file.name}
+                          {isRecentlyTransferred ? "✨ " : ""}{getFileIcon(file)} {file.name}
                           {isRecentlyTransferred && <span className="ml-2 text-xs text-emerald-400">(nuevo)</span>}
                         </span>
                       </li>
