@@ -697,73 +697,126 @@ export default function OneDriveFilesPage() {
             ))}
           </div>
 
-          {/* Filters Bar - Google Drive Style */}
+          {/* Filters Bar (hidden when files selected) or Action Bar - Google Drive Style */}
           <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              {/* Tipo Filter */}
-              <select
-                value={filterType}
-                onChange={(e) => setFilterType(e.target.value)}
-                className={`px-3 py-1.5 border rounded-lg text-sm transition cursor-pointer ${
-                  filterType !== "all" 
-                    ? "bg-blue-600/20 border-blue-500 text-blue-300" 
-                    : "bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800"
-                }`}
-              >
-                <option value="all">Tipo</option>
-                <option value="folder">📁 Carpetas</option>
-                <option value="document">📄 Documentos</option>
-                <option value="spreadsheet">📊 Hojas de cálculo</option>
-                <option value="pdf">📕 PDF</option>
-                <option value="image">🖼️ Imágenes</option>
-                <option value="video">🎥 Videos</option>
-              </select>
+            {selectedFiles.size === 0 ? (
+              <>
+                <div className="flex items-center gap-2">
+                  {/* Tipo Filter */}
+                  <select
+                    value={filterType}
+                    onChange={(e) => setFilterType(e.target.value)}
+                    className={`px-3 py-1.5 border rounded-lg text-sm transition cursor-pointer ${
+                      filterType !== "all" 
+                        ? "bg-blue-600/20 border-blue-500 text-blue-300" 
+                        : "bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    <option value="all">Tipo</option>
+                    <option value="folder">📁 Carpetas</option>
+                    <option value="document">📄 Documentos</option>
+                    <option value="spreadsheet">📊 Hojas de cálculo</option>
+                    <option value="pdf">📕 PDF</option>
+                    <option value="image">🖼️ Imágenes</option>
+                    <option value="video">🎥 Videos</option>
+                  </select>
 
-              {/* Personas Filter */}
-              <select
-                value={filterOwner}
-                onChange={(e) => setFilterOwner(e.target.value)}
-                className={`px-3 py-1.5 border rounded-lg text-sm transition cursor-pointer ${
-                  filterOwner !== "all" 
-                    ? "bg-blue-600/20 border-blue-500 text-blue-300" 
-                    : "bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800"
-                }`}
-              >
-                <option value="all">Personas</option>
-                <option value="me">👤 yo</option>
-                <option value="shared">👥 Compartidos conmigo</option>
-              </select>
+                  {/* Personas Filter */}
+                  <select
+                    value={filterOwner}
+                    onChange={(e) => setFilterOwner(e.target.value)}
+                    className={`px-3 py-1.5 border rounded-lg text-sm transition cursor-pointer ${
+                      filterOwner !== "all" 
+                        ? "bg-blue-600/20 border-blue-500 text-blue-300" 
+                        : "bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    <option value="all">Personas</option>
+                    <option value="me">👤 yo</option>
+                    <option value="shared">👥 Compartidos conmigo</option>
+                  </select>
 
-              {/* Modificado Filter */}
-              <select
-                value={filterModified}
-                onChange={(e) => setFilterModified(e.target.value)}
-                className={`px-3 py-1.5 border rounded-lg text-sm transition cursor-pointer ${
-                  filterModified !== "all" 
-                    ? "bg-blue-600/20 border-blue-500 text-blue-300" 
-                    : "bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800"
-                }`}
-              >
-                <option value="all">Modificado</option>
-                <option value="today">📅 Hoy</option>
-                <option value="week">📅 Esta semana</option>
-                <option value="month">📅 Este mes</option>
-                <option value="year">📅 Este año</option>
-              </select>
+                  {/* Modificado Filter */}
+                  <select
+                    value={filterModified}
+                    onChange={(e) => setFilterModified(e.target.value)}
+                    className={`px-3 py-1.5 border rounded-lg text-sm transition cursor-pointer ${
+                      filterModified !== "all" 
+                        ? "bg-blue-600/20 border-blue-500 text-blue-300" 
+                        : "bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    <option value="all">Modificado</option>
+                    <option value="today">📅 Hoy</option>
+                    <option value="week">📅 Esta semana</option>
+                    <option value="month">📅 Este mes</option>
+                    <option value="year">📅 Este año</option>
+                  </select>
 
-              {/* Clear Filters Button - Only show when filters are active */}
-              {hasActiveFilters && (
-                <button
-                  onClick={clearFilters}
-                  className="px-3 py-1.5 bg-red-600/20 border border-red-500 text-red-300 rounded-lg text-sm hover:bg-red-600/30 transition flex items-center gap-1.5"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                  Limpiar filtros
-                </button>
-              )}
-            </div>
+                  {/* Clear Filters Button - Only show when filters are active */}
+                  {hasActiveFilters && (
+                    <button
+                      onClick={clearFilters}
+                      className="px-3 py-1.5 bg-red-600/20 border border-red-500 text-red-300 rounded-lg text-sm hover:bg-red-600/30 transition flex items-center gap-1.5"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                      Limpiar filtros
+                    </button>
+                  )}
+                </div>
+              </>
+            ) : (
+              <FileActionBar
+                provider="onedrive"
+                selectedCount={selectedFiles.size}
+                singleSelected={
+                  selectedFiles.size === 1 
+                    ? (() => {
+                        const fileId = Array.from(selectedFiles)[0];
+                        const file = files.find(f => f.id === fileId);
+                        return file ? {
+                          id: file.id,
+                          name: file.name,
+                          isFolder: file.kind === "folder"
+                        } : null;
+                      })()
+                    : null
+                }
+                onClearSelection={() => setSelectedFiles(new Set())}
+                onDownloadSelected={() => {
+                  const fileIds = Array.from(selectedFiles);
+                  fileIds.forEach(fileId => {
+                    const file = files.find(f => f.id === fileId);
+                    if (file) {
+                      handleDownload(fileId, file.name);
+                    }
+                  });
+                }}
+                onRenameSingle={() => {
+                  if (selectedFiles.size === 1) {
+                    const fileId = Array.from(selectedFiles)[0];
+                    const file = files.find(f => f.id === fileId);
+                    if (file && file.kind !== "folder") {
+                      handleRename(fileId, file.name);
+                    }
+                  }
+                }}
+                onPreviewSingle={() => {
+                  if (selectedFiles.size === 1) {
+                    const fileId = Array.from(selectedFiles)[0];
+                    const file = files.find(f => f.id === fileId);
+                    if (file && file.webViewLink) {
+                      window.open(file.webViewLink, "_blank", "noopener,noreferrer");
+                    }
+                  }
+                }}
+                onRefresh={() => fetchFiles(currentFolderId)}
+                copyDisabled={true}
+                copyDisabledReason="OneDrive → otras nubes aún no disponible (solo Google Drive → OneDrive en Phase 1)"
+              />
+            )}
 
             {/* View Toggle & Actions */}
             <div className="flex items-center gap-2">
@@ -839,60 +892,7 @@ export default function OneDriveFilesPage() {
           </div>
         )}
 
-        {/* File Action Bar - Show when files selected (Google Drive style) */}
-        {selectedFiles.size > 0 && (
-        <div className="sticky top-0 z-10 bg-slate-900/95 backdrop-blur-sm py-3 border-b border-slate-700 mb-4">
-        <FileActionBar
-          provider="onedrive"
-          selectedCount={selectedFiles.size}
-          singleSelected={
-            selectedFiles.size === 1 
-              ? (() => {
-                  const fileId = Array.from(selectedFiles)[0];
-                  const file = files.find(f => f.id === fileId);
-                  return file ? {
-                    id: file.id,
-                    name: file.name,
-                    isFolder: file.kind === "folder"
-                  } : null;
-                })()
-              : null
-          }
-          onClearSelection={() => setSelectedFiles(new Set())}
-          onDownloadSelected={() => {
-            // Download all selected files
-            const fileIds = Array.from(selectedFiles);
-            fileIds.forEach(fileId => {
-              const file = files.find(f => f.id === fileId);
-              if (file) {
-                handleDownload(fileId, file.name);
-              }
-            });
-          }}
-          onRenameSingle={() => {
-            if (selectedFiles.size === 1) {
-              const fileId = Array.from(selectedFiles)[0];
-              const file = files.find(f => f.id === fileId);
-              if (file && file.kind !== "folder") {
-                handleRename(fileId, file.name);
-              }
-            }
-          }}
-          onPreviewSingle={() => {
-            if (selectedFiles.size === 1) {
-              const fileId = Array.from(selectedFiles)[0];
-              const file = files.find(f => f.id === fileId);
-              if (file && file.webViewLink) {
-                window.open(file.webViewLink, "_blank", "noopener,noreferrer");
-              }
-            }
-          }}
-          onRefresh={() => fetchFiles(currentFolderId)}
-          copyDisabled={true}
-          copyDisabledReason="OneDrive → otras nubes aún no disponible (solo Google Drive → OneDrive en Phase 1)"
-        />
-        </div>
-        )}
+
 
         {/* Files View - Google Drive Style (List or Grid) */}
         {!loading && !error && (
