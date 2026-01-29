@@ -226,21 +226,27 @@ export default function CloudTransferPage() {
 
     setIsTransferring(true);
     try {
-      // Construir payload correcto según provider
-      // Google Drive usa cloud_account_id (int), OneDrive usa provider_account_uuid (string)
-      const source_account_id = sourceAcc.provider === "google_drive" 
-        ? Number(sourceAcc.cloud_account_id)
-        : sourceAcc.provider_account_uuid || String(sourceAcc.cloud_account_id);
+      // FASE 1: Solo soporta Google Drive → OneDrive
+      if (sourceAcc.provider !== "google_drive") {
+        throw new Error("Por ahora solo se soporta transferir DESDE Google Drive. Selecciona una cuenta de Google Drive como origen.");
+      }
+      if (destAcc.provider !== "onedrive") {
+        throw new Error("Por ahora solo se soporta transferir HACIA OneDrive. Selecciona una cuenta de OneDrive como destino.");
+      }
 
-      const target_account_id = destAcc.provider === "onedrive"
-        ? destAcc.provider_account_uuid || String(destAcc.cloud_account_id)
-        : Number(destAcc.cloud_account_id);
+      // Google Drive usa cloud_account_id (int), OneDrive usa provider_account_uuid (string UUID)
+      const source_account_id = Number(sourceAcc.cloud_account_id);
+      const target_account_id = destAcc.provider_account_uuid || String(destAcc.cloud_account_id);
+
+      if (isNaN(source_account_id)) {
+        throw new Error("ID de cuenta origen inválido");
+      }
 
       const payload = {
-        source_provider: sourceAcc.provider,
-        source_account_id,
-        target_provider: destAcc.provider,
-        target_account_id,
+        source_provider: "google_drive",
+        source_account_id: source_account_id,
+        target_provider: "onedrive",
+        target_account_id: target_account_id,
         file_ids: Array.from(selectedFiles),
         target_folder_id: destPath === "root" ? null : destPath,
       };
