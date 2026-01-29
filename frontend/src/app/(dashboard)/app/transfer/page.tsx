@@ -201,25 +201,47 @@ export default function CloudTransferPage() {
       setError("Selecciona al menos un archivo");
       return;
     }
+
+    // Obtener providers de las cuentas
+    const sourceAcc = accounts.find(a => a.cloud_account_id === sourceAccount);
+    const destAcc = accounts.find(a => a.cloud_account_id === destAccount);
+
+    if (!sourceAcc || !destAcc) {
+      setError("Cuentas no encontradas");
+      return;
+    }
+
     setIsTransferring(true);
     try {
+      // Payload correcto según el backend
+      const payload = {
+        source_provider: sourceAcc.provider,
+        source_account_id: sourceAcc.provider === "google_drive" ? parseInt(sourceAccount) : sourceAccount,
+        target_provider: destAcc.provider,
+        target_account_id: destAccount,
+        file_ids: Array.from(selectedFiles),
+        target_folder_id: destPath === "root" ? null : destPath,
+      };
+
       const res = await authenticatedFetch("/transfer/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          source_account: sourceAccount,
-          dest_account: destAccount,
-          file_ids: Array.from(selectedFiles),
-          dest_folder: destPath,
-        }),
+        body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error();
-      setSuccess("Transferencia iniciada correctamente");
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.detail?.message || "Error al crear transferencia");
+      }
+
+      const data = await res.json();
+      setSuccess(`Transferencia iniciada correctamente (Job ID: ${data.job_id})`);
       setSelectedFiles(new Set());
       toast.success("Transferencia iniciada");
-    } catch {
-      setError("Error al iniciar la transferencia");
-      toast.error("Error al transferir archivos");
+    } catch (err: any) {
+      console.error('Error al iniciar transferencia:', err);
+      setError(err.message || "Error al iniciar la transferencia");
+      toast.error(err.message || "Error al transferir archivos");
     } finally {
       setIsTransferring(false);
     }
