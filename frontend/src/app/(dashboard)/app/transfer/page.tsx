@@ -1,10 +1,12 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { TransferQueuePanel } from "@/components/transfer-queue/TransferQueuePanel";
 import { authenticatedFetch } from "@/lib/api";
 import { CopyProgressBar } from "@/components/CopyProgressBar";
 import UnifiedCopyModal from "@/components/UnifiedCopyModal";
 import { toast } from "react-hot-toast";
+import { useTransferQueue } from "@/hooks/useTransferQueue";
+import { JobWithItems } from "@/types/transfer-queue";
 
 // Tipos básicos
 interface CloudAccount {
@@ -42,6 +44,14 @@ export default function CloudTransferPage() {
   const [selectedAccountNeedsReconnect, setSelectedAccountNeedsReconnect] = useState(false);
   const [destAccountNeedsReconnect, setDestAccountNeedsReconnect] = useState(false);
   const [refreshDestKey, setRefreshDestKey] = useState(0); // Para refrescar destino
+  const [transferProgress, setTransferProgress] = useState(0); // Progress 0-100
+  const [transferStatus, setTransferStatus] = useState<string>(""); // Current status text
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null); // Active job ID
+  const [recentlyTransferredFiles, setRecentlyTransferredFiles] = useState<Set<string>>(new Set()); // Highlight new files
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Hook for transfer queue management
+  const { addJob, openPanel } = useTransferQueue();
 
   // Cargar cuentas conectadas
   useEffect(() => {
@@ -199,10 +209,102 @@ export default function CloudTransferPage() {
   const selectAll = () => setSelectedFiles(new Set(sourceFiles.map((f) => f.id)));
   const clearAll = () => setSelectedFiles(new Set());
 
+  // Poll job status for progress updates
+  const pollJobStatus = async (jobId: string, selectedFileNames: string[]) => {
+    const poll = async () => {
+      try {
+        const res = await authenticatedFetch(`/transfer/status/${jobId}`);
+        if (!res.ok) {
+          console.error("[Transfer] Error polling status:", res.status);
+          return;
+        }
+        
+        const job: JobWithItems = await res.json();
+        const progress = job.total_items > 0 ? (job.completed_items / job.total_items) * 100 : 0;
+        
+        setTransferProgress(progress);
+        setTransferStatus(`Transfiriendo... ${job.completed_items}/${job.total_items} archivos`);
+        
+        // Update job in queue for panel
+        addJob({
+          ...job,
+          source_provider: job.source_provider,
+          target_provider: job.target_provider,
+        });
+        
+        // Check if job is done
+        if (job.status === "done" || job.status === "partial" || job.status === "failed" || job.status === "cancelled") {
+          // Stop polling
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+          
+          setIsTransferring(false);
+          setCurrentJobId(null);
+          
+          if (job.status === "done") {
+            setTransferProgress(100);
+            setTransferStatus("¡Transferencia completada!");
+            setSuccess(`✅ Se transfirieron ${job.completed_items} archivos exitosamente`);
+            toast.success(`✅ Transferencia completada - ${job.completed_items} archivos`);
+            
+            // Mark files as recently transferred for highlighting
+            setRecentlyTransferredFiles(new Set(selectedFileNames));
+            
+            // Clear highlight after 10 seconds
+            setTimeout(() => {
+              setRecentlyTransferredFiles(new Set());
+            }, 10000);
+          } else if (job.status === "partial") {
+            setSuccess(`⚠️ Transferencia parcial: ${job.completed_items}/${job.total_items} archivos completados`);
+            toast.success(`Transferencia parcial completada`);
+          } else if (job.status === "failed") {
+            setError(`❌ La transferencia falló`);
+            toast.error("Error en la transferencia");
+          } else if (job.status === "cancelled") {
+            setError("Transferencia cancelada");
+            toast.error("Transferencia cancelada");
+          }
+          
+          // Refresh destination files immediately
+          setRefreshDestKey(prev => prev + 1);
+          
+          // Clear progress after a delay
+          setTimeout(() => {
+            setTransferProgress(0);
+            setTransferStatus("");
+          }, 3000);
+          
+          return;
+        }
+      } catch (error) {
+        console.error("[Transfer] Error polling:", error);
+      }
+    };
+    
+    // Start polling every 2 seconds
+    pollingRef.current = setInterval(poll, 2000);
+    // Also poll immediately
+    poll();
+  };
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+      }
+    };
+  }, []);
+
   // Transferir archivos
   const handleTransfer = async () => {
     setError(null);
     setSuccess(null);
+    setTransferProgress(0);
+    setTransferStatus("Iniciando transferencia...");
+    
     if (!sourceAccount || !destAccount) {
       setError("Selecciona ambas cuentas");
       return;
@@ -221,6 +323,11 @@ export default function CloudTransferPage() {
       setError("Cuentas no encontradas. Por favor recarga la página.");
       return;
     }
+
+    // Get selected file names for highlighting later
+    const selectedFileNames = sourceFiles
+      .filter(f => selectedFiles.has(f.id))
+      .map(f => f.name);
 
     setIsTransferring(true);
     try {
@@ -265,6 +372,7 @@ export default function CloudTransferPage() {
       };
 
       console.log("Creating transfer job...", payload);
+      setTransferStatus("Creando trabajo de transferencia...");
 
       // Create empty job
       const createRes = await authenticatedFetch("/transfer/create", {
@@ -280,9 +388,12 @@ export default function CloudTransferPage() {
 
       const { job_id } = await createRes.json();
       console.log("FASE 1 completada: Job ID =", job_id);
+      setCurrentJobId(job_id);
+      setTransferProgress(10);
 
       // FASE 2: Preparar job (fetch metadata, check quota, create items)
       console.log("FASE 2: Preparando job...");
+      setTransferStatus("Preparando archivos...");
       const prepareRes = await authenticatedFetch(`/transfer/prepare/${job_id}`, {
         method: "POST",
       });
@@ -293,35 +404,59 @@ export default function CloudTransferPage() {
       }
 
       console.log("FASE 2 completada");
+      setTransferProgress(20);
+
+      // Register job in transfer queue and open the panel
+      const initialJob: JobWithItems = {
+        id: job_id,
+        source_provider: sourceAcc.provider,
+        target_provider: destAcc.provider,
+        status: "running",
+        total_items: selectedFiles.size,
+        completed_items: 0,
+        failed_items: 0,
+        total_bytes: 0,
+        transferred_bytes: 0,
+        created_at: new Date().toISOString(),
+        items: [],
+      };
+      addJob(initialJob);
+      openPanel(); // Open the transfer queue panel
 
       // FASE 3: Ejecutar transferencia
       console.log("FASE 3: Ejecutando transferencia...");
-      const runRes = await authenticatedFetch(`/transfer/run/${job_id}`, {
+      setTransferStatus(`Transfiriendo ${selectedFiles.size} archivos...`);
+      
+      // Start the transfer (don't await - let it run in background)
+      authenticatedFetch(`/transfer/run/${job_id}`, {
         method: "POST",
+      }).then(async (runRes) => {
+        if (!runRes.ok) {
+          const errorData = await runRes.json().catch(() => ({}));
+          console.error("Error en FASE 3:", errorData);
+        }
+      }).catch(err => {
+        console.error("Error running transfer:", err);
       });
 
-      if (!runRes.ok) {
-        const errorData = await runRes.json().catch(() => ({}));
-        throw new Error(errorData.detail?.message || errorData.message || "Error al ejecutar transferencia");
-      }
-
-      console.log("FASE 3: Transferencia en progreso");
-
-      setSuccess(`Transferencia iniciada correctamente (Job ID: ${job_id}). Revisa el panel de transferencias abajo.`);
+      // Clear selection
       setSelectedFiles(new Set());
-      toast.success("Transferencia iniciada - Ver panel de progreso");
       
-      // Refrescar destino después de unos segundos para mostrar archivos nuevos
-      setTimeout(() => {
-        setRefreshDestKey(prev => prev + 1);
-      }, 5000); // Refrescar después de 5 segundos
+      // Start polling for progress
+      pollJobStatus(job_id, selectedFileNames);
+      
+      toast.success("🚀 Transferencia iniciada - Ver progreso arriba");
+      
     } catch (err: any) {
       console.error('Error al iniciar transferencia:', err);
       setError(err.message || "Error al iniciar la transferencia");
       toast.error(err.message || "Error al transferir archivos");
-    } finally {
       setIsTransferring(false);
+      setTransferProgress(0);
+      setTransferStatus("");
+      setCurrentJobId(null);
     }
+    // Note: Don't set isTransferring=false here - polling will handle it when job completes
   };
 
   const handleReconnect = async (accountId: string | null) => {
@@ -494,17 +629,27 @@ export default function CloudTransferPage() {
                 <div className="p-4 text-slate-400">No hay archivos en esta carpeta</div>
               ) : (
                 <ul>
-                  {destFiles.map((file) => (
-                    <li 
-                      key={file.id} 
-                      className={`flex items-center px-2 py-1 border-b border-slate-800 hover:bg-slate-700 ${file.isFolder ? 'cursor-pointer' : ''}`}
-                      onClick={() => file.isFolder && setDestPath(file.id)}
-                    >
-                      <span className={file.isFolder ? "font-semibold" : ""}>
-                        {file.isFolder ? "📁" : "📄"} {file.name}
-                      </span>
-                    </li>
-                  ))}
+                  {destFiles.map((file) => {
+                    const isRecentlyTransferred = recentlyTransferredFiles.has(file.name);
+                    return (
+                      <li 
+                        key={file.id} 
+                        className={`flex items-center px-2 py-1 border-b border-slate-800 hover:bg-slate-700 ${
+                          file.isFolder ? 'cursor-pointer' : ''
+                        } ${
+                          isRecentlyTransferred 
+                            ? 'bg-emerald-900/40 border-l-4 border-l-emerald-500 animate-pulse' 
+                            : ''
+                        }`}
+                        onClick={() => file.isFolder && setDestPath(file.id)}
+                      >
+                        <span className={`${file.isFolder ? "font-semibold" : ""} ${isRecentlyTransferred ? "text-emerald-300" : ""}`}>
+                          {isRecentlyTransferred ? "✨ " : ""}{file.isFolder ? "📁" : "📄"} {file.name}
+                          {isRecentlyTransferred && <span className="ml-2 text-xs text-emerald-400">(nuevo)</span>}
+                        </span>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>
@@ -521,14 +666,54 @@ export default function CloudTransferPage() {
             </div>
           </div>
         </div>
+        
+        {/* Progress Bar - Visible during transfer */}
+        {(isTransferring || transferProgress > 0) && (
+          <div className="mt-6 bg-slate-800 rounded-lg p-4 border border-slate-700">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium text-slate-300">
+                {transferStatus || "Preparando..."}
+              </span>
+              <span className="text-sm font-bold text-emerald-400">
+                {transferProgress.toFixed(0)}%
+              </span>
+            </div>
+            <div className="w-full h-3 bg-slate-700 rounded-full overflow-hidden">
+              <div
+                className={`h-full transition-all duration-500 ease-out ${
+                  transferProgress === 100 
+                    ? "bg-gradient-to-r from-emerald-500 to-emerald-400" 
+                    : "bg-gradient-to-r from-blue-500 to-blue-400"
+                }`}
+                style={{ width: `${transferProgress}%` }}
+              />
+            </div>
+            {transferProgress === 100 && (
+              <div className="mt-2 text-center text-emerald-400 text-sm animate-pulse">
+                ✅ ¡Transferencia completada exitosamente!
+              </div>
+            )}
+          </div>
+        )}
+        
         {/* Botón Transferir */}
         <div className="flex justify-center mt-6">
           <button
-            className="px-6 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white font-semibold disabled:opacity-50"
+            className="px-6 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white font-semibold disabled:opacity-50 transition-all"
             onClick={handleTransfer}
             disabled={isTransferring || !sourceAccount || !destAccount || selectedFiles.size === 0}
           >
-            {isTransferring ? "Transfiriendo..." : "Transferir Archivos →"}
+            {isTransferring ? (
+              <span className="flex items-center gap-2">
+                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+                </svg>
+                Transfiriendo...
+              </span>
+            ) : (
+              "Transferir Archivos →"
+            )}
           </button>
         </div>
         {/* Mensajes de error/éxito */}
