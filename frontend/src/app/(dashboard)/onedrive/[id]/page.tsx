@@ -779,12 +779,22 @@ export default function OneDriveFilesPage() {
                         return file ? {
                           id: file.id,
                           name: file.name,
-                          isFolder: file.kind === "folder"
+                          isFolder: file.kind === "folder",
+                          webViewLink: file.webViewLink || undefined
                         } : null;
                       })()
                     : null
                 }
                 onClearSelection={() => setSelectedFiles(new Set())}
+                onShareInProvider={() => {
+                  if (selectedFiles.size === 1) {
+                    const fileId = Array.from(selectedFiles)[0];
+                    const file = files.find(f => f.id === fileId);
+                    if (file && file.webViewLink) {
+                      window.open(file.webViewLink, "_blank", "noopener,noreferrer");
+                    }
+                  }
+                }}
                 onDownloadSelected={() => {
                   const fileIds = Array.from(selectedFiles);
                   fileIds.forEach(fileId => {
@@ -793,6 +803,21 @@ export default function OneDriveFilesPage() {
                       handleDownload(fileId, file.name);
                     }
                   });
+                }}
+                onGetLink={() => {
+                  if (selectedFiles.size === 1) {
+                    const fileId = Array.from(selectedFiles)[0];
+                    const file = files.find(f => f.id === fileId);
+                    if (file && file.webViewLink) {
+                      navigator.clipboard.writeText(file.webViewLink);
+                      // Show toast notification
+                      const toast = document.createElement('div');
+                      toast.className = 'fixed bottom-4 right-4 bg-slate-800 border border-slate-600 text-white px-4 py-2 rounded-lg shadow-lg z-50';
+                      toast.textContent = 'Enlace copiado al portapapeles';
+                      document.body.appendChild(toast);
+                      setTimeout(() => toast.remove(), 3000);
+                    }
+                  }
                 }}
                 onRenameSingle={() => {
                   if (selectedFiles.size === 1) {

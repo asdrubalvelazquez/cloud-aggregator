@@ -5,7 +5,7 @@ import { type MouseEvent } from "react";
 type FileActionBarProps = {
   provider: "google_drive" | "onedrive";
   selectedCount: number;
-  singleSelected?: { id: string; name: string; isFolder: boolean } | null;
+  singleSelected?: { id: string; name: string; isFolder: boolean; webViewLink?: string } | null;
   onClearSelection: () => void;
   
   // Action callbacks
@@ -14,6 +14,8 @@ type FileActionBarProps = {
   onRenameSingle?: () => void;
   onDeleteSelected?: () => void;
   onPreviewSingle?: () => void;
+  onShareInProvider?: () => void;
+  onGetLink?: () => void;
   onNewFolder?: () => void;
   onUpload?: () => void;
   onRefresh?: () => void;
@@ -33,6 +35,8 @@ export default function FileActionBar({
   onRenameSingle,
   onDeleteSelected,
   onPreviewSingle,
+  onShareInProvider,
+  onGetLink,
   onNewFolder,
   onUpload,
   onRefresh,
@@ -121,16 +125,19 @@ export default function FileActionBar({
 
       {/* Action buttons with icons only (Google Drive style) */}
       <div className="flex items-center gap-1">
-        {/* Share (placeholder) */}
-        <button
-          type="button"
-          className="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition"
-          title="Compartir"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-          </svg>
-        </button>
+        {/* Share in provider */}
+        {onShareInProvider && (
+          <button
+            type="button"
+            onClick={onShareInProvider}
+            className="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition"
+            title="Compartir en Google Drive / OneDrive"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+            </svg>
+          </button>
+        )}
 
         {/* Download */}
         {onDownloadSelected && (
@@ -183,16 +190,19 @@ export default function FileActionBar({
           </button>
         )}
 
-        {/* Link/Share link */}
-        <button
-          type="button"
-          className="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition"
-          title="Obtener enlace"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-          </svg>
-        </button>
+        {/* Get link */}
+        {onGetLink && singleSelected && (
+          <button
+            type="button"
+            onClick={onGetLink}
+            className="p-2 text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg transition"
+            title="Copiar enlace"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+            </svg>
+          </button>
+        )}
 
         {/* More options */}
         <button
