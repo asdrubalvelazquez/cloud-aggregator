@@ -224,34 +224,49 @@ export default function CloudTransferPage() {
 
     setIsTransferring(true);
     try {
-      // FASE 1: Solo soporta Google Drive → OneDrive
-      if (sourceAcc.provider !== "google_drive") {
-        throw new Error("Por ahora solo se soporta transferir DESDE Google Drive. Selecciona una cuenta de Google Drive como origen.");
-      }
-      if (destAcc.provider !== "onedrive") {
-        throw new Error("Por ahora solo se soporta transferir HACIA OneDrive. Selecciona una cuenta de OneDrive como destino.");
+      // Support bidirectional transfers: Google Drive ↔ OneDrive
+      if (sourceAcc.provider === destAcc.provider) {
+        throw new Error("Las cuentas de origen y destino deben ser de diferentes proveedores (Google Drive ↔ OneDrive).");
       }
 
-      // Google Drive usa cloud_account_id (int), OneDrive usa provider_account_uuid (string UUID)
-      const source_account_id = Number(sourceAcc.cloud_account_id);
-      const target_account_id = destAcc.provider_account_uuid || String(destAcc.cloud_account_id);
+      // Determine account IDs based on provider
+      let source_account_id: number | string;
+      let target_account_id: number | string;
 
-      if (isNaN(source_account_id)) {
-        throw new Error("ID de cuenta origen inválido");
+      if (sourceAcc.provider === "google_drive") {
+        source_account_id = Number(sourceAcc.cloud_account_id);
+        if (isNaN(source_account_id)) {
+          throw new Error("ID de cuenta origen inválido");
+        }
+      } else if (sourceAcc.provider === "onedrive") {
+        source_account_id = sourceAcc.provider_account_uuid || String(sourceAcc.cloud_account_id);
+      } else {
+        throw new Error(`Proveedor de origen no soportado: ${sourceAcc.provider}`);
+      }
+
+      if (destAcc.provider === "google_drive") {
+        target_account_id = Number(destAcc.cloud_account_id);
+        if (isNaN(target_account_id)) {
+          throw new Error("ID de cuenta destino inválido");
+        }
+      } else if (destAcc.provider === "onedrive") {
+        target_account_id = destAcc.provider_account_uuid || String(destAcc.cloud_account_id);
+      } else {
+        throw new Error(`Proveedor de destino no soportado: ${destAcc.provider}`);
       }
 
       const payload = {
-        source_provider: "google_drive",
+        source_provider: sourceAcc.provider,
         source_account_id: source_account_id,
-        target_provider: "onedrive",
+        target_provider: destAcc.provider,
         target_account_id: target_account_id,
         file_ids: Array.from(selectedFiles),
         target_folder_id: destPath === "root" ? null : destPath,
       };
 
-      console.log("FASE 1: Creando job...", payload);
+      console.log("Creating transfer job...", payload);
 
-      // FASE 1: Crear job vacío
+      // Create empty job
       const createRes = await authenticatedFetch("/transfer/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

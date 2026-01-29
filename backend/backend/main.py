@@ -2418,16 +2418,22 @@ async def create_transfer_job_endpoint(
     - Only Google Drive → OneDrive supported
     """
     try:
-        # PHASE 1 ENFORCEMENT: Only Google Drive → OneDrive
-        if request.source_provider != "google_drive":
+        # Support bidirectional transfers: Google Drive ↔ OneDrive
+        supported_providers = {"google_drive", "onedrive"}
+        if request.source_provider not in supported_providers:
             raise HTTPException(
                 status_code=400,
-                detail={"error": "unsupported_provider", "message": f"Phase 1 only supports source_provider='google_drive', got '{request.source_provider}'"}
+                detail={"error": "unsupported_provider", "message": f"Unsupported source_provider: '{request.source_provider}'. Supported: {supported_providers}"}
             )
-        if request.target_provider != "onedrive":
+        if request.target_provider not in supported_providers:
             raise HTTPException(
                 status_code=400,
-                detail={"error": "unsupported_provider", "message": f"Phase 1 only supports target_provider='onedrive', got '{request.target_provider}'"}
+                detail={"error": "unsupported_provider", "message": f"Unsupported target_provider: '{request.target_provider}'. Supported: {supported_providers}"}
+            )
+        if request.source_provider == request.target_provider:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_transfer", "message": "Source and target providers must be different"}
             )
         
         # BLOCKER 5: Validate metadata (file_ids)
@@ -2451,57 +2457,109 @@ async def create_transfer_job_endpoint(
         if not all(isinstance(fid, str) and fid.strip() for fid in request.file_ids):
             raise HTTPException(status_code=400, detail={"error": "invalid_request", "message": "All file_ids must be non-empty strings"})
         
-        # Verify source account ownership (Google Drive uses cloud_accounts table WITHOUT provider column)
-        try:
-            source_check = (
-                supabase.table("cloud_accounts")
-                .select("id")
-                .eq("id", request.source_account_id)
-                .eq("user_id", user_id)
-                .single()
-                .execute()
-            )
-            if not source_check.data:
+        # Verify source account ownership (depends on provider)
+        if request.source_provider == "google_drive":
+            # Google Drive uses cloud_accounts table
+            try:
+                source_check = (
+                    supabase.table("cloud_accounts")
+                    .select("id")
+                    .eq("id", request.source_account_id)
+                    .eq("user_id", user_id)
+                    .single()
+                    .execute()
+                )
+                if not source_check.data:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={"error": "account_not_owned", "message": "Source Google Drive account not found or doesn't belong to you"}
+                    )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logging.warning(f"[TRANSFER] Source account validation failed for account_id={request.source_account_id}, user_id={user_id}: {e}")
                 raise HTTPException(
                     status_code=403,
                     detail={"error": "account_not_owned", "message": "Source Google Drive account not found or doesn't belong to you"}
                 )
-        except HTTPException:
-            raise
-        except Exception as e:
-            # Supabase .single() error (0 rows, multiple rows, etc.)
-            logging.warning(f"[TRANSFER] Source account validation failed for account_id={request.source_account_id}, user_id={user_id}: {e}")
-            raise HTTPException(
-                status_code=403,
-                detail={"error": "account_not_owned", "message": "Source Google Drive account not found or doesn't belong to you"}
-            )
+        elif request.source_provider == "onedrive":
+            # OneDrive uses cloud_provider_accounts table
+            try:
+                source_check = (
+                    supabase.table("cloud_provider_accounts")
+                    .select("id")
+                    .eq("id", request.source_account_id)
+                    .eq("user_id", user_id)
+                    .eq("provider", "onedrive")
+                    .eq("is_active", True)
+                    .single()
+                    .execute()
+                )
+                if not source_check.data:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={"error": "account_not_owned", "message": "Source OneDrive account not found, doesn't belong to you, or is inactive"}
+                    )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logging.warning(f"[TRANSFER] Source account validation failed for account_id={request.source_account_id}, user_id={user_id}: {e}")
+                raise HTTPException(
+                    status_code=403,
+                    detail={"error": "account_not_owned", "message": "Source OneDrive account not found, doesn't belong to you, or is inactive"}
+                )
         
-        # Verify target account ownership (OneDrive uses cloud_provider_accounts WITH provider column)
-        try:
-            target_check = (
-                supabase.table("cloud_provider_accounts")
-                .select("id")
-                .eq("id", request.target_account_id)
-                .eq("user_id", user_id)
-                .eq("provider", "onedrive")
-                .eq("is_active", True)
-                .single()
-                .execute()
-            )
-            if not target_check.data:
+        # Verify target account ownership (depends on provider)
+        if request.target_provider == "google_drive":
+            # Google Drive uses cloud_accounts table
+            try:
+                target_check = (
+                    supabase.table("cloud_accounts")
+                    .select("id")
+                    .eq("id", request.target_account_id)
+                    .eq("user_id", user_id)
+                    .single()
+                    .execute()
+                )
+                if not target_check.data:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={"error": "account_not_owned", "message": "Target Google Drive account not found or doesn't belong to you"}
+                    )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logging.warning(f"[TRANSFER] Target account validation failed for account_id={request.target_account_id}, user_id={user_id}: {e}")
+                raise HTTPException(
+                    status_code=403,
+                    detail={"error": "account_not_owned", "message": "Target Google Drive account not found or doesn't belong to you"}
+                )
+        elif request.target_provider == "onedrive":
+            # OneDrive uses cloud_provider_accounts table
+            try:
+                target_check = (
+                    supabase.table("cloud_provider_accounts")
+                    .select("id")
+                    .eq("id", request.target_account_id)
+                    .eq("user_id", user_id)
+                    .eq("provider", "onedrive")
+                    .eq("is_active", True)
+                    .single()
+                    .execute()
+                )
+                if not target_check.data:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={"error": "account_not_owned", "message": "Target OneDrive account not found, doesn't belong to you, or is inactive"}
+                    )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logging.warning(f"[TRANSFER] Target account validation failed for account_id={request.target_account_id}, user_id={user_id}: {e}")
                 raise HTTPException(
                     status_code=403,
                     detail={"error": "account_not_owned", "message": "Target OneDrive account not found, doesn't belong to you, or is inactive"}
                 )
-        except HTTPException:
-            raise
-        except Exception as e:
-            # Supabase .single() error (0 rows, multiple rows, etc.)
-            logging.warning(f"[TRANSFER] Target account validation failed for account_id={request.target_account_id}, user_id={user_id}: {e}")
-            raise HTTPException(
-                status_code=403,
-                detail={"error": "account_not_owned", "message": "Target OneDrive account not found, doesn't belong to you, or is inactive"}
-            )
         
         # PHASE 1: Create empty job (fast, <500ms)
         # Metadata fetch and quota check moved to /transfer/prepare/{job_id}
@@ -2586,6 +2644,85 @@ async def get_source_metadata_google_drive(source_account_id: int, file_ids: Lis
     return file_items
 
 
+async def get_source_metadata_onedrive(source_account_id: str, file_ids: List[str]) -> List[Dict[str, Any]]:
+    """
+    Fetch file metadata from OneDrive.
+    
+    Args:
+        source_account_id: OneDrive account UUID (str)
+        file_ids: List of OneDrive file IDs
+    
+    Returns:
+        List of {source_item_id, source_name, size_bytes}
+    """
+    from backend.crypto import decrypt_token
+    from backend.onedrive import refresh_onedrive_token
+    
+    # Get OneDrive token from cloud_provider_accounts
+    account_result = (
+        supabase.table("cloud_provider_accounts")
+        .select("access_token,refresh_token")
+        .eq("id", source_account_id)
+        .single()
+        .execute()
+    )
+    
+    if not account_result.data:
+        raise HTTPException(status_code=500, detail="Source OneDrive account tokens not found")
+    
+    encrypted_access = account_result.data["access_token"]
+    encrypted_refresh = account_result.data["refresh_token"]
+    
+    onedrive_token = decrypt_token(encrypted_access)
+    onedrive_refresh = decrypt_token(encrypted_refresh)
+    
+    # Test token, refresh if needed
+    async with httpx.AsyncClient() as test_client:
+        test_resp = await test_client.get(
+            "https://graph.microsoft.com/v1.0/me/drive",
+            headers={"Authorization": f"Bearer {onedrive_token}"},
+            timeout=10.0
+        )
+        if test_resp.status_code == 401:
+            logging.info(f"[TRANSFER] OneDrive source token expired, refreshing...")
+            token_data = await refresh_onedrive_token(onedrive_refresh)
+            onedrive_token = token_data["access_token"]
+    
+    file_items = []
+    
+    for file_id in file_ids:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}",
+                    headers={"Authorization": f"Bearer {onedrive_token}"},
+                    timeout=10.0
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    file_items.append({
+                        "source_item_id": file_id,
+                        "source_name": data.get("name", "unknown"),
+                        "size_bytes": int(data.get("size", 0))
+                    })
+                else:
+                    logging.warning(f"[TRANSFER] Could not fetch OneDrive metadata for file {file_id}: {resp.status_code}")
+                    file_items.append({
+                        "source_item_id": file_id,
+                        "source_name": f"file_{file_id}",
+                        "size_bytes": 0
+                    })
+        except Exception as e:
+            logging.warning(f"[TRANSFER] Error fetching OneDrive metadata for file {file_id}: {e}")
+            file_items.append({
+                "source_item_id": file_id,
+                "source_name": f"file_{file_id}",
+                "size_bytes": 0
+            })
+    
+    return file_items
+
+
 async def get_source_metadata(provider: str, source_account_id: str, file_ids: List[str]) -> List[Dict[str, Any]]:
     """
     Provider-agnostic metadata fetch (BLOCKER 3: extensible for OneDrive/Dropbox).
@@ -2604,11 +2741,7 @@ async def get_source_metadata(provider: str, source_account_id: str, file_ids: L
     if provider == "google_drive":
         return await get_source_metadata_google_drive(int(source_account_id), file_ids)
     elif provider == "onedrive":
-        # TODO: Implement OneDrive metadata fetch (for OneDrive→Google future support)
-        raise HTTPException(
-            status_code=501,
-            detail=f"OneDrive as source provider not yet implemented"
-        )
+        return await get_source_metadata_onedrive(source_account_id, file_ids)
     elif provider == "dropbox":
         # TODO: Implement Dropbox metadata fetch
         raise HTTPException(
@@ -2893,40 +3026,81 @@ async def run_transfer_job_endpoint(
         if items:
             logging.info(f"[TRANSFER] First item keys: {list(items[0].keys())}")
         
-        # Get tokens
+        # Get tokens based on providers
         from backend.google_drive import get_valid_token
-        google_token = await get_valid_token(int(job["source_account_id"]))
-        
-        # Get OneDrive token (decrypt + refresh if needed)
         from backend.onedrive import refresh_onedrive_token
-        target_account_result = (
-            supabase.table("cloud_provider_accounts")
-            .select("access_token,refresh_token,id")
-            .eq("id", job["target_account_id"])  # Use UUID directly, NOT int()
-            .single()
-            .execute()
-        )
-        if not target_account_result.data:
-            raise HTTPException(status_code=500, detail="Target OneDrive account tokens not found")
-        
-        encrypted_access = target_account_result.data["access_token"]
-        encrypted_refresh = target_account_result.data["refresh_token"]
-        
         from backend.crypto import decrypt_token
-        onedrive_access_token = decrypt_token(encrypted_access)
-        onedrive_refresh_token = decrypt_token(encrypted_refresh)
         
-        # Try token, refresh if 401
-        async with httpx.AsyncClient() as test_client:
-            test_resp = await test_client.get(
-                "https://graph.microsoft.com/v1.0/me/drive",
-                headers={"Authorization": f"Bearer {onedrive_access_token}"},
-                timeout=10.0
+        source_provider = job["source_provider"]
+        target_provider = job["target_provider"]
+        
+        # Get source token
+        if source_provider == "google_drive":
+            source_token = await get_valid_token(int(job["source_account_id"]))
+        elif source_provider == "onedrive":
+            source_account_result = (
+                supabase.table("cloud_provider_accounts")
+                .select("access_token,refresh_token,id")
+                .eq("id", job["source_account_id"])
+                .single()
+                .execute()
             )
-            if test_resp.status_code == 401:
-                logging.info(f"[TRANSFER] OneDrive token expired, refreshing...")
-                token_data = await refresh_onedrive_token(onedrive_refresh_token)
-                onedrive_access_token = token_data["access_token"]
+            if not source_account_result.data:
+                raise HTTPException(status_code=500, detail="Source OneDrive account tokens not found")
+            
+            encrypted_access = source_account_result.data["access_token"]
+            encrypted_refresh = source_account_result.data["refresh_token"]
+            
+            source_token = decrypt_token(encrypted_access)
+            source_refresh = decrypt_token(encrypted_refresh)
+            
+            # Test and refresh if needed
+            async with httpx.AsyncClient() as test_client:
+                test_resp = await test_client.get(
+                    "https://graph.microsoft.com/v1.0/me/drive",
+                    headers={"Authorization": f"Bearer {source_token}"},
+                    timeout=10.0
+                )
+                if test_resp.status_code == 401:
+                    logging.info(f"[TRANSFER] Source OneDrive token expired, refreshing...")
+                    token_data = await refresh_onedrive_token(source_refresh)
+                    source_token = token_data["access_token"]
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported source provider: {source_provider}")
+        
+        # Get target token
+        if target_provider == "google_drive":
+            target_token = await get_valid_token(int(job["target_account_id"]))
+        elif target_provider == "onedrive":
+            target_account_result = (
+                supabase.table("cloud_provider_accounts")
+                .select("access_token,refresh_token,id")
+                .eq("id", job["target_account_id"])
+                .single()
+                .execute()
+            )
+            if not target_account_result.data:
+                raise HTTPException(status_code=500, detail="Target OneDrive account tokens not found")
+            
+            encrypted_access = target_account_result.data["access_token"]
+            encrypted_refresh = target_account_result.data["refresh_token"]
+            
+            target_token = decrypt_token(encrypted_access)
+            target_refresh = decrypt_token(encrypted_refresh)
+            
+            # Test and refresh if needed
+            async with httpx.AsyncClient() as test_client:
+                test_resp = await test_client.get(
+                    "https://graph.microsoft.com/v1.0/me/drive",
+                    headers={"Authorization": f"Bearer {target_token}"},
+                    timeout=10.0
+                )
+                if test_resp.status_code == 401:
+                    logging.info(f"[TRANSFER] Target OneDrive token expired, refreshing...")
+                    token_data = await refresh_onedrive_token(target_refresh)
+                    target_token = token_data["access_token"]
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported target provider: {target_provider}")
         
         # Process each item
         last_cancel_check_at = 0.0
@@ -2956,20 +3130,26 @@ async def run_transfer_job_endpoint(
                 )
                 
                 # Check for duplicates BEFORE downloading (save bandwidth)
-                # CRITICAL: Wrap in try/except to prevent dedupe failures from blocking job
                 target_folder_path = job.get("target_folder_id") or "root"
                 file_size = item.get("size_bytes", 0)
                 
-                from backend.onedrive import find_duplicate_in_onedrive
-                
                 duplicate = None
                 try:
-                    duplicate = await find_duplicate_in_onedrive(
-                        access_token=onedrive_access_token,
-                        file_name=file_name,
-                        file_size=file_size,
-                        folder_id=target_folder_path
-                    )
+                    if target_provider == "onedrive":
+                        from backend.onedrive import find_duplicate_in_onedrive
+                        duplicate = await find_duplicate_in_onedrive(
+                            access_token=target_token,
+                            file_name=file_name,
+                            file_size=file_size,
+                            folder_id=target_folder_path
+                        )
+                    elif target_provider == "google_drive":
+                        duplicate = await transfer.find_duplicate_in_google_drive(
+                            google_token=target_token,
+                            file_name=file_name,
+                            file_size=file_size,
+                            folder_id=target_folder_path
+                        )
                 except Exception as e:
                     # CRITICAL: Dedupe failure must not block transfer
                     logging.error(f"[TRANSFER] DEDUPE FAILED (fallback to copy): {file_name} - {e}")
@@ -2984,22 +3164,42 @@ async def run_transfer_job_endpoint(
                         status="skipped",
                         error_message="already_exists",
                         target_item_id=duplicate.get("id"),
-                        target_web_url=duplicate.get("webUrl")
+                        target_web_url=duplicate.get("webUrl") or duplicate.get("webViewLink")
                     )
                     # CRITICAL: Update job counters (skipped counts as completed for job progress)
                     await transfer.update_job_status(supabase, job_id, increment_completed=True)
                     continue
                 
-                # Download from Google Drive
-                async with httpx.AsyncClient() as client:
-                    download_resp = await client.get(
-                        f"https://www.googleapis.com/drive/v3/files/{item['source_item_id']}?alt=media",
-                        headers={"Authorization": f"Bearer {google_token}"},
-                        timeout=300.0  # 5 minutes for large files
-                    )
-                    
-                    if download_resp.status_code != 200:
-                        error_msg = f"Google Drive download failed: {download_resp.status_code}"
+                # Download from source
+                if source_provider == "google_drive":
+                    async with httpx.AsyncClient() as client:
+                        download_resp = await client.get(
+                            f"https://www.googleapis.com/drive/v3/files/{item['source_item_id']}?alt=media",
+                            headers={"Authorization": f"Bearer {source_token}"},
+                            timeout=300.0  # 5 minutes for large files
+                        )
+                        
+                        if download_resp.status_code != 200:
+                            error_msg = f"Google Drive download failed: {download_resp.status_code}"
+                            await transfer.update_item_status(
+                                supabase,
+                                item["id"],
+                                status="failed",
+                                error_message=error_msg
+                            )
+                            await transfer.update_job_status(supabase, job_id, increment_failed=True)
+                            continue
+                        
+                        file_data = download_resp.content
+                elif source_provider == "onedrive":
+                    try:
+                        file_data = await transfer.download_from_onedrive(
+                            access_token=source_token,
+                            file_id=item['source_item_id'],
+                            timeout=300.0
+                        )
+                    except Exception as e:
+                        error_msg = f"OneDrive download failed: {str(e)}"
                         await transfer.update_item_status(
                             supabase,
                             item["id"],
@@ -3008,18 +3208,28 @@ async def run_transfer_job_endpoint(
                         )
                         await transfer.update_job_status(supabase, job_id, increment_failed=True)
                         continue
-                    
-                    file_data = download_resp.content
+                else:
+                    raise HTTPException(status_code=400, detail=f"Unsupported source provider: {source_provider}")
                 
-                # Upload to OneDrive (chunked)
-                upload_result = await transfer.upload_to_onedrive_chunked(
-                    access_token=onedrive_access_token,
-                    file_name=file_name,
-                    file_data=file_data,
-                    folder_path=target_folder_path,
-                    job_id=job_id,
-                    supabase_client=supabase
-                )
+                # Upload to target
+                if target_provider == "onedrive":
+                    upload_result = await transfer.upload_to_onedrive_chunked(
+                        access_token=target_token,
+                        file_name=file_name,
+                        file_data=file_data,
+                        folder_path=target_folder_path,
+                        job_id=job_id,
+                        supabase_client=supabase
+                    )
+                elif target_provider == "google_drive":
+                    upload_result = await transfer.upload_to_google_drive(
+                        google_token=target_token,
+                        file_name=file_name,
+                        file_data=file_data,
+                        folder_id=target_folder_path
+                    )
+                else:
+                    raise HTTPException(status_code=400, detail=f"Unsupported target provider: {target_provider}")
                 
                 # Mark item as done (with webUrl)
                 await transfer.update_item_status(
@@ -3027,7 +3237,7 @@ async def run_transfer_job_endpoint(
                     item["id"],
                     status="done",
                     target_item_id=upload_result.get("id"),
-                    target_web_url=upload_result.get("webUrl"),
+                    target_web_url=upload_result.get("webUrl") or upload_result.get("webViewLink"),
                     bytes_transferred=len(file_data)
                 )
                 

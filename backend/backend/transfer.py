@@ -407,3 +407,290 @@ async def upload_to_onedrive_chunked(
             "size": final_response.get("size", file_size),
             "webUrl": web_url
         }
+
+
+async def download_from_onedrive(
+    access_token: str,
+    file_id: str,
+    timeout: float = 300.0
+) -> bytes:
+    """
+    Download file from OneDrive.
+    
+    Args:
+        access_token: OneDrive access token
+        file_id: OneDrive file ID
+        timeout: Request timeout in seconds
+        
+    Returns:
+        File content as bytes
+    """
+    from backend.onedrive import GRAPH_API_BASE
+    
+    # Get download URL
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        # First get the file metadata including download URL
+        metadata_url = f"{GRAPH_API_BASE}/me/drive/items/{file_id}"
+        headers = {"Authorization": f"Bearer {access_token}"}
+        
+        metadata_resp = await client.get(metadata_url, headers=headers)
+        
+        if metadata_resp.status_code != 200:
+            raise HTTPException(
+                status_code=metadata_resp.status_code,
+                detail=f"Failed to get file metadata from OneDrive: {metadata_resp.text}"
+            )
+        
+        metadata = metadata_resp.json()
+        download_url = metadata.get("@microsoft.graph.downloadUrl")
+        
+        if not download_url:
+            raise HTTPException(
+                status_code=500,
+                detail="OneDrive file has no download URL"
+            )
+        
+        # Download file (no auth needed for @microsoft.graph.downloadUrl)
+        download_resp = await client.get(download_url)
+        
+        if download_resp.status_code != 200:
+            raise HTTPException(
+                status_code=download_resp.status_code,
+                detail=f"Failed to download file from OneDrive: {download_resp.status_code}"
+            )
+        
+        return download_resp.content
+
+
+async def upload_to_google_drive(
+    google_token: str,
+    file_name: str,
+    file_data: bytes,
+    folder_id: str = "root"
+) -> Dict[str, Any]:
+    """
+    Upload file to Google Drive (simple upload for files < 5MB, resumable for larger).
+    
+    Args:
+        google_token: Google Drive access token
+        file_name: Name of the file
+        file_data: File content as bytes
+        folder_id: Parent folder ID (default "root")
+        
+    Returns:
+        {
+            "id": "file_id",
+            "name": "filename",
+            "webViewLink": "https://..."
+        }
+    """
+    file_size = len(file_data)
+    
+    # For small files (< 5MB), use simple upload
+    if file_size < 5 * 1024 * 1024:
+        return await _simple_upload_to_google_drive(google_token, file_name, file_data, folder_id)
+    else:
+        return await _resumable_upload_to_google_drive(google_token, file_name, file_data, folder_id)
+
+
+async def _simple_upload_to_google_drive(
+    google_token: str,
+    file_name: str,
+    file_data: bytes,
+    folder_id: str = "root"
+) -> Dict[str, Any]:
+    """Simple upload for files < 5MB."""
+    import json
+    
+    metadata = {
+        "name": file_name,
+        "parents": [folder_id] if folder_id != "root" else []
+    }
+    
+    # Multipart upload
+    boundary = "===============7330845974216740156=="
+    
+    body_parts = []
+    body_parts.append(f"--{boundary}")
+    body_parts.append("Content-Type: application/json; charset=UTF-8")
+    body_parts.append("")
+    body_parts.append(json.dumps(metadata))
+    body_parts.append(f"--{boundary}")
+    body_parts.append("Content-Type: application/octet-stream")
+    body_parts.append("")
+    
+    body = "\r\n".join(body_parts).encode('utf-8') + b"\r\n" + file_data + f"\r\n--{boundary}--".encode('utf-8')
+    
+    headers = {
+        "Authorization": f"Bearer {google_token}",
+        "Content-Type": f"multipart/related; boundary={boundary}",
+        "Content-Length": str(len(body))
+    }
+    
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        response = await client.post(
+            "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink",
+            headers=headers,
+            content=body
+        )
+        
+        if response.status_code not in (200, 201):
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Failed to upload to Google Drive: {response.text}"
+            )
+        
+        return response.json()
+
+
+async def _resumable_upload_to_google_drive(
+    google_token: str,
+    file_name: str,
+    file_data: bytes,
+    folder_id: str = "root"
+) -> Dict[str, Any]:
+    """Resumable upload for files >= 5MB."""
+    import json
+    
+    file_size = len(file_data)
+    
+    # Step 1: Start resumable upload session
+    metadata = {
+        "name": file_name,
+        "parents": [folder_id] if folder_id != "root" else []
+    }
+    
+    headers = {
+        "Authorization": f"Bearer {google_token}",
+        "Content-Type": "application/json; charset=UTF-8",
+        "X-Upload-Content-Length": str(file_size)
+    }
+    
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        init_response = await client.post(
+            "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,webViewLink",
+            headers=headers,
+            json=metadata
+        )
+        
+        if init_response.status_code != 200:
+            raise HTTPException(
+                status_code=init_response.status_code,
+                detail=f"Failed to initiate Google Drive upload: {init_response.text}"
+            )
+        
+        upload_url = init_response.headers.get("Location")
+        
+        if not upload_url:
+            raise HTTPException(
+                status_code=500,
+                detail="No upload URL returned from Google Drive"
+            )
+        
+        # Step 2: Upload file in chunks (256KB chunks)
+        chunk_size = 256 * 1024  # 256KB
+        offset = 0
+        
+        while offset < file_size:
+            chunk_end = min(offset + chunk_size, file_size)
+            chunk = file_data[offset:chunk_end]
+            
+            chunk_headers = {
+                "Content-Length": str(len(chunk)),
+                "Content-Range": f"bytes {offset}-{chunk_end-1}/{file_size}"
+            }
+            
+            chunk_response = await client.put(
+                upload_url,
+                headers=chunk_headers,
+                content=chunk
+            )
+            
+            # 308 = Resume Incomplete (expected for all but last chunk)
+            # 200/201 = Complete
+            if chunk_response.status_code not in (200, 201, 308):
+                raise HTTPException(
+                    status_code=chunk_response.status_code,
+                    detail=f"Failed to upload chunk to Google Drive: {chunk_response.text}"
+                )
+            
+            offset = chunk_end
+            logger.info(f"[GDRIVE_UPLOAD] Uploaded {offset}/{file_size} bytes ({(offset/file_size*100):.1f}%)")
+        
+        # Final response contains file metadata
+        if chunk_response.status_code in (200, 201):
+            return chunk_response.json()
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="Upload completed but no file metadata returned"
+            )
+
+
+async def find_duplicate_in_google_drive(
+    google_token: str,
+    file_name: str,
+    file_size: int,
+    folder_id: str = "root"
+) -> Optional[Dict[str, Any]]:
+    """
+    Search for duplicate file in Google Drive folder.
+    
+    Args:
+        google_token: Google Drive access token
+        file_name: Name of file to search for
+        file_size: Size in bytes (for matching)
+        folder_id: Parent folder ID (default "root")
+        
+    Returns:
+        File metadata if duplicate found, None otherwise
+    """
+    try:
+        # Escape single quotes in file name for query
+        escaped_name = file_name.replace("'", "\\'")
+        
+        # Build query: name matches AND in parent folder
+        if folder_id == "root":
+            query = f"name = '{escaped_name}' and 'root' in parents and trashed = false"
+        else:
+            query = f"name = '{escaped_name}' and '{folder_id}' in parents and trashed = false"
+        
+        params = {
+            "q": query,
+            "fields": "files(id,name,size,webViewLink)",
+            "pageSize": 10  # Limit results
+        }
+        
+        headers = {"Authorization": f"Bearer {google_token}"}
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                "https://www.googleapis.com/drive/v3/files",
+                headers=headers,
+                params=params
+            )
+            
+            if response.status_code != 200:
+                logger.warning(f"[DEDUPE_GD] Search failed: {response.status_code}")
+                return None
+            
+            data = response.json()
+            files = data.get("files", [])
+            
+            # Find exact match by name and size
+            for file in files:
+                if file.get("name") == file_name and int(file.get("size", 0)) == file_size:
+                    logger.info(f"[DEDUPE_GD] DUPLICATE FOUND: {file_name}")
+                    return {
+                        "id": file.get("id"),
+                        "name": file.get("name"),
+                        "size": int(file.get("size", 0)),
+                        "webViewLink": file.get("webViewLink")
+                    }
+            
+            logger.info(f"[DEDUPE_GD] NO MATCH: {file_name}")
+            return None
+            
+    except Exception as e:
+        logger.warning(f"[DEDUPE_GD] Error searching for duplicate: {e}")
+        return None  # Safe fallback
