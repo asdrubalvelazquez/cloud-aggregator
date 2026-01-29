@@ -40,6 +40,7 @@ export default function CloudTransferPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [selectedAccountNeedsReconnect, setSelectedAccountNeedsReconnect] = useState(false);
+  const [destAccountNeedsReconnect, setDestAccountNeedsReconnect] = useState(false);
 
   // Cargar cuentas conectadas
   useEffect(() => {
@@ -113,13 +114,26 @@ export default function CloudTransferPage() {
   useEffect(() => {
     if (!destAccount) {
       setDestFolders([]);
+      setDestAccountNeedsReconnect(false);
       return;
     }
 
     const account = accounts.find(a => a.cloud_account_id === destAccount);
-    const endpoint = account?.provider === 'onedrive'
-      ? `/onedrive/${destAccount}/folders?parent_id=${destPath}`
-      : `/drive/${destAccount}/folders?parent_id=${destPath}`;
+    
+    // Verificar si la cuenta necesita reconexión
+    if (account?.can_reconnect) {
+      setDestAccountNeedsReconnect(true);
+      setDestFolders([]);
+      return;
+    }
+
+    setDestAccountNeedsReconnect(false);
+
+    // Usar el endpoint correcto con parámetro folder_id o parent_id (NO /folders)
+    const provider = account?.provider;
+    const endpoint = provider === 'onedrive'
+      ? `/onedrive/${destAccount}/files?parent_id=${destPath}`
+      : `/drive/${destAccount}/files?folder_id=${destPath}`;
 
     authenticatedFetch(endpoint)
       .then(async (res) => {
@@ -130,15 +144,32 @@ export default function CloudTransferPage() {
 
         const data = await res.json();
 
-        const foldersList = data.items || data.folders || [];
+        // OneDrive usa "items", Google Drive usa "files"
+        const filesList = data.items || data.files || [];
+
+        // Filtrar solo carpetas
+        const folders = filesList.filter((f: any) => {
+          const isFolder = f.isFolder || 
+                          f.mimeType === "application/vnd.google-apps.folder" || 
+                          f.mimeType === "folder" || 
+                          f.type === "folder" ||
+                          f.kind === "folder";
+          return isFolder;
+        });
 
         setDestFolders(
-          foldersList.map((f: any) => ({
+          folders.map((f: any) => ({
             id: f.id,
             name: f.name,
             isFolder: true,
           }))
         );
+        
+        // Limpiar error si se cargó correctamente
+        if (error === "No se pudieron cargar las carpetas de destino" || 
+            error === "La cuenta destino necesita reconexión") {
+          setError(null);
+        }
       })
       .catch((err) => {
         console.error('Error al cargar carpetas destino:', err);
@@ -335,7 +366,32 @@ export default function CloudTransferPage() {
                 ))}
             </select>
             <div className="flex-1 overflow-y-auto border rounded bg-slate-900">
-              {destFolders.length === 0 ? (
+              {!destAccount ? (
+                <div className="p-4 text-slate-400">Selecciona una cuenta para ver carpetas</div>
+              ) : destAccountNeedsReconnect ? (
+                <div className="bg-yellow-900/20 border border-yellow-600 rounded-lg p-6 m-4">
+                  <div className="flex items-start gap-3">
+                    <div className="text-3xl">⚠️</div>
+                    <div className="flex-1">
+                      <h3 className="text-yellow-400 font-semibold text-lg mb-2">
+                        Esta Cuenta Necesita Reconexión
+                      </h3>
+                      <p className="text-slate-300 mb-4">
+                        La cuenta destino seleccionada requiere reautorización para acceder a las carpetas.
+                        Por favor, reconecta la cuenta para continuar.
+                      </p>
+                      <button
+                        onClick={() => {
+                          handleReconnect(destAccount);
+                        }}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
+                      >
+                        🔄 Reconectar Ahora
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : destFolders.length === 0 ? (
                 <div className="p-4 text-slate-400">Selecciona una cuenta para ver carpetas</div>
               ) : (
                 <ul>
