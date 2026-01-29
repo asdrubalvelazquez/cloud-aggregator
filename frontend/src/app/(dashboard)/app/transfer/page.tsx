@@ -224,9 +224,6 @@ export default function CloudTransferPage() {
         
         const progress = job.total_items > 0 ? (job.completed_items / job.total_items) * 100 : 0;
         
-        setTransferProgress(progress);
-        setTransferStatus(`Transfiriendo... ${job.completed_items}/${job.total_items} archivos`);
-        
         // Update job in queue for panel
         addJob({
           ...job,
@@ -236,20 +233,26 @@ export default function CloudTransferPage() {
         
         // Check if job is done - include all terminal states
         const terminalStates = ["done", "done_skipped", "partial", "failed", "cancelled"];
-        if (terminalStates.includes(job.status)) {
-          console.log("[Transfer] Job completed with status:", job.status);
+        const isTerminal = terminalStates.includes(job.status);
+        const allItemsProcessed = job.total_items > 0 && 
+          (job.completed_items + (job.failed_items || 0) + (job.skipped_items || 0)) >= job.total_items;
+        
+        if (isTerminal || allItemsProcessed) {
+          console.log("[Transfer] Job completed! status:", job.status, "isTerminal:", isTerminal, "allItemsProcessed:", allItemsProcessed);
           
-          // Stop polling
+          // Stop polling FIRST
           if (pollingRef.current) {
             clearInterval(pollingRef.current);
             pollingRef.current = null;
+            console.log("[Transfer] Polling stopped");
           }
           
+          // Update UI state
           setIsTransferring(false);
           setCurrentJobId(null);
+          setTransferProgress(100);
           
-          if (job.status === "done" || job.status === "done_skipped") {
-            setTransferProgress(100);
+          if (job.status === "done" || job.status === "done_skipped" || (allItemsProcessed && job.failed_items === 0)) {
             setTransferStatus("¡Transferencia completada!");
             const message = job.status === "done_skipped" 
               ? `✅ ${job.total_items} archivos ya existían en destino`
@@ -264,14 +267,16 @@ export default function CloudTransferPage() {
             setTimeout(() => {
               setRecentlyTransferredFiles(new Set());
             }, 10000);
-          } else if (job.status === "partial") {
-            setTransferProgress(100);
+          } else if (job.status === "partial" || (allItemsProcessed && job.failed_items > 0 && job.completed_items > 0)) {
+            setTransferStatus("Transferencia parcial");
             setSuccess(`⚠️ Transferencia parcial: ${job.completed_items}/${job.total_items} archivos completados`);
             toast.success(`Transferencia parcial completada`);
           } else if (job.status === "failed") {
+            setTransferStatus("Error");
             setError(`❌ La transferencia falló`);
             toast.error("Error en la transferencia");
           } else if (job.status === "cancelled") {
+            setTransferStatus("Cancelada");
             setError("Transferencia cancelada");
             toast.error("Transferencia cancelada");
           }
@@ -285,8 +290,13 @@ export default function CloudTransferPage() {
             setTransferStatus("");
           }, 3000);
           
-          return;
+          return; // Exit poll function
         }
+        
+        // Job still running - update progress
+        setTransferProgress(progress);
+        setTransferStatus(`Transfiriendo... ${job.completed_items}/${job.total_items} archivos`);
+        
       } catch (error) {
         console.error("[Transfer] Error polling:", error);
       }
