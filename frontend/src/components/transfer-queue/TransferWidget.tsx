@@ -14,13 +14,14 @@ export function TransferWidget() {
   const [isMinimized, setIsMinimized] = useState(false);
 
   // Get jobs as array, sorted by creation date (newest first)
-  const jobsArray = Array.from(jobs.values()).sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-  );
+  // Filter out jobs that don't have provider info (old/corrupted data)
+  const jobsArray = Array.from(jobs.values())
+    .filter(job => job.source_provider && job.target_provider) // Only show jobs with valid provider info
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
   // Count active (non-terminal) jobs
   const activeJobs = jobsArray.filter(job => !isTerminalState(job));
-  const completedJobs = jobsArray.filter(job => isTerminalState(job) && job.status === "done");
+  const completedJobs = jobsArray.filter(job => isTerminalState(job) && (job.status === "done" || job.status === "done_skipped"));
   const failedJobs = jobsArray.filter(job => job.status === "failed");
 
   // If no jobs, don't show anything
