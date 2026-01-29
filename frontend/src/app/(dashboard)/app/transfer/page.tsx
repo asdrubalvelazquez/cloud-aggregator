@@ -251,23 +251,52 @@ export default function CloudTransferPage() {
         target_folder_id: destPath === "root" ? null : destPath,
       };
 
-      console.log("Enviando transferencia:", payload);
+      console.log("FASE 1: Creando job...", payload);
 
-      const res = await authenticatedFetch("/transfer/create", {
+      // FASE 1: Crear job vacío
+      const createRes = await authenticatedFetch("/transfer/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
+      if (!createRes.ok) {
+        const errorData = await createRes.json().catch(() => ({}));
         throw new Error(errorData.detail?.message || errorData.message || "Error al crear transferencia");
       }
 
-      const data = await res.json();
-      setSuccess(`Transferencia iniciada correctamente (Job ID: ${data.job_id})`);
+      const { job_id } = await createRes.json();
+      console.log("FASE 1 completada: Job ID =", job_id);
+
+      // FASE 2: Preparar job (fetch metadata, check quota, create items)
+      console.log("FASE 2: Preparando job...");
+      const prepareRes = await authenticatedFetch(`/transfer/prepare/${job_id}`, {
+        method: "POST",
+      });
+
+      if (!prepareRes.ok) {
+        const errorData = await prepareRes.json().catch(() => ({}));
+        throw new Error(errorData.detail?.message || errorData.message || "Error al preparar transferencia");
+      }
+
+      console.log("FASE 2 completada");
+
+      // FASE 3: Ejecutar transferencia
+      console.log("FASE 3: Ejecutando transferencia...");
+      const runRes = await authenticatedFetch(`/transfer/run/${job_id}`, {
+        method: "POST",
+      });
+
+      if (!runRes.ok) {
+        const errorData = await runRes.json().catch(() => ({}));
+        throw new Error(errorData.detail?.message || errorData.message || "Error al ejecutar transferencia");
+      }
+
+      console.log("FASE 3: Transferencia en progreso");
+
+      setSuccess(`Transferencia iniciada correctamente (Job ID: ${job_id}). Revisa el panel de transferencias abajo.`);
       setSelectedFiles(new Set());
-      toast.success("Transferencia iniciada");
+      toast.success("Transferencia iniciada - Ver panel de progreso");
     } catch (err: any) {
       console.error('Error al iniciar transferencia:', err);
       setError(err.message || "Error al iniciar la transferencia");
