@@ -384,7 +384,7 @@ export default function CloudTransferPage() {
                   </option>
                 ))}
             </select>
-            <div className="flex-1 overflow-y-auto border rounded bg-slate-900">
+            <div className="flex-1 overflow-y-auto border rounded bg-slate-900 max-h-[400px]">
               {!sourceAccount ? (
                 <div className="p-4 text-slate-400">Selecciona una cuenta para ver archivos</div>
               ) : selectedAccountNeedsReconnect ? (
@@ -449,7 +449,7 @@ export default function CloudTransferPage() {
                   <option key={a.cloud_account_id} value={a.cloud_account_id}>{a.provider === "google_drive" ? "Google Drive" : "OneDrive"} - {a.provider_email}</option>
                 ))}
             </select>
-            <div className="flex-1 overflow-y-auto border rounded bg-slate-900">
+            <div className="flex-1 overflow-y-auto border rounded bg-slate-900 max-h-[400px]">
               {!destAccount ? (
                 <div className="p-4 text-slate-400">Selecciona una cuenta para ver archivos</div>
               ) : destAccountNeedsReconnect ? (
