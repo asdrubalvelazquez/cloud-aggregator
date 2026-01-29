@@ -41,6 +41,7 @@ export default function CloudTransferPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [selectedAccountNeedsReconnect, setSelectedAccountNeedsReconnect] = useState(false);
   const [destAccountNeedsReconnect, setDestAccountNeedsReconnect] = useState(false);
+  const [refreshDestKey, setRefreshDestKey] = useState(0); // Para refrescar destino
 
   // Cargar cuentas conectadas
   useEffect(() => {
@@ -184,7 +185,7 @@ export default function CloudTransferPage() {
         console.error('Error al cargar archivos destino:', err);
         setError("No se pudieron cargar los archivos de destino");
       });
-  }, [destAccount, destPath, accounts]);
+  }, [destAccount, destPath, accounts, refreshDestKey]); // Agregar refreshDestKey
 
   // Selección de archivos
   const toggleFile = (id: string) => {
@@ -294,6 +295,11 @@ export default function CloudTransferPage() {
       setSuccess(`Transferencia iniciada correctamente (Job ID: ${job_id}). Revisa el panel de transferencias abajo.`);
       setSelectedFiles(new Set());
       toast.success("Transferencia iniciada - Ver panel de progreso");
+      
+      // Refrescar destino después de unos segundos para mostrar archivos nuevos
+      setTimeout(() => {
+        setRefreshDestKey(prev => prev + 1);
+      }, 5000); // Refrescar después de 5 segundos
     } catch (err: any) {
       console.error('Error al iniciar transferencia:', err);
       setError(err.message || "Error al iniciar la transferencia");
@@ -513,12 +519,11 @@ export default function CloudTransferPage() {
         {/* Mensajes de error/éxito */}
         {error && <div className="mt-4 text-red-400 text-center">{error}</div>}
         {success && <div className="mt-4 text-green-400 text-center">{success}</div>}
-        
-        {/* Panel de cola de transferencias */}
-        <div className="mt-10 border-t border-slate-700 pt-6">
-          <h2 className="text-xl font-bold mb-4 text-white">📊 Panel de Transferencias en Progreso</h2>
-          <TransferQueuePanel />
-        </div>
+      </div>
+      
+      {/* Panel de Transferencias flotante (estilo Google Drive) */}
+      <div className="fixed bottom-4 right-4 z-50 w-96">
+        <TransferQueuePanel />
       </div>
     </div>
   );
