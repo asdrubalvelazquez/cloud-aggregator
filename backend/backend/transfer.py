@@ -1,6 +1,7 @@
 """
-Cross-provider transfer system (Google Drive ↔ OneDrive)
-Handles file transfers between different cloud providers with progress tracking
+Cloud Transfer System (Google Drive ↔ OneDrive, GD→GD, OD→OD)
+Handles file transfers between cloud providers with progress tracking.
+Supports cross-provider (GD↔OD) and same-provider (GD→GD, OD→OD) transfers.
 """
 
 import logging

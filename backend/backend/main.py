@@ -2430,10 +2430,12 @@ async def create_transfer_job_endpoint(
                 status_code=400,
                 detail={"error": "unsupported_provider", "message": f"Unsupported target_provider: '{request.target_provider}'. Supported: {supported_providers}"}
             )
-        if request.source_provider == request.target_provider:
+        # Same-provider transfers are now allowed (GD→GD, OD→OD between different accounts)
+        # We only validate that source and target accounts are different
+        if str(request.source_account_id) == str(request.target_account_id):
             raise HTTPException(
                 status_code=400,
-                detail={"error": "invalid_transfer", "message": "Source and target providers must be different"}
+                detail={"error": "invalid_transfer", "message": "Source and target accounts must be different"}
             )
         
         # BLOCKER 5: Validate metadata (file_ids)

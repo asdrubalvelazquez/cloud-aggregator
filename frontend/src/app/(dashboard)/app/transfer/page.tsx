@@ -350,9 +350,10 @@ export default function CloudTransferPage() {
 
     setIsTransferring(true);
     try {
-      // Support bidirectional transfers: Google Drive ↔ OneDrive
-      if (sourceAcc.provider === destAcc.provider) {
-        throw new Error("Las cuentas de origen y destino deben ser de diferentes proveedores (Google Drive ↔ OneDrive).");
+      // Support all transfers: Google Drive ↔ OneDrive, GD→GD, OD→OD
+      // Same-provider transfers are now allowed (e.g., between different accounts)
+      if (sourceAccount === destAccount) {
+        throw new Error("Las cuentas de origen y destino deben ser diferentes.");
       }
 
       // Determine account IDs based on provider
