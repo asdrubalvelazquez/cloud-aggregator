@@ -68,7 +68,7 @@ import logging
 import uuid
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Dict, Any, Callable
+from typing import Optional, List, Dict, Any, Callable, Union
 from types import SimpleNamespace
 from urllib.parse import quote
 
@@ -2388,12 +2388,12 @@ async def rename_onedrive_item(
 # ============================================================================
 
 class CreateTransferJobRequest(BaseModel):
-    source_provider: str  # "google_drive"
-    source_account_id: int  # Google Drive account ID (int)
-    target_provider: str  # "onedrive"
-    target_account_id: str  # OneDrive account UUID (string)
-    file_ids: List[str]  # Google Drive file IDs
-    target_folder_id: Optional[str] = None  # OneDrive folder ID (None = root)
+    source_provider: str  # "google_drive" | "onedrive"
+    source_account_id: Union[int, str]  # Google Drive (int) or OneDrive UUID (string)
+    target_provider: str  # "google_drive" | "onedrive"
+    target_account_id: Union[int, str]  # Google Drive (int) or OneDrive UUID (string)
+    file_ids: List[str]  # Source file IDs
+    target_folder_id: Optional[str] = None  # Target folder ID (None = root)
 
 @app.post("/transfer/create")
 async def create_transfer_job_endpoint(
