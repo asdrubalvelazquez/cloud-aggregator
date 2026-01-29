@@ -104,6 +104,7 @@ export default function CloudTransferPage() {
   const [destAccount, setDestAccount] = useState<string | null>(null);
   const [sourceFiles, setSourceFiles] = useState<FileItem[]>([]);
   const [destFiles, setDestFiles] = useState<FileItem[]>([]); // Cambio: carpetas Y archivos
+  const [sourcePath, setSourcePath] = useState<string>("root"); // Carpeta actual en origen
   const [destPath, setDestPath] = useState<string>("root");
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [isTransferring, setIsTransferring] = useState(false);
@@ -143,6 +144,7 @@ export default function CloudTransferPage() {
     if (!sourceAccount) {
       setSourceFiles([]);
       setSelectedAccountNeedsReconnect(false);
+      setSourcePath("root"); // Reset path when account changes
       return;
     }
 
@@ -163,10 +165,10 @@ export default function CloudTransferPage() {
       : sourceAccount;
     
     const endpoint = provider === 'onedrive' 
-      ? `/onedrive/${accountId}/files?folder_id=root`
-      : `/drive/${accountId}/files?folder_id=root`;
+      ? `/onedrive/${accountId}/files?parent_id=${sourcePath}`
+      : `/drive/${accountId}/files?folder_id=${sourcePath}`;
 
-    console.log('Cargando archivos:', { provider, accountId, endpoint });
+    console.log('Cargando archivos origen:', { provider, accountId, endpoint, sourcePath });
 
     authenticatedFetch(endpoint)
       .then(async (res) => {
@@ -186,7 +188,11 @@ export default function CloudTransferPage() {
             name: f.name,
             mimeType: f.mimeType || f.type || 'file',
             size: f.size || 0,
-            isFolder: f.isFolder || f.mimeType === "application/vnd.google-apps.folder" || f.mimeType === "folder" || f.type === "folder",
+            isFolder: f.isFolder || 
+                     f.kind === "folder" || 
+                     f.mimeType === "application/vnd.google-apps.folder" || 
+                     f.mimeType === "folder" || 
+                     f.type === "folder",
           }))
         );
       })
@@ -194,7 +200,7 @@ export default function CloudTransferPage() {
         console.error('Error al cargar archivos:', err);
         setError("No se pudieron cargar los archivos de origen");
       });
-  }, [sourceAccount, accounts]);
+  }, [sourceAccount, accounts, sourcePath]);
 
   // Cargar archivos y carpetas de la cuenta destino
   useEffect(() => {
@@ -652,12 +658,19 @@ export default function CloudTransferPage() {
               ) : (
                 <ul>
                   {sourceFiles.map((file) => (
-                    <li key={file.id} className="flex items-center px-2 py-1 border-b border-slate-800 hover:bg-slate-700">
+                    <li 
+                      key={file.id} 
+                      className={`flex items-center px-2 py-1 border-b border-slate-800 hover:bg-slate-700 ${
+                        file.isFolder ? 'cursor-pointer' : ''
+                      }`}
+                      onDoubleClick={() => file.isFolder && setSourcePath(file.id)}
+                    >
                       <input
                         type="checkbox"
                         checked={selectedFiles.has(file.id)}
                         onChange={() => toggleFile(file.id)}
                         className="mr-2"
+                        disabled={file.isFolder}
                       />
                       <span className={file.isFolder ? "font-semibold" : ""}>{getFileIcon(file)} {file.name}</span>
                     </li>
@@ -665,9 +678,22 @@ export default function CloudTransferPage() {
                 </ul>
               )}
             </div>
-            <div className="mt-2 flex gap-2">
-              <button onClick={selectAll} className="text-xs px-2 py-1 bg-slate-700 rounded hover:bg-slate-600">Seleccionar Todo</button>
-              <button onClick={clearAll} className="text-xs px-2 py-1 bg-slate-700 rounded hover:bg-slate-600">Limpiar</button>
+            <div className="mt-2">
+              <div className="text-xs text-slate-400 mb-2">
+                Carpeta origen: {sourcePath === "root" ? "Raíz" : "Carpeta seleccionada"}
+                {sourcePath !== "root" && (
+                  <button 
+                    onClick={() => setSourcePath("root")}
+                    className="ml-2 text-blue-400 hover:text-blue-300"
+                  >
+                    ← Volver a raíz
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={selectAll} className="text-xs px-2 py-1 bg-slate-700 rounded hover:bg-slate-600">Seleccionar Todo</button>
+                <button onClick={clearAll} className="text-xs px-2 py-1 bg-slate-700 rounded hover:bg-slate-600">Limpiar</button>
+              </div>
             </div>
           </div>
           {/* Panel Destino */}
