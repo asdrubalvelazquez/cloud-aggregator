@@ -32,7 +32,7 @@ export default function CloudTransferPage() {
   const [sourceAccount, setSourceAccount] = useState<string | null>(null);
   const [destAccount, setDestAccount] = useState<string | null>(null);
   const [sourceFiles, setSourceFiles] = useState<FileItem[]>([]);
-  const [destFolders, setDestFolders] = useState<FileItem[]>([]);
+  const [destFiles, setDestFiles] = useState<FileItem[]>([]); // Cambio: carpetas Y archivos
   const [destPath, setDestPath] = useState<string>("root");
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [isTransferring, setIsTransferring] = useState(false);
@@ -116,10 +116,10 @@ export default function CloudTransferPage() {
       });
   }, [sourceAccount, accounts]);
 
-  // Cargar carpetas de la cuenta destino
+  // Cargar archivos y carpetas de la cuenta destino
   useEffect(() => {
     if (!destAccount) {
-      setDestFolders([]);
+      setDestFiles([]);
       setDestAccountNeedsReconnect(false);
       return;
     }
@@ -129,7 +129,7 @@ export default function CloudTransferPage() {
     // Verificar si la cuenta necesita reconexión
     if (account?.can_reconnect) {
       setDestAccountNeedsReconnect(true);
-      setDestFolders([]);
+      setDestFiles([]);
       return;
     }
 
@@ -145,7 +145,7 @@ export default function CloudTransferPage() {
       ? `/onedrive/${accountId}/files?parent_id=${destPath}`
       : `/drive/${accountId}/files?folder_id=${destPath}`;
 
-    console.log('Cargando carpetas:', { provider, accountId, endpoint });
+    console.log('Cargando archivos destino:', { provider, accountId, endpoint });
 
     authenticatedFetch(endpoint)
       .then(async (res) => {
@@ -159,21 +159,18 @@ export default function CloudTransferPage() {
         // OneDrive usa "items", Google Drive usa "files"
         const filesList = data.items || data.files || [];
 
-        // Filtrar solo carpetas
-        const folders = filesList.filter((f: any) => {
-          const isFolder = f.isFolder || 
-                          f.mimeType === "application/vnd.google-apps.folder" || 
-                          f.mimeType === "folder" || 
-                          f.type === "folder" ||
-                          f.kind === "folder";
-          return isFolder;
-        });
-
-        setDestFolders(
-          folders.map((f: any) => ({
+        // MOSTRAR TODO: carpetas Y archivos
+        setDestFiles(
+          filesList.map((f: any) => ({
             id: f.id,
             name: f.name,
-            isFolder: true,
+            mimeType: f.mimeType || f.type || 'file',
+            size: f.size || 0,
+            isFolder: f.isFolder || 
+                     f.mimeType === "application/vnd.google-apps.folder" || 
+                     f.mimeType === "folder" || 
+                     f.type === "folder" ||
+                     f.kind === "folder",
           }))
         );
         
@@ -184,8 +181,8 @@ export default function CloudTransferPage() {
         }
       })
       .catch((err) => {
-        console.error('Error al cargar carpetas destino:', err);
-        setError("No se pudieron cargar las carpetas de destino");
+        console.error('Error al cargar archivos destino:', err);
+        setError("No se pudieron cargar los archivos de destino");
       });
   }, [destAccount, destPath, accounts]);
 
@@ -448,7 +445,7 @@ export default function CloudTransferPage() {
             </select>
             <div className="flex-1 overflow-y-auto border rounded bg-slate-900">
               {!destAccount ? (
-                <div className="p-4 text-slate-400">Selecciona una cuenta para ver carpetas</div>
+                <div className="p-4 text-slate-400">Selecciona una cuenta para ver archivos</div>
               ) : destAccountNeedsReconnect ? (
                 <div className="bg-yellow-900/20 border border-yellow-600 rounded-lg p-6 m-4">
                   <div className="flex items-start gap-3">
@@ -472,21 +469,35 @@ export default function CloudTransferPage() {
                     </div>
                   </div>
                 </div>
-              ) : destFolders.length === 0 ? (
-                <div className="p-4 text-slate-400">Selecciona una cuenta para ver carpetas</div>
+              ) : destFiles.length === 0 ? (
+                <div className="p-4 text-slate-400">No hay archivos en esta carpeta</div>
               ) : (
                 <ul>
-                  {destFolders.map((folder) => (
-                    <li key={folder.id} className="flex items-center px-2 py-1 border-b border-slate-800 hover:bg-slate-700 cursor-pointer"
-                      onClick={() => setDestPath(folder.id)}
+                  {destFiles.map((file) => (
+                    <li 
+                      key={file.id} 
+                      className={`flex items-center px-2 py-1 border-b border-slate-800 hover:bg-slate-700 ${file.isFolder ? 'cursor-pointer' : ''}`}
+                      onClick={() => file.isFolder && setDestPath(file.id)}
                     >
-                      <span className="font-semibold">📁 {folder.name}</span>
+                      <span className={file.isFolder ? "font-semibold" : ""}>
+                        {file.isFolder ? "📁" : "📄"} {file.name}
+                      </span>
                     </li>
                   ))}
                 </ul>
               )}
             </div>
-            <div className="mt-2 text-xs text-slate-400">Carpeta destino seleccionada: {destPath}</div>
+            <div className="mt-2 text-xs text-slate-400">
+              Carpeta destino: {destPath === "root" ? "Raíz" : "Carpeta seleccionada"}
+              {destPath !== "root" && (
+                <button 
+                  onClick={() => setDestPath("root")}
+                  className="ml-2 text-blue-400 hover:text-blue-300"
+                >
+                  ← Volver a raíz
+                </button>
+              )}
+            </div>
           </div>
         </div>
         {/* Botón Transferir */}
@@ -502,8 +513,10 @@ export default function CloudTransferPage() {
         {/* Mensajes de error/éxito */}
         {error && <div className="mt-4 text-red-400 text-center">{error}</div>}
         {success && <div className="mt-4 text-green-400 text-center">{success}</div>}
+        
         {/* Panel de cola de transferencias */}
-        <div className="mt-10">
+        <div className="mt-10 border-t border-slate-700 pt-6">
+          <h2 className="text-xl font-bold mb-4 text-white">📊 Panel de Transferencias en Progreso</h2>
           <TransferQueuePanel />
         </div>
       </div>
