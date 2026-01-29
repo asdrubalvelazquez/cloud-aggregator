@@ -1175,39 +1175,16 @@ export default function DriveFilesPage() {
 
   const handleDownloadFile = async (fileId: string, fileName: string) => {
     try {
-      const url = new URL(`${API_BASE_URL}/drive/download`);
-      url.searchParams.set("account_id", accountId);
-      url.searchParams.set("file_id", fileId);
-
-      const res = await authenticatedFetch(url.pathname + url.search);
-      
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.detail || `Error: ${res.status}`);
+      // Find the file to get its webViewLink
+      const file = files.find(f => f.id === fileId);
+      if (file && file.webViewLink) {
+        // Open in new tab - user can download from Google Drive
+        window.open(file.webViewLink, "_blank", "noopener,noreferrer");
+      } else {
+        // Fallback to direct download URL
+        const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+        window.open(downloadUrl, "_blank", "noopener,noreferrer");
       }
-
-      // Get blob from response
-      const blob = await res.blob();
-      
-      // Get filename from Content-Disposition header or use default
-      const contentDisposition = res.headers.get("Content-Disposition");
-      let downloadFileName = fileName;
-      if (contentDisposition) {
-        const match = contentDisposition.match(/filename="?(.+)"?/);
-        if (match) {
-          downloadFileName = match[1];
-        }
-      }
-
-      // Create download link
-      const downloadUrl = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = downloadUrl;
-      a.download = downloadFileName;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();  // Safe: uses Element.remove() instead of parent.removeChild()
-      window.URL.revokeObjectURL(downloadUrl);
     } catch (e: any) {
       alert(`Error al descargar: ${e.message}`);
     }
