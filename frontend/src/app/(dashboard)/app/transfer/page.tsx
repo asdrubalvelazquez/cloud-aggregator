@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
-import { TransferQueuePanel } from "@/components/transfer-queue/TransferQueuePanel";
+import { TransferWidget } from "@/components/transfer-queue/TransferWidget";
 import { authenticatedFetch } from "@/lib/api";
 import { CopyProgressBar } from "@/components/CopyProgressBar";
 import UnifiedCopyModal from "@/components/UnifiedCopyModal";
@@ -51,7 +51,7 @@ export default function CloudTransferPage() {
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
   
   // Hook for transfer queue management
-  const { addJob, openPanel } = useTransferQueue();
+  const { addJob } = useTransferQueue();
 
   // Cargar cuentas conectadas
   useEffect(() => {
@@ -440,7 +440,7 @@ export default function CloudTransferPage() {
         items: [],
       };
       addJob(initialJob);
-      openPanel(); // Open the transfer queue panel
+      // Widget will automatically show when there are active jobs
 
       // FASE 3: Ejecutar transferencia
       console.log("FASE 3: Ejecutando transferencia...");
@@ -740,9 +740,9 @@ export default function CloudTransferPage() {
         {success && <div className="mt-4 text-green-400 text-center">{success}</div>}
       </div>
       
-      {/* Panel de Transferencias flotante (estilo Google Drive) */}
-      <div className="fixed bottom-4 right-4 z-50 w-96">
-        <TransferQueuePanel />
+      {/* Widget de Transferencias compacto (estilo Google Drive) */}
+      <div className="fixed bottom-4 right-4 z-50">
+        <TransferWidget />
       </div>
     </div>
   );
