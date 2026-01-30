@@ -168,6 +168,22 @@ def set_cached_storage_data(cache_key: str, data: dict) -> None:
     """Cache storage data with current timestamp"""
     STORAGE_CACHE[cache_key] = (data, time.time())
 
+def clear_user_cache(user_id: str, context: str = "unknown") -> int:
+    """Clear cached data for a specific user after account changes"""
+    cache_keys_to_clear = [
+        f"storage_summary_{user_id}",
+        f"cloud_status_{user_id}"
+    ]
+    cleared_count = 0
+    for cache_key in cache_keys_to_clear:
+        if cache_key in STORAGE_CACHE:
+            del STORAGE_CACHE[cache_key]
+            cleared_count += 1
+    
+    if cleared_count > 0:
+        logging.info(f"[CACHE_CLEAR][{context}] Cleared {cleared_count} cache entries for user {user_id}")
+    return cleared_count
+
 def create_transfer_token(
     *,
     provider: str,
@@ -4754,6 +4770,9 @@ async def disconnect_slot(
         
         logging.info(f"[DISCONNECT] Successfully disconnected {provider} account {provider_email}")
         
+        # Clear user cache after disconnection to ensure fresh data
+        clear_user_cache(user_id, f"{provider.upper()}_DISCONNECT")
+        
         return {
             "success": True,
             "message": f"{provider} account {provider_email} disconnected successfully"
@@ -5993,6 +6012,9 @@ async def onedrive_callback(request: Request):
                                     f"[RECONNECT][GUARD_SAME_USER] Token refresh failed (non-fatal): {type(refresh_err).__name__}"
                                 )
                             
+                            # Clear cache after successful reconnection
+                            clear_user_cache(user_id, "ONEDRIVE_SAME_USER_RECONNECT")
+                            
                             return RedirectResponse(f"{frontend_origin}/app?connection=success")
                         else:
                             # Account belongs to different user - must transfer ownership via RPC
@@ -6261,6 +6283,9 @@ async def onedrive_callback(request: Request):
             f"strategy={update_strategy_used}, slot_id={validated_slot_id}, "
             f"slots_updated={slots_updated}, is_active=True, disconnected_at=None"
         )
+        
+        # CRITICAL: Clear user cache after successful reconnection to ensure fresh data
+        clear_user_cache(user_id, "ONEDRIVE_RECONNECT_SUCCESS")
         
         return RedirectResponse(f"{frontend_origin}/app?reconnect=success&slot_id={validated_slot_id}")
     
@@ -6879,6 +6904,9 @@ async def onedrive_callback(request: Request):
                 f"{type(e).__name__} - {error_str[:400]}"
             )
             return RedirectResponse(f"{frontend_origin}/app?error=database_error")
+
+    # CRITICAL: Clear user cache after successful connection to ensure fresh data
+    clear_user_cache(user_id, "ONEDRIVE_CONNECTION_SUCCESS")
 
     # Redirect to frontend dashboard
     return RedirectResponse(f"{frontend_origin}/app?connection=success")

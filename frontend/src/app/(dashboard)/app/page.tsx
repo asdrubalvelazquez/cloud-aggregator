@@ -530,6 +530,14 @@ function DashboardContent({
           
           console.log("[ONEDRIVE_CONNECTION] Session refreshed successfully");
           
+          // Clear backend cache to ensure fresh data
+          try {
+            await authenticatedFetch("/me/clear-cache", { method: "POST" });
+            console.log("[ONEDRIVE_CONNECTION] Backend cache cleared successfully");
+          } catch (cacheError) {
+            console.warn("[ONEDRIVE_CONNECTION] Failed to clear backend cache (non-fatal):", cacheError);
+          }
+          
           setToast({
             message: "OneDrive conectado exitosamente",
             type: "success",
@@ -581,6 +589,14 @@ function DashboardContent({
           }
           
           console.log("[RECONNECT] Session refreshed successfully");
+          
+          // Clear backend cache to ensure fresh data
+          try {
+            await authenticatedFetch("/me/clear-cache", { method: "POST" });
+            console.log("[RECONNECT] Backend cache cleared successfully");
+          } catch (cacheError) {
+            console.warn("[RECONNECT] Failed to clear backend cache (non-fatal):", cacheError);
+          }
           
           // Fetch fresh cloud status to verify actual connection state
           const data = await fetchCloudStatus(true);  // forceRefresh = true
