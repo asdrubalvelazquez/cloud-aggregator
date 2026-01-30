@@ -346,6 +346,8 @@ export default function CloudsPage() {
                           router.push(`/drive/${account.cloud_account_id}`);
                         } else if (account.provider === "onedrive") {
                           router.push(`/onedrive/${account.provider_account_uuid || account.cloud_account_id}`);
+                        } else if (account.provider === "dropbox") {
+                          router.push(`/dropbox/${account.provider_account_uuid || account.cloud_account_id}`);
                         }
                       }}
                       className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
