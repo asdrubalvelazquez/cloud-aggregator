@@ -14,6 +14,7 @@ import AccountStatusBadge from "@/components/AccountStatusBadge";
 import { formatStorage, formatStorageFromGB } from "@/lib/formatStorage";
 import ReconnectSlotsModal from "@/components/ReconnectSlotsModal";
 import OwnershipTransferModal from "@/components/OwnershipTransferModal";
+import AddCloudModal from "@/components/AddCloudModal";
 
 type Account = {
   id: number;
@@ -152,6 +153,7 @@ function DashboardContent({
   const [ownershipTransferToken, setOwnershipTransferToken] = useState<string | null>(null);
   const [transferEvents, setTransferEvents] = useState<any[]>([]);
   const [showTransferNotification, setShowTransferNotification] = useState(false);
+  const [showAddCloudModal, setShowAddCloudModal] = useState(false);
   const router = useRouter();
   
   // Use React Query for cloudStatus (single source of truth)
@@ -900,89 +902,6 @@ function DashboardContent({
 
         {!loading && !hardError && data && (
           <>
-            {/* Plan & Límites de Billing */}
-            {billingQuota && (
-              <section className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-xl p-6 shadow-lg border border-slate-700">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <h2 className="text-xl font-bold text-white">Plan & Límites</h2>
-                    <span
-                      className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide ${
-                        billingQuota.plan === "free"
-                          ? "bg-slate-600 text-slate-200"
-                          : billingQuota.plan === "plus"
-                          ? "bg-blue-600 text-white"
-                          : "bg-purple-600 text-white"
-                      }`}
-                    >
-                      {billingQuota.plan}
-                    </span>
-                  </div>
-                  {(billingQuota.plan === "free" || billingQuota.plan === "plus") && (
-                    <a
-                      href="/pricing"
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold transition"
-                    >
-                      {billingQuota.plan === "free" ? "⬆️ Actualizar plan" : "🚀 Actualizar a PRO"}
-                    </a>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Transferencia */}
-                  <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-sm font-semibold text-slate-300">
-                        📡 Transferencia {billingQuota.transfer.is_lifetime ? "(Lifetime)" : "(Mes)"}
-                      </h3>
-                      {billingQuota.transfer.limit_gb !== null && (
-                        <span className="text-xs text-slate-400">
-                          {billingQuota.transfer.used_gb.toFixed(2)} / {billingQuota.transfer.limit_gb} GB
-                        </span>
-                      )}
-                    </div>
-                    {billingQuota.transfer.limit_bytes !== null && billingQuota.transfer.limit_bytes > 0 ? (
-                      <>
-                        <ProgressBar
-                          current={billingQuota.transfer.used_bytes}
-                          total={billingQuota.transfer.limit_bytes}
-                          height="sm"
-                        />
-                        <p className="text-xs text-slate-400 mt-2">
-                          {Math.max(0, 
-                            (billingQuota.transfer.limit_bytes - billingQuota.transfer.used_bytes) /
-                            (1024 ** 3)
-                          ).toFixed(2)}{" "}
-                          GB restantes
-                        </p>
-                      </>
-                    ) : (
-                      <p className="text-sm text-emerald-400 font-semibold">Ilimitada ✨</p>
-                    )}
-                  </div>
-
-                  {/* Máximo por archivo */}
-                  <div className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
-                    <h3 className="text-sm font-semibold text-slate-300 mb-2">📄 Máx por archivo</h3>
-                    <p className="text-2xl font-bold text-white">
-                      {billingQuota.max_file_gb.toFixed(1)} GB
-                    </p>
-                    {billingQuota.plan !== "pro" ? (
-                      <a
-                        href="/pricing"
-                        className="text-xs text-blue-400 hover:text-blue-300 mt-2 inline-block underline cursor-pointer transition"
-                      >
-                        {billingQuota.plan === "free" && "Actualiza a PLUS para 10 GB →"}
-                        {billingQuota.plan === "plus" && "Actualiza a PRO para 50 GB →"}
-                      </a>
-                    ) : (
-                      <p className="text-xs text-slate-400 mt-2">Límite máximo 🎉</p>
-                    )}
-                  </div>
-                </div>
-              </section>
-            )}
-
             {/* Your Connected Clouds Cards - Grouped by Provider */}
             {cloudStatus && cloudStatus.accounts && cloudStatus.accounts.length > 0 && (() => {
               // Group accounts by provider
@@ -998,6 +917,22 @@ function DashboardContent({
                 <section className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h2 className="text-2xl font-bold text-white">Your Connected Clouds</h2>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => setShowAddCloudModal(true)}
+                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                        </svg>
+                        Connect New Cloud
+                      </button>
+                      <button className="p-2 hover:bg-slate-800 rounded-lg transition-colors">
+                        <svg className="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                        </svg>
+                      </button>
+                    </div>
                   </div>
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -1150,315 +1085,6 @@ function DashboardContent({
                 </section>
               );
             })()}
-
-            {/* Tarjetas de resumen con barra de progreso global */}
-            <section className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="bg-slate-800 rounded-xl p-5 shadow-lg border border-slate-700">
-                  <h2 className="text-xs text-slate-400 uppercase tracking-wide font-semibold mb-1">
-                    Total Espacio
-                  </h2>
-                  <p className="text-3xl font-bold text-white">
-                    {cloudStorage
-                      ? formatStorageFromGB(cloudStorage.totals.total_bytes / (1024 ** 3))
-                      : formatStorageFromGB(data.total_limit / (1024 ** 3))
-                    }
-                  </p>
-                </div>
-                <div className="bg-slate-800 rounded-xl p-5 shadow-lg border border-slate-700">
-                  <h2 className="text-xs text-slate-400 uppercase tracking-wide font-semibold mb-1">
-                    Espacio Usado
-                  </h2>
-                  <p className="text-3xl font-bold text-white">
-                    {cloudStorage
-                      ? formatStorageFromGB(cloudStorage.totals.used_bytes / (1024 ** 3))
-                      : formatStorageFromGB(data.total_usage / (1024 ** 3))
-                    }
-                  </p>
-                </div>
-                <div className="bg-slate-800 rounded-xl p-5 shadow-lg border border-slate-700">
-                  <h2 className="text-xs text-slate-400 uppercase tracking-wide font-semibold mb-1">
-                    Espacio Libre
-                  </h2>
-                  <p className="text-3xl font-bold text-white">
-                    {cloudStorage
-                      ? formatStorageFromGB(cloudStorage.totals.free_bytes / (1024 ** 3))
-                      : formatStorageFromGB((data.total_limit - data.total_usage) / (1024 ** 3))
-                    }
-                  </p>
-                </div>
-                <div className="bg-slate-800 rounded-xl p-5 shadow-lg border border-slate-700">
-                  <h2 className="text-xs text-slate-400 uppercase tracking-wide font-semibold mb-1">
-                    % Utilizado
-                  </h2>
-                  <p className="text-3xl font-bold text-white">
-                    {cloudStorage
-                      ? cloudStorage.totals.percent_used.toFixed(1)
-                      : data.total_usage_percent.toFixed(1)
-                    }%
-                  </p>
-                </div>
-              </div>
-
-              {/* Barra de progreso global */}
-              <div className="bg-slate-800 rounded-xl p-5 shadow-lg border border-slate-700">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold text-slate-300">Storage Overview</h3>
-                  {lastUpdated && (
-                    <span className="text-xs text-slate-500">
-                      Última actualización: {getRelativeTime(lastUpdated)}
-                    </span>
-                  )}
-                </div>
-                <p className="text-xs text-slate-400 mb-1">
-                  <span className="text-slate-500">Separate accounts. Consolidated view for management.</span>
-                </p>
-                <p className="text-xs text-slate-500 mb-1 italic">
-                  Storage limits are enforced by cloud providers. Transfers only occur when you confirm an action.
-                </p>
-                <p className="text-xs text-slate-400 mb-3">
-                  {cloudStorage
-                    ? `${formatStorageFromGB(cloudStorage.totals.used_bytes / (1024 ** 3))} usados de ${formatStorageFromGB(cloudStorage.totals.total_bytes / (1024 ** 3))} (${formatStorageFromGB(cloudStorage.totals.free_bytes / (1024 ** 3))} libre)`
-                    : `${formatStorageFromGB(data.total_usage / (1024 ** 3))} usados de ${formatStorageFromGB(data.total_limit / (1024 ** 3))} (${formatStorageFromGB((data.total_limit - data.total_usage) / (1024 ** 3))} libre)`
-                  }
-                </p>
-                <ProgressBar
-                  current={cloudStorage ? cloudStorage.totals.used_bytes : data.total_usage}
-                  total={cloudStorage ? cloudStorage.totals.total_bytes : data.total_limit}
-                  height="lg"
-                />
-              </div>
-            </section>
-
-            {/* Tabla de cuentas mejorada */}
-            <section className="bg-slate-800 rounded-xl p-6 shadow-lg border border-slate-700">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-bold text-white">
-                  Cuentas conectadas ({connectedAccounts.length})
-                </h2>
-                <button
-                  onClick={() => {
-                    fetchSummary();
-                    fetchCloudStatusData();
-                  }}
-                  className="text-sm border border-slate-600 rounded-lg px-3 py-1.5 hover:bg-slate-700 transition font-medium"
-                >
-                  🔄 Refrescar
-                </button>
-              </div>
-
-              {/* Alert para cuentas que necesitan reconexión */}
-              {cloudStatus && cloudStatus.summary.needs_reconnect > 0 && (
-                <div className="bg-amber-500/20 border border-amber-500 rounded-lg p-3 text-sm mb-4">
-                  <div className="flex items-start gap-2">
-                    <span className="text-amber-400 text-lg">⚠️</span>
-                    <div className="flex-1">
-                      <p className="text-amber-200 font-semibold">
-                        {cloudStatus.summary.needs_reconnect} cuenta(s) necesitan reconexión
-                      </p>
-                      <p className="text-amber-300 text-xs mt-1">
-                        Estas cuentas requieren reautorización. Haz clic en "Ver mis cuentas" para reconectarlas.
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => setShowReconnectModal(true)}
-                      className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded transition"
-                    >
-                      Ver detalles
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Búsqueda y Sorting */}
-              <div className="flex gap-3 mb-4">
-                <div className="flex-1 relative">
-                  <input
-                    type="text"
-                    placeholder="Buscar por email..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full px-4 py-2 pl-10 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition"
-                  />
-                  <svg className="w-5 h-5 text-slate-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                </div>
-                <button
-                  onClick={() => setSortOrder(sortOrder === "desc" ? "asc" : "desc")}
-                  className="flex items-center gap-2 px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg hover:bg-slate-600 transition font-medium text-sm"
-                >
-                  % Usado
-                  <svg className={`w-4 h-4 transition-transform ${sortOrder === "asc" ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </button>
-              </div>
-
-              {connectedAccounts.length === 0 ? (
-                <div className="text-center py-12 bg-slate-900/50 rounded-lg border-2 border-dashed border-slate-700">
-                  <div className="text-5xl mb-4">☁️</div>
-                  <p className="text-slate-300 mb-2">
-                    Aún no hay cuentas conectadas
-                  </p>
-                  <p className="text-sm text-slate-400">
-                    Haz clic en <strong>"Conectar Google Drive"</strong> o <strong>"Conectar OneDrive"</strong> para empezar
-                  </p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-left border-b border-slate-700">
-                        <th className="py-3 px-4 text-slate-300 font-semibold">Cuenta</th>
-                        <th className="py-3 px-4 text-slate-300 font-semibold">Provider</th>
-                        <th className="py-3 px-4 text-slate-300 font-semibold">Estado</th>
-                        <th className="py-3 px-4 text-slate-300 font-semibold">Uso</th>
-                        <th className="py-3 px-4 text-slate-300 font-semibold">Límite</th>
-                        <th className="py-3 px-4 text-slate-300 font-semibold">Progreso</th>
-                        <th className="py-3 px-4 text-slate-300 font-semibold text-center">Acciones</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {connectedAccounts.map((acc) => {
-                        // Buscar data de storage: Google en data.accounts o unified en cloudStorage.accounts
-                        let storageData = undefined;
-                        
-                        if (cloudStorage) {
-                          // Usar nuevo endpoint unificado
-                          storageData = cloudStorage.accounts.find(
-                            a => a.email === acc.provider_email && 
-                                 ((a.provider === "google_drive" && acc.provider === "google_drive") ||
-                                  (a.provider === "onedrive" && acc.provider === "onedrive"))
-                          );
-                        } else if (acc.provider === "google_drive" && data?.accounts) {
-                          // Fallback a endpoint legacy (solo Google)
-                          const legacyData = data.accounts.find(a => a.email === acc.provider_email);
-                          if (legacyData) {
-                            storageData = {
-                              provider: "google_drive",
-                              email: legacyData.email,
-                              total_bytes: legacyData.limit,
-                              used_bytes: legacyData.usage,
-                              free_bytes: legacyData.limit - legacyData.usage,
-                              percent_used: legacyData.usage_percent,
-                              status: legacyData.error ? "error" : "ok"
-                            };
-                          }
-                        }
-                        
-                        return (
-                            <tr
-                              key={`${acc.provider}:${acc.slot_log_id}`}
-                              className="border-b border-slate-800 hover:bg-slate-700/40 transition"
-                            >
-                              <td className="py-4 px-4">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-2xl">📧</span>
-                                  <div className="flex flex-col">
-                                    <span className="font-medium text-white">{acc.provider_email}</span>
-                                    {storageData && storageData.used_bytes !== null && storageData.total_bytes !== null ? (
-                                      <span className="text-xs text-slate-400 mt-0.5">
-                                        Traffic: {formatStorageFromGB(storageData.used_bytes / (1024 ** 3))} / {formatStorageFromGB(storageData.total_bytes / (1024 ** 3))} • {storageData.percent_used?.toFixed(1)}%
-                                      </span>
-                                    ) : (
-                                      <span className="text-xs text-slate-500 mt-0.5">Traffic: —</span>
-                                    )}
-                                  </div>
-                                </div>
-                              </td>
-                              <td className="py-4 px-4">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-lg">
-                                    {acc.provider === "google_drive" ? "🔵" : acc.provider === "onedrive" ? "🟦" : acc.provider === "dropbox" ? "🟪" : "☁️"}
-                                  </span>
-                                  <span className="px-2 py-0.5 bg-slate-700 text-slate-300 text-xs font-medium rounded">
-                                    {acc.provider === "google_drive" ? "Google Drive" : acc.provider === "onedrive" ? "OneDrive" : acc.provider === "dropbox" ? "Dropbox" : acc.provider}
-                                  </span>
-                                </div>
-                              </td>
-                              <td className="py-4 px-4">
-                                {storageData && storageData.status === "ok" ? (
-                                  <AccountStatusBadge
-                                    limit={storageData.total_bytes || 0}
-                                    usage={storageData.used_bytes || 0}
-                                    error={undefined}
-                                  />
-                                ) : storageData && storageData.status === "unavailable" ? (
-                                  <span className="px-2 py-1 bg-amber-500/20 text-amber-300 text-xs font-medium rounded">
-                                    No disponible
-                                  </span>
-                                ) : (
-                                  <span className="px-2 py-1 bg-blue-500/20 text-blue-300 text-xs font-medium rounded">
-                                    Conectado
-                                  </span>
-                                )}
-                              </td>
-                              <td className="py-4 px-4 text-slate-300">
-                                {storageData && storageData.used_bytes !== null
-                                  ? formatStorageFromGB(storageData.used_bytes / (1024 ** 3))
-                                  : "N/A"}
-                              </td>
-                              <td className="py-4 px-4 text-slate-300">
-                                {storageData && storageData.total_bytes !== null
-                                  ? formatStorageFromGB(storageData.total_bytes / (1024 ** 3))
-                                  : "N/A"}
-                              </td>
-                              <td className="py-4 px-4">
-                                {storageData && storageData.used_bytes !== null && storageData.total_bytes !== null ? (
-                                  <div className="w-full">
-                                    <div className="flex items-center justify-between mb-1">
-                                      <span className="text-xs text-slate-400">
-                                        {storageData.percent_used?.toFixed(1)}%
-                                      </span>
-                                    </div>
-                                    <ProgressBar
-                                      current={storageData.used_bytes}
-                                      total={storageData.total_bytes}
-                                      height="sm"
-                                    />
-                                  </div>
-                                ) : (
-                                  <span className="text-xs text-slate-500">N/A</span>
-                                )}
-                              </td>
-                              <td className="py-4 px-4 text-center">
-                                <div className="flex items-center justify-center gap-2">
-                                  {acc.provider === "google_drive" && acc.cloud_account_id && (
-                                    <a
-                                      href={`/drive/${acc.cloud_account_id}`}
-                                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition"
-                                    >
-                                      📁 Ver archivos
-                                    </a>
-                                  )}
-                                  {acc.provider === "onedrive" && (
-                                    <>
-                                      {acc.provider_account_uuid ? (
-                                        <a
-                                          href={`/onedrive/${acc.provider_account_uuid}`}
-                                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition"
-                                        >
-                                          📁 Ver archivos
-                                        </a>
-                                      ) : (
-                                        <span className="text-xs text-red-400 italic">Error: ID no disponible</span>
-                                      )}
-                                    </>
-                                  )}
-                                  {acc.provider !== "google_drive" && acc.provider !== "onedrive" && (
-                                    <span className="text-xs text-slate-500 italic">Próximamente</span>
-                                  )}
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </section>
           </>
         )}
       </div>
@@ -1467,6 +1093,12 @@ function DashboardContent({
       <ReconnectSlotsModal
         isOpen={showReconnectModal}
         onClose={() => setShowReconnectModal(false)}
+      />
+
+      {/* Modal de agregar nube */}
+      <AddCloudModal
+        open={showAddCloudModal}
+        onClose={() => setShowAddCloudModal(false)}
       />
 
       {/* Modal de transferencia de propiedad */}
