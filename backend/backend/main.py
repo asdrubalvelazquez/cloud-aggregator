@@ -5341,7 +5341,7 @@ async def get_cloud_storage_summary(user_id: str = Depends(verify_supabase_jwt))
         
         # Process Google Drive accounts
         for account in google_accounts:
-            quota_tasks.append(("google", account, get_google_quota_safe(account)))
+            quota_tasks.append(("google_drive", account, get_google_quota_safe(account)))
         
         # Process OneDrive accounts
         for account in onedrive_accounts:
