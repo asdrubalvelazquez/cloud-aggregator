@@ -60,8 +60,15 @@ export function DashboardTopBar() {
   return (
     <div className="fixed top-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-md border-b border-slate-700/50">
       <div className="h-[72px] px-6 flex items-center justify-between gap-6">
-        {/* LEFT: Logo placeholder (invisible but maintains space) */}
-        <div className="w-12" />
+        {/* LEFT: Logo and Brand */}
+        <Link href="/app" className="flex items-center gap-3 hover:opacity-80 transition min-w-[200px]">
+          <img
+            src="/732fa691-7a06-42d0-acf2-4b6e300e8953.png"
+            alt="Cloud Aggregator"
+            className="w-10 h-10 object-contain"
+          />
+          <div className="text-lg font-semibold text-white leading-none">Cloud Aggregator</div>
+        </Link>
 
         {/* CENTER: Search Bar */}
         <div className="flex-1 max-w-2xl">

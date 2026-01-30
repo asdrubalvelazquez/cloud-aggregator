@@ -824,38 +824,6 @@ function DashboardContent({
       )}
 
       <div className="w-full max-w-6xl space-y-6">
-        <div className="flex items-center justify-end gap-3">
-          <button
-            onClick={() => setShowReconnectModal(true)}
-            className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-700"
-          >
-            📊 Tus Nubes
-          </button>
-          
-          <button
-            onClick={handleConnectGoogle}
-            className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-emerald-500 hover:bg-emerald-600"
-            title="Conectar una nueva cuenta de Google Drive"
-          >
-            Conectar Google Drive
-          </button>
-          
-          <button
-            onClick={handleConnectOneDrive}
-            className="rounded-lg transition px-4 py-2 text-sm font-semibold bg-blue-500 hover:bg-blue-600"
-            title="Conectar una nueva cuenta de OneDrive"
-          >
-            Conectar OneDrive
-          </button>
-          
-          <button
-            onClick={handleLogout}
-            className="rounded-lg bg-slate-700 hover:bg-slate-600 transition px-4 py-2 text-sm font-semibold"
-          >
-            Salir
-          </button>
-        </div>
-
         {/* Loading state: solo bloquear UI si cloudStatus no existe o si loading summary sin data */}
         {(loading || softTimeout) && !cloudStatus && (
           <DashboardLoadingState />
