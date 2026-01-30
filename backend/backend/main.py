@@ -7163,7 +7163,7 @@ async def dropbox_login_url(
         
         # Build Dropbox OAuth URL
         # force_reapprove=true ensures user always sees consent screen (can choose different account)
-        # force_reauthentication=true forces user to re-enter credentials
+        # force_reauthentication=true forces user to re-enter credentials (allows switching accounts)
         oauth_url = (
             f"{DROPBOX_AUTH_URL}"
             f"?client_id={DROPBOX_CLIENT_ID}"
@@ -7171,7 +7171,8 @@ async def dropbox_login_url(
             f"&redirect_uri={DROPBOX_REDIRECT_URI}"
             f"&state={state_token}"
             f"&token_access_type=offline"  # Request refresh token
-            f"&force_reapprove=true"  # Always show consent screen (allows adding different accounts)
+            f"&force_reapprove=true"  # Always show consent screen
+            f"&force_reauthentication=true"  # Force re-login (allows adding different accounts)
         )
         
         logging.info(f"[DROPBOX_LOGIN_URL] user={user_id} mode={mode} reconnect_id={reconnect_account_id}")
