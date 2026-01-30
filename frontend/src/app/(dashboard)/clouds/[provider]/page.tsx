@@ -107,9 +107,14 @@ export default function ProviderAccountsPage() {
     
     if (account.provider === 'onedrive') {
       try {
-        const response = await authenticatedFetch(`/auth/onedrive/login-url?mode=reconnect&reconnect_account_id=${account.cloud_account_id}`);
+        const accountId = account.provider_account_uuid || account.cloud_account_id;
+        console.log('[OneDrive Reconnect] Using account ID:', accountId);
+        
+        const response = await authenticatedFetch(`/auth/onedrive/login-url?mode=reconnect&reconnect_account_id=${accountId}`);
         
         if (!response.ok) {
+          const errorText = await response.text();
+          console.error('[ERROR] Response not OK:', response.status, errorText);
           toast.error('Error al iniciar reconexión');
           return;
         }
@@ -118,6 +123,8 @@ export default function ProviderAccountsPage() {
         
         if (data.login_url) {
           window.location.href = data.login_url;
+        } else {
+          toast.error('No se recibió URL de reconexión');
         }
       } catch (error) {
         console.error('[ERROR] Error al llamar login-url:', error);
