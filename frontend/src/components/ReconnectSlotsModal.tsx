@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CLOUD_STATUS_KEY } from "@/queries/useCloudStatusQuery";
-import { CloudAccountStatus, fetchCloudStatus, fetchGoogleLoginUrl, fetchOneDriveLoginUrl, authenticatedFetch } from "@/lib/api";
+import { CloudAccountStatus, fetchCloudStatus, fetchGoogleLoginUrl, fetchOneDriveLoginUrl, fetchDropboxLoginUrl, authenticatedFetch } from "@/lib/api";
 import { supabase } from "@/lib/supabaseClient";
 
 type ReconnectSlotsModalProps = {
@@ -132,6 +132,13 @@ export default function ReconnectSlotsModal({
           reconnect_account_id: account.provider_account_id
         });
         url = result.url;
+      } else if (normalizedProvider === "dropbox") {
+        // Dropbox OAuth
+        const result = await fetchDropboxLoginUrl({ 
+          mode: "reconnect",
+          reconnect_account_id: account.provider_account_id
+        });
+        url = result.url;
       } else {
         // Provider no soportado
         throw new Error(`Provider "${account.provider}" no soportado para reconexión`);
@@ -159,6 +166,9 @@ export default function ReconnectSlotsModal({
             url = result.url;
           } else if (normalizedProvider === "onedrive") {
             const result = await fetchOneDriveLoginUrl({ mode: "connect" });
+            url = result.url;
+          } else if (normalizedProvider === "dropbox") {
+            const result = await fetchDropboxLoginUrl({ mode: "connect" });
             url = result.url;
           } else {
             throw new Error(`Provider "${account.provider}" no soportado`);

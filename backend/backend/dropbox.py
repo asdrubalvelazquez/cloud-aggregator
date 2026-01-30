@@ -41,13 +41,12 @@ async def get_dropbox_storage_quota(access_token: str) -> Dict[str, Any]:
     """
     url = f"{DROPBOX_API_BASE}/users/get_space_usage"
     headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {access_token}"
     }
     
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, headers=headers, timeout=30.0)
+            response = await client.post(url, headers=headers, content="null", timeout=30.0)
             
             if response.status_code == 401:
                 raise HTTPException(
@@ -200,13 +199,12 @@ async def get_dropbox_account_info(access_token: str) -> Dict[str, Any]:
     """
     url = f"{DROPBOX_API_BASE}/users/get_current_account"
     headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {access_token}"
     }
     
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, headers=headers, timeout=30.0)
+            response = await client.post(url, headers=headers, content="null", timeout=30.0)
             
             if response.status_code == 401:
                 raise HTTPException(

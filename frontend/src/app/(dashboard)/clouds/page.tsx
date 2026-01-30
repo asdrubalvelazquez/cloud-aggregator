@@ -196,6 +196,39 @@ export default function CloudsPage() {
       }
     } else if (account.provider === 'google_drive') {
       window.location.href = `${apiBaseUrl}/auth/google?mode=reconnect&reconnect_account_id=${account.cloud_account_id}`;
+    } else if (account.provider === 'dropbox') {
+      try {
+        const accountId = account.provider_account_id;
+        console.log('[Dropbox Reconnect] Using provider_account_id:', accountId);
+        
+        if (!accountId) {
+          console.error('[ERROR] No provider_account_id found for account:', account);
+          toast.error('No se encontró el ID de la cuenta para reconectar');
+          return;
+        }
+        
+        const response = await authenticatedFetch(`/auth/dropbox/login-url?mode=reconnect&reconnect_account_id=${accountId}`);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('[ERROR] Response not OK:', response.status, errorText);
+          toast.error('Error al iniciar reconexión');
+          return;
+        }
+        
+        const data = await response.json();
+        console.log('[Dropbox Reconnect] Response data:', data);
+        
+        if (data.url) {
+          window.location.href = data.url;
+        } else {
+          console.error('[ERROR] No URL in response:', data);
+          toast.error('No se recibió URL de reconexión');
+        }
+      } catch (error) {
+        console.error('[ERROR] Error al llamar login-url:', error);
+        toast.error('Error al iniciar reconexión');
+      }
     }
   };
 

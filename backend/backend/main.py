@@ -7135,8 +7135,13 @@ async def dropbox_login_url(
             except Exception as slot_err:
                 logging.warning(f"[DROPBOX_LOGIN_URL] Could not fetch slot_log_id: {slot_err}")
         
-        # Generate state token
-        state_token = create_state_token(state_data)
+        # Generate state token (pass individual args, not dict)
+        state_token = create_state_token(
+            user_id=user_id,
+            mode=mode,
+            reconnect_account_id=state_data.get("reconnect_account_id"),
+            slot_log_id=state_data.get("slot_log_id")
+        )
         
         # Build Dropbox OAuth URL
         oauth_url = (
@@ -7265,17 +7270,7 @@ async def dropbox_callback(request: Request):
                 return RedirectResponse(f"{frontend_origin}/app?error=dropbox_reconnect_failed")
         
         else:  # mode == "connect"
-            # Check quota before connecting
-            try:
-                quota_check = quota.check_quota_available_hybrid(supabase, user_id)
-                if not quota_check["can_connect"]:
-                    logging.warning(f"[DROPBOX_CALLBACK] Quota exceeded for user={user_id}")
-                    return RedirectResponse(f"{frontend_origin}/app?error=quota_exceeded")
-            except Exception as quota_err:
-                logging.error(f"[DROPBOX_CALLBACK] Quota check failed: {quota_err}")
-                return RedirectResponse(f"{frontend_origin}/app?error=quota_check_failed")
-            
-            # Use slot-based connection
+            # Use slot-based connection (handles quota internally)
             try:
                 slot_result = quota.connect_cloud_account_with_slot(
                     supabase=supabase,
@@ -7285,7 +7280,7 @@ async def dropbox_callback(request: Request):
                     provider_email=account_email
                 )
                 
-                slot_log_id = slot_result["slot_log_id"]
+                slot_id = slot_result["id"]
                 
                 # Insert into cloud_provider_accounts
                 supabase.table("cloud_provider_accounts").insert({
@@ -7297,13 +7292,21 @@ async def dropbox_callback(request: Request):
                     "refresh_token": encrypted_refresh,
                     "token_expiry": expiry_iso,
                     "is_active": True,
+                    "slot_log_id": slot_id,
                     "created_at": now_iso,
                     "updated_at": now_iso
                 }).execute()
                 
-                logging.info(f"[DROPBOX_CALLBACK] Connect successful user={user_id} account={dropbox_account_id} slot={slot_log_id}")
+                logging.info(f"[DROPBOX_CALLBACK] Connect successful user={user_id} account={dropbox_account_id} slot={slot_id}")
                 invalidate_user_cache(user_id, "DROPBOX_CONNECT")
                 return RedirectResponse(f"{frontend_origin}/app?connection=success&provider=dropbox")
+            
+            except HTTPException as slot_err:
+                if slot_err.status_code == 402:
+                    logging.warning(f"[DROPBOX_CALLBACK] Quota exceeded for user={user_id}")
+                    return RedirectResponse(f"{frontend_origin}/app?error=cloud_limit_reached")
+                logging.error(f"[DROPBOX_CALLBACK] Slot error: {slot_err.detail}")
+                return RedirectResponse(f"{frontend_origin}/app?error=dropbox_connect_failed")
                 
             except Exception as connect_err:
                 logging.error(f"[DROPBOX_CALLBACK] Connect failed: {connect_err}")
