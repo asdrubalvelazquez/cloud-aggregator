@@ -73,6 +73,7 @@ export type CloudAccountStatus = {
   provider: string;
   provider_email: string;
   provider_account_id: string;
+  nickname?: string | null;
   provider_account_uuid?: string | null;  // UUID from cloud_provider_accounts.id (for routing)
   connection_status: "connected" | "needs_reconnect" | "disconnected";
   reason: string | null;

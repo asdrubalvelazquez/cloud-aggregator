@@ -4,13 +4,15 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { authenticatedFetch } from "@/lib/api";
 import { toast } from "react-hot-toast";
+import KebabMenu from "@/components/KebabMenu";
 
 interface CloudAccount {
   provider: "google_drive" | "onedrive" | "dropbox";
   email: string;
   provider_email: string;
+  provider_account_id?: string | null;
+  nickname?: string | null;
   cloud_account_id: string | number;
-  provider_account_id?: string | null;  // Microsoft/Google account ID (for reconnect)
   provider_account_uuid?: string | null; // UUID from cloud_provider_accounts (for file routes)
   connection_status?: "connected" | "needs_reconnect" | "disconnected";
   can_reconnect?: boolean;
@@ -192,6 +194,20 @@ export default function ProviderAccountsPage() {
     }
   };
 
+  // KebabMenu callback functions
+  const handleNicknameUpdate = async (newNickname: string) => {
+    // Refresh data to show updated nickname
+    await loadData();
+    toast.success('Nickname actualizado exitosamente');
+  };
+
+  const handleCloudDisconnect = async (provider: string, displayName: string) => {
+    // Show success toast
+    toast.success(`Cuenta ${displayName} desconectada exitosamente`);
+    // Refresh data to reflect disconnection
+    await loadData();
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-slate-900">
@@ -237,12 +253,34 @@ export default function ProviderAccountsPage() {
               return (
                 <div
                   key={`${account.provider}-${account.cloud_account_id}`}
-                  className="bg-slate-800 rounded-xl p-6 border border-slate-700 hover:border-slate-600 transition-colors"
+                  className="bg-slate-800 rounded-xl p-6 border border-slate-700 hover:border-slate-600 transition-colors relative"
                 >
+                  {/* KebabMenu in top right corner */}
+                  <div className="absolute top-4 right-4">
+                    <KebabMenu
+                      provider={account.provider}
+                      accountId={String(account.provider_account_id || account.cloud_account_id)}
+                      currentNickname={account.nickname || ""}
+                      displayName={account.nickname || account.provider_email}
+                      onNicknameUpdate={handleNicknameUpdate}
+                      onDisconnect={handleCloudDisconnect}
+                    />
+                  </div>
+
                   {/* Email/Account Name */}
-                  <div className="mb-4">
-                    <h3 className="text-lg font-semibold truncate">{account.provider_email}</h3>
-                    <p className="text-xs text-slate-400 mt-1">Account ID: {String(account.cloud_account_id).substring(0, 8)}...</p>
+                  <div className="mb-4 pr-12">
+                    {account.nickname ? (
+                      <>
+                        <h3 className="text-lg font-semibold truncate">{account.nickname}</h3>
+                        <p className="text-sm text-slate-400 truncate">{account.provider_email}</p>
+                        <p className="text-xs text-slate-500 mt-1">Account ID: {String(account.cloud_account_id).substring(0, 8)}...</p>
+                      </>
+                    ) : (
+                      <>
+                        <h3 className="text-lg font-semibold truncate">{account.provider_email}</h3>
+                        <p className="text-xs text-slate-400 mt-1">Account ID: {String(account.cloud_account_id).substring(0, 8)}...</p>
+                      </>
+                    )}
                   </div>
 
                   {/* Status Badge */}

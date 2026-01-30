@@ -4360,6 +4360,7 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
                 "provider": slot["provider"],
                 "provider_email": slot["provider_email"],
                 "provider_account_id": slot["provider_account_id"],
+                "nickname": slot.get("nickname"),
                 "provider_account_uuid": provider_account_uuid,
                 "connection_status": status["connection_status"],
                 "reason": status["reason"],
@@ -6910,6 +6911,134 @@ async def onedrive_callback(request: Request):
 
     # Redirect to frontend dashboard
     return RedirectResponse(f"{frontend_origin}/app?connection=success")
+
+
+# =============================
+# CLOUD MANAGEMENT ENDPOINTS
+# =============================
+
+@app.put("/me/clouds/{provider}/{account_id}/nickname")
+async def update_cloud_nickname(
+    provider: str,
+    account_id: str,
+    request: Request,
+    user_id: str = Depends(verify_supabase_jwt)
+):
+    """
+    Update nickname for a cloud account.
+    
+    Args:
+        provider: Cloud provider (google_drive, onedrive)
+        account_id: Provider account ID
+        request: Request body containing {"nickname": "New Name"}
+        user_id: Authenticated user ID
+    
+    Returns:
+        {"success": True, "nickname": "New Name"}
+    """
+    try:
+        body = await request.json()
+        nickname = body.get("nickname", "").strip()
+        
+        # Validate nickname length
+        if len(nickname) > 50:
+            raise HTTPException(status_code=400, detail="Nickname must be 50 characters or less")
+        
+        # Update nickname in cloud_slots_log
+        update_result = supabase.table("cloud_slots_log").update({
+            "nickname": nickname if nickname else None
+        }).eq("user_id", user_id).eq("provider", provider).eq("provider_account_id", account_id).execute()
+        
+        if not update_result.data:
+            raise HTTPException(status_code=404, detail="Cloud account not found")
+        
+        # Clear cache to ensure fresh data
+        clear_user_cache(user_id, f"NICKNAME_UPDATE_{provider}")
+        
+        logging.info(f"[NICKNAME_UPDATE] user_id={user_id} provider={provider} account_id={account_id} nickname='{nickname}'")
+        
+        return {"success": True, "nickname": nickname}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[NICKNAME_UPDATE_ERROR] user_id={user_id} provider={provider} account_id={account_id} error={str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to update nickname")
+
+
+@app.delete("/me/clouds/{provider}/{account_id}")
+async def disconnect_cloud_account(
+    provider: str,
+    account_id: str,
+    user_id: str = Depends(verify_supabase_jwt)
+):
+    """
+    Disconnect a cloud account by marking it as inactive.
+    
+    Args:
+        provider: Cloud provider (google_drive, onedrive)
+        account_id: Provider account ID
+        user_id: Authenticated user ID
+    
+    Returns:
+        {"success": True, "message": "Account disconnected"}
+    """
+    try:
+        # First verify the account belongs to the user
+        slot_check = supabase.table("cloud_slots_log").select(
+            "id,provider_email,nickname"
+        ).eq("user_id", user_id).eq("provider", provider).eq(
+            "provider_account_id", account_id
+        ).eq("is_active", True).execute()
+        
+        if not slot_check.data:
+            raise HTTPException(status_code=404, detail="Cloud account not found or already disconnected")
+        
+        slot_info = slot_check.data[0]
+        slot_id = slot_info["id"]
+        provider_email = slot_info.get("provider_email", "unknown")
+        nickname = slot_info.get("nickname", "")
+        
+        # Mark slot as inactive and set disconnection timestamp
+        from datetime import datetime
+        disconnect_result = supabase.table("cloud_slots_log").update({
+            "is_active": False,
+            "disconnected_at": datetime.utcnow().isoformat()
+        }).eq("id", slot_id).execute()
+        
+        if not disconnect_result.data:
+            raise HTTPException(status_code=500, detail="Failed to disconnect account")
+        
+        # For Google Drive, also remove from cloud_accounts table
+        if provider == "google_drive":
+            supabase.table("cloud_accounts").delete().eq(
+                "user_id", user_id
+            ).eq("account_id", account_id).execute()
+        
+        # For OneDrive, remove from cloud_provider_accounts table
+        elif provider == "onedrive":
+            supabase.table("cloud_provider_accounts").delete().eq(
+                "user_id", user_id
+            ).eq("provider_account_id", account_id).execute()
+        
+        # Clear cache to ensure immediate refresh
+        clear_user_cache(user_id, f"DISCONNECT_{provider}")
+        
+        display_name = nickname or provider_email
+        logging.info(f"[CLOUD_DISCONNECT] user_id={user_id} provider={provider} account='{display_name}' slot_id={slot_id}")
+        
+        return {
+            "success": True, 
+            "message": f"Account {display_name} disconnected successfully",
+            "provider": provider,
+            "account_email": provider_email
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[DISCONNECT_ERROR] user_id={user_id} provider={provider} account_id={account_id} error={str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to disconnect account")
 
 
 if __name__ == "__main__":
