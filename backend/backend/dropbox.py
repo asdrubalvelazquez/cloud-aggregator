@@ -68,6 +68,9 @@ async def get_dropbox_storage_quota(access_token: str) -> Dict[str, Any]:
             
             data = response.json()
             
+            # Log the raw response for debugging
+            logger.info(f"[DROPBOX_QUOTA] Raw API response: {data}")
+            
             # Dropbox returns allocation which can be individual or team
             allocation = data.get("allocation", {})
             
