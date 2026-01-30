@@ -5549,28 +5549,6 @@ async def update_dropbox_tokens(account_id: str, tokens: dict):
     except Exception as e:
         logging.error(f"[UPDATE_TOKENS] Failed to update Dropbox tokens for {account_id}: {e}")
 
-            }).eq("id", account_id).execute()
-        )
-    except Exception as e:
-        logging.error(f"[TOKEN_UPDATE] Failed to update tokens for {account_id}: {e}")
-        
-        return {
-            "totals": {
-                "total_bytes": total_bytes,
-                "used_bytes": used_bytes,
-                "free_bytes": free_bytes,
-                "percent_used": percent_used
-            },
-            "accounts": accounts_data
-        }
-        
-    except Exception as e:
-        logging.error(f"[STORAGE_SUMMARY ERROR] Failed to fetch storage summary for user {user_id}: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch storage summary: {str(e)}"
-        )
-
 
 # ========================================================================
 # OneDrive OAuth Endpoints
