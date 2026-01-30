@@ -137,6 +137,7 @@ function DashboardContent({
   const [data, setData] = useState<StorageSummary | null>(null);
   const [cloudStorage, setCloudStorage] = useState<CloudStorageSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [loadingProgress, setLoadingProgress] = useState<{
     storage: boolean;
     quota: boolean;
@@ -286,11 +287,14 @@ function DashboardContent({
     }
   };
 
-  // NEW: Optimized parallel data loading with progress tracking
+  // NEW: Optimized parallel data loading with progress tracking and better error handling
   const loadAllDashboardData = async (signal?: AbortSignal) => {
     try {
       setLoading(true);
-      setHardError(null);
+      // Only clear hardError if it's not initial load (prevent flashing errors)
+      if (!isInitialLoad) {
+        setHardError(null);
+      }
       
       // Reset progress tracking
       setLoadingProgress({
@@ -307,31 +311,60 @@ function DashboardContent({
         fetchSummaryParallel(signal).then((result) => {
           setLoadingProgress(prev => ({ ...prev, storage: false }));
           return result;
+        }).catch((error) => {
+          setLoadingProgress(prev => ({ ...prev, storage: false }));
+          // During initial load, don't treat storage errors as fatal
+          if (isInitialLoad) {
+            console.warn("[DASHBOARD] Storage fetch failed during initial load (non-fatal):", error);
+            return null;
+          }
+          throw error;
         }),
         fetchQuota(signal).then((result) => {
           setLoadingProgress(prev => ({ ...prev, quota: false }));
           return result;
+        }).catch((error) => {
+          setLoadingProgress(prev => ({ ...prev, quota: false }));
+          console.warn("[DASHBOARD] Quota fetch failed (non-fatal):", error);
+          return null;
         }),
         fetchBillingQuota(signal).then((result) => {
           setLoadingProgress(prev => ({ ...prev, billing: false }));
           return result;
+        }).catch((error) => {
+          setLoadingProgress(prev => ({ ...prev, billing: false }));
+          console.warn("[DASHBOARD] Billing fetch failed (non-fatal):", error);
+          return null;
         })
       ]);
       
-      // Handle summary result
-      if (summaryResult.status === 'rejected') {
+      // Handle results - be more tolerant during initial load
+      let hasAnySuccess = false;
+      
+      if (summaryResult.status === 'fulfilled') {
+        hasAnySuccess = true;
+      } else if (summaryResult.status === 'rejected' && !isInitialLoad) {
         console.error("Summary fetch failed:", summaryResult.reason);
-        // Don't fail entire load for summary errors - dashboard can show without summary
       }
       
-      // Handle quota result (optional, won't fail dashboard)
-      if (quotaResult.status === 'rejected') {
+      if (quotaResult.status === 'fulfilled') {
+        hasAnySuccess = true;
+      } else {
         console.error("Quota fetch failed:", quotaResult.reason);
       }
       
-      // Handle billing result (optional, won't fail dashboard)
-      if (billingResult.status === 'rejected') {
+      if (billingResult.status === 'fulfilled') {
+        hasAnySuccess = true;
+      } else {
         console.error("Billing fetch failed:", billingResult.reason);
+      }
+      
+      // Only show error if ALL critical operations failed AND it's not initial load
+      if (!hasAnySuccess && !isInitialLoad) {
+        setHardError("Error de conexión. Algunos datos no pudieron cargarse.");
+      } else {
+        // Clear any previous errors if we have some success
+        setHardError(null);
       }
       
       // Refetch cloud status (separate from main loading to avoid blocking)
@@ -342,13 +375,20 @@ function DashboardContent({
       setLastUpdated(Date.now());
       console.log("[DASHBOARD] Parallel loading completed");
       
+      // Mark initial load as complete
+      setIsInitialLoad(false);
+      
     } catch (e: any) {
       if (e.name !== "AbortError") {
         console.error("Dashboard loading error:", e);
-        setHardError(e.message || "Error al cargar dashboard");
+        // Only show hard error if it's not initial load
+        if (!isInitialLoad) {
+          setHardError(e.message || "Error al cargar dashboard");
+        }
       }
     } finally {
       setLoading(false);
+      setIsInitialLoad(false);
     }
   };
 
@@ -378,9 +418,14 @@ function DashboardContent({
         const json = await legacyRes.value.json();
         setData(json);
         console.log("[DASHBOARD] Legacy storage data loaded successfully");
-      } else if (cloudRes.status === 'rejected') {
+      } else if (cloudRes.status === 'rejected' || (cloudRes.status === 'fulfilled' && !cloudRes.value.ok)) {
         // Only throw if both endpoints failed
-        throw new Error(`Both storage endpoints failed`);
+        const error = new Error(`Storage endpoints unavailable`);
+        console.warn("[DASHBOARD] Both storage endpoints failed, but continuing...");
+        // Don't throw during initial load - just log the warning
+        if (!isInitialLoad) {
+          throw error;
+        }
       }
       
     } catch (e: any) {
@@ -934,76 +979,121 @@ function DashboardContent({
       )}
 
       <div className="w-full max-w-6xl space-y-6">
-        {/* Loading state con progreso granular */}
+        {/* Loading state mejorado con animación atractiva y sin errores prematuros */}
         {(loading || softTimeout) && !cloudStatus && (
-          <div className="space-y-6">
-            <div className="bg-slate-800/50 rounded-lg p-6 border border-slate-700/50">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-500"></div>
-                <span className="text-slate-300 font-medium">Cargando tu dashboard...</span>
+          <div className="min-h-screen flex items-center justify-center">
+            <div className="max-w-md w-full mx-auto">
+              {/* Animación principal del logo */}
+              <div className="flex justify-center mb-8">
+                <div className="relative">
+                  <div className="w-16 h-16 border-4 border-blue-200 rounded-full animate-pulse"></div>
+                  <div className="absolute inset-0 w-16 h-16 border-4 border-transparent border-t-blue-500 rounded-full animate-spin"></div>
+                  <div className="absolute inset-2 w-12 h-12 border-4 border-transparent border-t-emerald-500 rounded-full animate-spin animation-delay-150"></div>
+                  <div className="absolute inset-4 w-8 h-8 border-4 border-transparent border-t-purple-500 rounded-full animate-spin animation-delay-300"></div>
+                </div>
               </div>
               
-              {/* Progress indicators */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-3">
-                  {loadingProgress.storage ? (
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-yellow-500"></div>
-                  ) : (
-                    <div className="w-4 h-4 rounded-full bg-green-500 flex items-center justify-center">
-                      <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                    </div>
-                  )}
-                  <span className={`text-sm ${loadingProgress.storage ? 'text-yellow-400' : 'text-green-400'}`}>
-                    {loadingProgress.storage ? 'Cargando almacenamiento...' : 'Almacenamiento cargado'}
-                  </span>
-                </div>
-                
-                <div className="flex items-center gap-3">
-                  {loadingProgress.quota ? (
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-yellow-500"></div>
-                  ) : (
-                    <div className="w-4 h-4 rounded-full bg-green-500 flex items-center justify-center">
-                      <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                    </div>
-                  )}
-                  <span className={`text-sm ${loadingProgress.quota ? 'text-yellow-400' : 'text-green-400'}`}>
-                    {loadingProgress.quota ? 'Cargando plan...' : 'Plan cargado'}
-                  </span>
-                </div>
-                
-                <div className="flex items-center gap-3">
-                  {loadingProgress.cloudStatus ? (
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-yellow-500"></div>
-                  ) : (
-                    <div className="w-4 h-4 rounded-full bg-green-500 flex items-center justify-center">
-                      <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                    </div>
-                  )}
-                  <span className={`text-sm ${loadingProgress.cloudStatus ? 'text-yellow-400' : 'text-green-400'}`}>
-                    {loadingProgress.cloudStatus ? 'Verificando conexiones...' : 'Conexiones verificadas'}
-                  </span>
-                </div>
+              {/* Título con animación */}
+              <div className="text-center mb-8">
+                <h2 className="text-2xl font-bold text-white mb-2 animate-fade-in">Cargando Dashboard</h2>
+                <p className="text-slate-400 animate-fade-in animation-delay-200">Conectando con tus nubes...</p>
               </div>
-            </div>
-            
-            {/* Skeleton cards mientras cargan los datos */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {[...Array(6)].map((_, i) => (
-                <div key={i} className="bg-slate-800/30 rounded-lg p-6 border border-slate-700/30">
-                  <div className="animate-pulse">
-                    <div className="h-4 bg-slate-600 rounded w-3/4 mb-3"></div>
-                    <div className="h-3 bg-slate-600 rounded w-1/2 mb-4"></div>
-                    <div className="h-2 bg-slate-600 rounded w-full mb-2"></div>
-                    <div className="h-8 bg-slate-600 rounded"></div>
+              
+              {/* Progress indicators mejorados */}
+              <div className="bg-slate-800/50 rounded-lg p-6 border border-slate-700/50 backdrop-blur-sm">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-4">
+                    <div className="relative">
+                      {loadingProgress.storage ? (
+                        <div className="w-5 h-5 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin"></div>
+                      ) : (
+                        <div className="w-5 h-5 rounded-full bg-gradient-to-r from-green-400 to-emerald-500 flex items-center justify-center animate-scale-in">
+                          <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                          </svg>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className={`text-sm font-medium ${
+                          loadingProgress.storage ? 'text-blue-400' : 'text-green-400'
+                        }`}>
+                          {loadingProgress.storage ? 'Cargando almacenamiento...' : 'Almacenamiento cargado'}
+                        </span>
+                      </div>
+                      <div className="w-full bg-slate-700 rounded-full h-1.5">
+                        <div className={`h-1.5 rounded-full transition-all duration-500 ${
+                          loadingProgress.storage ? 'bg-blue-500 w-2/3 animate-pulse' : 'bg-green-500 w-full'
+                        }`}></div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-4">
+                    <div className="relative">
+                      {loadingProgress.quota ? (
+                        <div className="w-5 h-5 border-2 border-purple-300 border-t-purple-600 rounded-full animate-spin animation-delay-150"></div>
+                      ) : (
+                        <div className="w-5 h-5 rounded-full bg-gradient-to-r from-green-400 to-emerald-500 flex items-center justify-center animate-scale-in">
+                          <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                          </svg>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className={`text-sm font-medium ${
+                          loadingProgress.quota ? 'text-purple-400' : 'text-green-400'
+                        }`}>
+                          {loadingProgress.quota ? 'Cargando plan...' : 'Plan cargado'}
+                        </span>
+                      </div>
+                      <div className="w-full bg-slate-700 rounded-full h-1.5">
+                        <div className={`h-1.5 rounded-full transition-all duration-500 ${
+                          loadingProgress.quota ? 'bg-purple-500 w-1/2 animate-pulse' : 'bg-green-500 w-full'
+                        }`}></div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-4">
+                    <div className="relative">
+                      {loadingProgress.cloudStatus ? (
+                        <div className="w-5 h-5 border-2 border-emerald-300 border-t-emerald-600 rounded-full animate-spin animation-delay-300"></div>
+                      ) : (
+                        <div className="w-5 h-5 rounded-full bg-gradient-to-r from-green-400 to-emerald-500 flex items-center justify-center animate-scale-in">
+                          <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                          </svg>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className={`text-sm font-medium ${
+                          loadingProgress.cloudStatus ? 'text-emerald-400' : 'text-green-400'
+                        }`}>
+                          {loadingProgress.cloudStatus ? 'Verificando conexiones...' : 'Conexiones verificadas'}
+                        </span>
+                      </div>
+                      <div className="w-full bg-slate-700 rounded-full h-1.5">
+                        <div className={`h-1.5 rounded-full transition-all duration-500 ${
+                          loadingProgress.cloudStatus ? 'bg-emerald-500 w-3/4 animate-pulse' : 'bg-green-500 w-full'
+                        }`}></div>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              ))}
+                
+                {/* Mensaje motivacional */}
+                <div className="mt-6 text-center">
+                  <p className="text-xs text-slate-500 animate-fade-in animation-delay-500">
+                    💡 Tip: Usa el buscador para encontrar archivos rápidamente
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -1026,7 +1116,8 @@ function DashboardContent({
           </div>
         )}
 
-        {hardError && !loading && (
+        {/* Solo mostrar errores después de la carga inicial */}
+        {hardError && !loading && !isInitialLoad && (
           <div className="bg-red-500/20 border border-red-500 rounded-lg p-4 text-red-100">
             <p className="font-semibold">Error al cargar datos</p>
             <p className="text-sm mt-1">{hardError}</p>
@@ -1034,11 +1125,7 @@ function DashboardContent({
               onClick={() => {
                 setHardError(null);
                 setSoftTimeout(false);
-                setLoading(true);
-                fetchSummary();
-                fetchQuota();
-                fetchBillingQuota();
-                fetchCloudStatusData();
+                loadAllDashboardData();
               }}
               className="mt-3 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-semibold transition"
             >
