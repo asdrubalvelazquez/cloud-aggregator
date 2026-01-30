@@ -7421,6 +7421,172 @@ async def get_dropbox_storage(
         )
 
 
+@app.get("/dropbox/{account_id}/files")
+async def get_dropbox_files(
+    account_id: str,
+    path: Optional[str] = "",
+    user_id: str = Depends(verify_supabase_jwt),
+):
+    """
+    List files and folders from Dropbox account.
+    
+    Security:
+    - Validates JWT authentication
+    - Verifies account ownership (user_id match)
+    - Ensures provider is 'dropbox' and account is active
+    
+    Args:
+        account_id: UUID from cloud_provider_accounts table
+        path: Dropbox folder path. Empty string for root
+        user_id: Extracted from JWT by dependency
+        
+    Returns:
+        {
+            "provider": "dropbox",
+            "account_id": str,
+            "path": str,
+            "items": [
+                {
+                    "id": str,
+                    "name": str,
+                    "kind": "folder" | "file",
+                    "size": int,
+                    "path_display": str,
+                    "client_modified": str (ISO)
+                }
+            ],
+            "has_more": bool,
+            "cursor": str | null
+        }
+    """
+    try:
+        # Fetch account with security validation
+        account = (
+            supabase.table("cloud_provider_accounts")
+            .select("id, provider, provider_account_id, account_email, access_token, refresh_token, is_active")
+            .eq("id", account_id)
+            .eq("user_id", user_id)
+            .eq("provider", "dropbox")
+            .eq("is_active", True)
+            .single()
+            .execute()
+        )
+        
+        if not account.data:
+            raise HTTPException(
+                status_code=404,
+                detail={"error_code": "ACCOUNT_NOT_FOUND", "message": f"Dropbox account {account_id} not found or doesn't belong to you"}
+            )
+        
+        account = account.data
+        
+        if not account.get("is_active", False):
+            raise HTTPException(
+                status_code=403,
+                detail={"error_code": "ACCOUNT_INACTIVE", "message": "Dropbox account is inactive"}
+            )
+        
+        # Decrypt tokens
+        access_token = decrypt_token(account["access_token"]) if account.get("access_token") else None
+        refresh_token = decrypt_token(account["refresh_token"]) if account.get("refresh_token") else None
+        
+        if not access_token:
+            raise HTTPException(
+                status_code=401,
+                detail={"error_code": "NO_ACCESS_TOKEN", "message": "Dropbox account needs reconnection"}
+            )
+        
+        # Try to list files
+        try:
+            files_data = await list_dropbox_files(access_token, path or "")
+            
+            # Transform Dropbox response to match frontend format
+            items = []
+            for entry in files_data.get("entries", []):
+                item = {
+                    "id": entry.get("id"),
+                    "name": entry.get("name"),
+                    "kind": "folder" if entry.get(".tag") == "folder" else "file",
+                    "path_display": entry.get("path_display"),
+                }
+                
+                # Add file-specific fields
+                if entry.get(".tag") == "file":
+                    item["size"] = entry.get("size", 0)
+                    item["client_modified"] = entry.get("client_modified")
+                
+                items.append(item)
+            
+            return {
+                "provider": "dropbox",
+                "account_id": account_id,
+                "path": path or "",
+                "items": items,
+                "has_more": files_data.get("has_more", False),
+                "cursor": files_data.get("cursor")
+            }
+            
+        except HTTPException as e:
+            # If 401, try to refresh token
+            if e.status_code == 401 and refresh_token:
+                try:
+                    tokens = await refresh_dropbox_token(refresh_token)
+                    
+                    # Update tokens in DB
+                    supabase.table("cloud_provider_accounts").update({
+                        "access_token": encrypt_token(tokens["access_token"]),
+                        "refresh_token": encrypt_token(tokens["refresh_token"]),
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }).eq("id", account_id).execute()
+                    
+                    # Retry files list
+                    files_data = await list_dropbox_files(tokens["access_token"], path or "")
+                    
+                    items = []
+                    for entry in files_data.get("entries", []):
+                        item = {
+                            "id": entry.get("id"),
+                            "name": entry.get("name"),
+                            "kind": "folder" if entry.get(".tag") == "folder" else "file",
+                            "path_display": entry.get("path_display"),
+                        }
+                        if entry.get(".tag") == "file":
+                            item["size"] = entry.get("size", 0)
+                            item["client_modified"] = entry.get("client_modified")
+                        items.append(item)
+                    
+                    return {
+                        "provider": "dropbox",
+                        "account_id": account_id,
+                        "path": path or "",
+                        "items": items,
+                        "has_more": files_data.get("has_more", False),
+                        "cursor": files_data.get("cursor")
+                    }
+                    
+                except Exception as refresh_err:
+                    logging.error(f"[DROPBOX_FILES] Token refresh failed for account {account_id}: {refresh_err}")
+                    raise HTTPException(
+                        status_code=401,
+                        detail={"error_code": "DROPBOX_NEEDS_RECONNECT", "message": "Dropbox account needs reconnection"}
+                    )
+            else:
+                raise
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"[DROPBOX_FILES] Failed to list files for account {account_id}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_code": "INTERNAL_ERROR",
+                "message": "Failed to list Dropbox files",
+                "detail": str(e)
+            }
+        )
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
