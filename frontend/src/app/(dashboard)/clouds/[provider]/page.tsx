@@ -256,16 +256,18 @@ export default function ProviderAccountsPage() {
                   className="bg-slate-800 rounded-xl p-6 border border-slate-700 hover:border-slate-600 transition-colors relative"
                 >
                   {/* KebabMenu in top right corner */}
-                  <div className="absolute top-4 right-4">
-                    <KebabMenu
-                      provider={account.provider}
-                      accountId={String(account.provider_account_id || account.cloud_account_id)}
-                      currentNickname={account.nickname || ""}
-                      displayName={account.nickname || account.provider_email}
-                      onNicknameUpdate={handleNicknameUpdate}
-                      onDisconnect={handleCloudDisconnect}
-                    />
-                  </div>
+                  {(account.provider_account_id || account.cloud_account_id) && (
+                    <div className="absolute top-4 right-4">
+                      <KebabMenu
+                        provider={account.provider}
+                        accountId={account.provider_account_id || String(account.cloud_account_id)}
+                        currentNickname={account.nickname || ""}
+                        displayName={account.nickname || account.provider_email}
+                        onNicknameUpdate={handleNicknameUpdate}
+                        onDisconnect={handleCloudDisconnect}
+                      />
+                    </div>
+                  )}
 
                   {/* Email/Account Name */}
                   <div className="mb-4 pr-12">
