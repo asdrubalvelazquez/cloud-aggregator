@@ -11,18 +11,22 @@ import ContextMenu from "@/components/ContextMenu";
 import FileActionBar from "@/components/FileActionBar";
 
 interface DropboxFile {
-  ".tag": "file" | "folder";
+  ".tag"?: "file" | "folder";
   id: string;
   name: string;
+  kind: "file" | "folder";
   path_display: string;
   size?: number;
   client_modified?: string;
 }
 
 interface DropboxListResponse {
-  entries: DropboxFile[];
-  cursor: string;
+  provider: string;
+  account_id: string;
+  path: string;
+  items: DropboxFile[];
   has_more: boolean;
+  cursor: string | null;
 }
 
 // Transform Dropbox item to common format for shared components
@@ -40,11 +44,11 @@ function transformDropboxItem(item: DropboxFile): CommonFileItem {
   return {
     id: item.id,
     name: item.name,
-    kind: item[".tag"] === "folder" ? "folder" : "file",
+    kind: item.kind,
     size: item.size || 0,
     modifiedTime: item.client_modified || new Date().toISOString(),
     webViewLink: undefined, // Dropbox doesn't provide web links in list API
-    mimeType: item[".tag"] === "folder" ? "application/vnd.dropbox.folder" : "application/octet-stream",
+    mimeType: item.kind === "folder" ? "application/vnd.dropbox.folder" : "application/octet-stream",
   };
 }
 
@@ -233,7 +237,7 @@ export default function DropboxFilesPage() {
       }
 
       const data: DropboxListResponse = await response.json();
-      const transformed = data.entries.map(transformDropboxItem);
+      const transformed = data.items.map(transformDropboxItem);
       
       if (seq === fetchSeqRef.current) {
         setFiles(transformed);
