@@ -54,16 +54,19 @@ export default function ProviderAccountsPage() {
         const providerAccounts = accountsArray.filter((a: CloudAccount) => a.provider === provider);
         setAccounts(providerAccounts);
         
-        // For OneDrive, get individual storage data for each account
-        if (provider === 'onedrive') {
+        // For OneDrive and Dropbox, get individual storage data for each account
+        if (provider === 'onedrive' || provider === 'dropbox') {
           const storagePromises = providerAccounts.map(async (account: CloudAccount) => {
             if (account.provider_account_uuid && account.connection_status === 'connected') {
               try {
-                const storageRes = await authenticatedFetch(`/onedrive/${account.provider_account_uuid}/storage`);
+                const endpoint = provider === 'onedrive' 
+                  ? `/onedrive/${account.provider_account_uuid}/storage`
+                  : `/dropbox/${account.provider_account_uuid}/storage`;
+                const storageRes = await authenticatedFetch(endpoint);
                 if (storageRes.ok) {
                   const storageData = await storageRes.json();
                   return {
-                    provider: 'onedrive',
+                    provider,
                     email: account.provider_email,
                     total_bytes: storageData.total,
                     used_bytes: storageData.used,
@@ -75,7 +78,7 @@ export default function ProviderAccountsPage() {
               } catch (error) {
                 console.error(`[Storage] Failed to fetch for ${account.provider_email}:`, error);
                 return {
-                  provider: 'onedrive',
+                  provider,
                   email: account.provider_email,
                   total_bytes: null,
                   used_bytes: null,
@@ -86,7 +89,7 @@ export default function ProviderAccountsPage() {
               }
             }
             return {
-              provider: 'onedrive',
+              provider,
               email: account.provider_email,
               total_bytes: null,
               used_bytes: null,
@@ -148,6 +151,8 @@ export default function ProviderAccountsPage() {
       router.push(`/drive/${account.cloud_account_id}`);
     } else if (account.provider === "onedrive") {
       router.push(`/onedrive/${account.provider_account_uuid || account.cloud_account_id}`);
+    } else if (account.provider === "dropbox") {
+      router.push(`/dropbox/${account.provider_account_uuid || account.cloud_account_id}`);
     }
   };
 
