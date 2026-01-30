@@ -2152,6 +2152,110 @@ async def get_onedrive_files(
         )
 
 
+@app.get("/onedrive/{account_id}/storage")
+async def get_onedrive_storage(
+    account_id: str,
+    user_id: str = Depends(verify_supabase_jwt),
+):
+    """
+    Get OneDrive storage quota for a specific account.
+    
+    Security:
+    - Validates JWT authentication
+    - Verifies account ownership (user_id match)
+    - Ensures provider is 'onedrive' and account is active
+    
+    Args:
+        account_id: UUID from cloud_provider_accounts table
+        user_id: Extracted from JWT by dependency
+        
+    Returns:
+        {
+            "total": int (bytes),
+            "used": int (bytes),
+            "remaining": int (bytes),
+            "state": str ("normal" | "nearing" | "critical" | "exceeded")
+        }
+    """
+    try:
+        # Fetch account with security validation
+        account = (
+            supabase.table("cloud_provider_accounts")
+            .select("id, provider, provider_account_id, account_email, access_token, refresh_token, is_active")
+            .eq("id", account_id)
+            .eq("user_id", user_id)
+            .eq("provider", "onedrive")
+            .single()
+            .execute()
+        )
+        
+        if not account.data:
+            raise HTTPException(
+                status_code=404,
+                detail={"error_code": "ACCOUNT_NOT_FOUND", "message": f"OneDrive account {account_id} not found or doesn't belong to you"}
+            )
+        
+        account = account.data
+        
+        if not account.get("is_active", False):
+            raise HTTPException(
+                status_code=403,
+                detail={"error_code": "ACCOUNT_INACTIVE", "message": "OneDrive account is inactive"}
+            )
+        
+        # Decrypt tokens
+        access_token = decrypt_token(account["access_token"]) if account.get("access_token") else None
+        refresh_token = decrypt_token(account["refresh_token"]) if account.get("refresh_token") else None
+        
+        if not access_token:
+            raise HTTPException(
+                status_code=401,
+                detail={"error_code": "NO_ACCESS_TOKEN", "message": "OneDrive account needs reconnection"}
+            )
+        
+        # Try to get storage quota
+        try:
+            quota_info = await get_onedrive_storage_quota(access_token)
+            return quota_info
+        except HTTPException as e:
+            # If 401, try to refresh token
+            if e.status_code == 401 and refresh_token:
+                try:
+                    from backend.onedrive import refresh_onedrive_token
+                    tokens = await refresh_onedrive_token(refresh_token)
+                    
+                    # Update tokens in DB
+                    supabase.table("cloud_provider_accounts").update({
+                        "access_token": encrypt_token(tokens["access_token"]),
+                        "refresh_token": encrypt_token(tokens["refresh_token"]),
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }).eq("id", account_id).execute()
+                    
+                    # Retry storage quota fetch
+                    quota_info = await get_onedrive_storage_quota(tokens["access_token"])
+                    return quota_info
+                except Exception as refresh_err:
+                    logging.error(f"[ONEDRIVE_STORAGE] Token refresh failed for account {account_id}: {refresh_err}")
+                    raise HTTPException(
+                        status_code=401,
+                        detail={"error_code": "ONEDRIVE_NEEDS_RECONNECT", "message": "OneDrive account needs reconnection"}
+                    )
+            else:
+                raise
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"[ONEDRIVE_STORAGE] Failed to get storage for account {account_id}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_code": "INTERNAL_ERROR",
+                "message": "Failed to get OneDrive storage quota",
+                "detail": str(e)
+            }
+        )
+
+
 @app.get("/onedrive/account-info/{account_id}")
 async def get_onedrive_account_info(
     account_id: str,

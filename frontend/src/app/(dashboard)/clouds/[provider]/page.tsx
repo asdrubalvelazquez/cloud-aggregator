@@ -51,13 +51,59 @@ export default function ProviderAccountsPage() {
         // Filter by provider
         const providerAccounts = accountsArray.filter((a: CloudAccount) => a.provider === provider);
         setAccounts(providerAccounts);
-      }
-
-      // Load storage data
-      const storageRes = await authenticatedFetch("/cloud/storage-summary");
-      if (storageRes.ok) {
-        const data = await storageRes.json();
-        setStorageData(data.accounts || []);
+        
+        // For OneDrive, get individual storage data for each account
+        if (provider === 'onedrive') {
+          const storagePromises = providerAccounts.map(async (account: CloudAccount) => {
+            if (account.provider_account_uuid && account.connection_status === 'connected') {
+              try {
+                const storageRes = await authenticatedFetch(`/onedrive/${account.provider_account_uuid}/storage`);
+                if (storageRes.ok) {
+                  const storageData = await storageRes.json();
+                  return {
+                    provider: 'onedrive',
+                    email: account.provider_email,
+                    total_bytes: storageData.total,
+                    used_bytes: storageData.used,
+                    free_bytes: storageData.remaining,
+                    percent_used: storageData.total ? (storageData.used / storageData.total * 100) : 0,
+                    status: 'ok' as const
+                  };
+                }
+              } catch (error) {
+                console.error(`[Storage] Failed to fetch for ${account.provider_email}:`, error);
+                return {
+                  provider: 'onedrive',
+                  email: account.provider_email,
+                  total_bytes: null,
+                  used_bytes: null,
+                  free_bytes: null,
+                  percent_used: null,
+                  status: 'unavailable' as const
+                };
+              }
+            }
+            return {
+              provider: 'onedrive',
+              email: account.provider_email,
+              total_bytes: null,
+              used_bytes: null,
+              free_bytes: null,
+              percent_used: null,
+              status: 'unavailable' as const
+            };
+          });
+          
+          const storageResults = await Promise.all(storagePromises);
+          setStorageData(storageResults);
+        } else {
+          // For other providers, use general storage-summary
+          const storageRes = await authenticatedFetch("/cloud/storage-summary");
+          if (storageRes.ok) {
+            const data = await storageRes.json();
+            setStorageData(data.accounts || []);
+          }
+        }
       }
     } catch (error) {
       console.error("Error loading accounts:", error);
@@ -85,7 +131,7 @@ export default function ProviderAccountsPage() {
     if (tb >= 1) {
       return `${tb.toFixed(2)} TB`;
     } else if (gb >= 1) {
-      return `${gb.toFixed(2)} TB`;
+      return `${gb.toFixed(2)} GB`;
     } else {
       return `${(bytes / (1024 ** 2)).toFixed(0)} MB`;
     }
