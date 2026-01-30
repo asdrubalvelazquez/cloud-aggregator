@@ -131,9 +131,6 @@ export default function DropboxFilesPage() {
   // Consume cloud status from React Query
   const { data: cloudStatus, error: cloudError } = useCloudStatusQuery();
 
-  // Consume cloud status from React Query
-  const { data: cloudStatus, error: cloudError } = useCloudStatusQuery();
-
   // Check connection status and load files
   useEffect(() => {
     if (!accountId) return;
