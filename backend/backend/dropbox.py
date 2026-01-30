@@ -218,11 +218,14 @@ async def get_dropbox_account_info(access_token: str) -> Dict[str, Any]:
                 )
             
             if response.status_code != 200:
+                error_text = response.text
+                logger.error(f"[DROPBOX_ACCOUNT_INFO] Failed with status {response.status_code}: {error_text}")
                 raise HTTPException(
                     status_code=response.status_code,
                     detail={
                         "error_code": "ACCOUNT_INFO_FAILED",
-                        "message": "Failed to fetch Dropbox account info"
+                        "message": "Failed to fetch Dropbox account info",
+                        "detail": error_text
                     }
                 )
             

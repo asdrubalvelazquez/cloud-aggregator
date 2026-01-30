@@ -7215,9 +7215,16 @@ async def dropbox_callback(request: Request):
             expires_in = tokens.get("expires_in", 14400)  # Default 4 hours
         
         # Get Dropbox account info
-        account_info = await get_dropbox_account_info(access_token)
-        dropbox_account_id = account_info["account_id"]
-        account_email = account_info["email"]
+        try:
+            account_info = await get_dropbox_account_info(access_token)
+            dropbox_account_id = account_info["account_id"]
+            account_email = account_info["email"]
+        except HTTPException as acc_err:
+            logging.error(f"[DROPBOX_CALLBACK] Account info failed: status={acc_err.status_code} detail={acc_err.detail}")
+            return RedirectResponse(f"{frontend_origin}/app?error=dropbox_account_info_failed")
+        except Exception as acc_err:
+            logging.error(f"[DROPBOX_CALLBACK] Account info error: {str(acc_err)}")
+            return RedirectResponse(f"{frontend_origin}/app?error=dropbox_account_info_error")
         
         # Encrypt tokens
         encrypted_access = encrypt_token(access_token)
