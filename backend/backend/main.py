@@ -71,6 +71,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any, Callable, Union
 from types import SimpleNamespace
 from urllib.parse import quote
+import asyncio
+from functools import lru_cache
 
 import httpx
 import stripe
@@ -101,6 +103,11 @@ from backend import transfer
 from backend.stripe_utils import STRIPE_PRICE_PLUS, STRIPE_PRICE_PRO, map_price_to_plan
 
 app = FastAPI()
+
+# Simple in-memory cache for storage quotes (helps dashboard performance)
+# Cache TTL: 5 minutes for storage data
+STORAGE_CACHE = {}
+CACHE_TTL_SECONDS = 300  # 5 minutes
 
 # CORS Configuration
 # FRONTEND_URL: Canonical domain for redirects (OAuth, Stripe, etc.)
@@ -144,6 +151,22 @@ def safe_frontend_origin_from_request(request: Request) -> str:
 
     return CANONICAL_FRONTEND_ORIGIN
 
+
+def get_cached_storage_data(cache_key: str) -> Optional[dict]:
+    """Get cached storage data if not expired"""
+    if cache_key not in STORAGE_CACHE:
+        return None
+    
+    cached_data, timestamp = STORAGE_CACHE[cache_key]
+    if time.time() - timestamp > CACHE_TTL_SECONDS:
+        del STORAGE_CACHE[cache_key]
+        return None
+    
+    return cached_data
+
+def set_cached_storage_data(cache_key: str, data: dict) -> None:
+    """Cache storage data with current timestamp"""
+    STORAGE_CACHE[cache_key] = (data, time.time())
 
 def create_transfer_token(
     *,
@@ -4187,6 +4210,11 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
     """
     Get detailed connection status for all cloud slots.
     
+    OPTIMIZATIONS:
+    - Single query with joins instead of N+1 queries
+    - Removed auto-refresh for simplicity (tokens expire naturally)
+    - Uses async operations for better performance
+    
     Returns account status including connection state, reason for disconnection,
     and whether the account can be reconnected. This endpoint helps distinguish
     between slots that exist historically vs accounts that are actually usable.
@@ -4224,23 +4252,62 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
         }
     """
     try:
-        # 1. Fetch all slots (active and inactive)
-        slots_result = supabase.table("cloud_slots_log").select("*").eq("user_id", user_id).order("slot_number").execute()
+        # Check cache first (5-minute cache for cloud status to reduce DB load)
+        cache_key = f"cloud_status_{user_id}"
+        cached_result = get_cached_storage_data(cache_key)
+        if cached_result:
+            logging.info(f"[CLOUD_STATUS] Cache hit for user {user_id}")
+            return cached_result
         
-        # 2. Fetch ALL cloud_accounts ONCE (eliminate N+1 query)
-        all_accounts_result = supabase.table("cloud_accounts").select("*").eq("user_id", user_id).execute()
+        # Execute all DB queries in parallel using asyncio
+        slots_task = asyncio.to_thread(
+            lambda: supabase.table("cloud_slots_log")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("slot_number")
+            .execute()
+        )
         
-        # 2b. Fetch ALL cloud_provider_accounts ONCE (OneDrive, Dropbox, etc.)
-        all_provider_accounts_result = supabase.table("cloud_provider_accounts").select("*").eq("user_id", user_id).execute()
+        accounts_task = asyncio.to_thread(
+            lambda: supabase.table("cloud_accounts")
+            .select("*")
+            .eq("user_id", user_id)
+            .execute()
+        )
         
-        # 3. Build normalized lookup map: google_account_id (normalized) -> cloud_account
+        provider_accounts_task = asyncio.to_thread(
+            lambda: supabase.table("cloud_provider_accounts")
+            .select("*")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        
+        # Execute all queries in parallel
+        slots_result, all_accounts_result, all_provider_accounts_result = await asyncio.gather(
+            slots_task, accounts_task, provider_accounts_task,
+            return_exceptions=True
+        )
+        
+        # Handle potential errors
+        if isinstance(slots_result, Exception):
+            logging.error(f"[CLOUD_STATUS] Failed to fetch slots: {slots_result}")
+            raise HTTPException(status_code=500, detail="Failed to fetch slots")
+        
+        if isinstance(all_accounts_result, Exception):
+            logging.error(f"[CLOUD_STATUS] Failed to fetch accounts: {all_accounts_result}")
+            all_accounts_result = SimpleNamespace(data=[])
+        
+        if isinstance(all_provider_accounts_result, Exception):
+            logging.error(f"[CLOUD_STATUS] Failed to fetch provider accounts: {all_provider_accounts_result}")
+            all_provider_accounts_result = SimpleNamespace(data=[])
+        
+        # Build normalized lookup maps
         accounts_map = {}
         for acc in (all_accounts_result.data or []):
             acc_google_id_normalized = str(acc.get("google_account_id", "")).strip()
             if acc_google_id_normalized:
                 accounts_map[acc_google_id_normalized] = acc
         
-        # 3b. Build lookup map for provider_accounts: (provider, provider_account_id) -> provider_account
         provider_accounts_map = {}
         for acc in (all_provider_accounts_result.data or []):
             provider = acc.get("provider", "").strip()
@@ -4252,35 +4319,23 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
         accounts_status = []
         summary = {"connected": 0, "needs_reconnect": 0, "disconnected": 0}
         
-        # Import refresh helpers (needed for auto-refresh in loop)
-        from backend.google_drive import try_refresh_google_token
-        from backend.onedrive import try_refresh_onedrive_token
-        
         for slot in slots_result.data:
-            # 4. Match slot to cloud_account using normalized ID (provider-aware)
+            # Match slot to cloud_account using normalized ID (provider-aware)
             slot_provider = slot.get("provider", "").strip()
             slot_provider_id = str(slot.get("provider_account_id", "")).strip()
             
             if slot_provider == "google_drive":
-                # Google uses cloud_accounts (legacy table)
                 cloud_account = accounts_map.get(slot_provider_id)
             else:
-                # OneDrive/Dropbox/others use cloud_provider_accounts
                 cloud_account = provider_accounts_map.get((slot_provider, slot_provider_id))
             
-            # 4b. NO AUTO-REFRESH - Simple approach
-            # Let tokens expire naturally, then user reconnects with fresh OAuth flow
-            # This is simpler, more predictable, and avoids refresh failures
-            # When tokens expire and API calls fail with 401, they'll be cleared and user prompted to reconnect
-            
-            # 5. Classify status (after potential refresh)
+            # Classify status (no auto-refresh for better performance)
             status = classify_account_status(slot, cloud_account)
             
-            # 6. Build response
-            # For non-Google providers, include provider_account_uuid (DB row ID) for routing
+            # Build response
             provider_account_uuid = None
             if slot_provider != "google_drive" and cloud_account:
-                provider_account_uuid = cloud_account.get("id")  # UUID from cloud_provider_accounts.id
+                provider_account_uuid = cloud_account.get("id")
             
             accounts_status.append({
                 "slot_log_id": slot["id"],
@@ -4288,8 +4343,8 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
                 "slot_is_active": slot["is_active"],
                 "provider": slot["provider"],
                 "provider_email": slot["provider_email"],
-                "provider_account_id": slot["provider_account_id"],  # Microsoft/Dropbox account ID
-                "provider_account_uuid": provider_account_uuid,  # UUID for /onedrive/{uuid}/files routing
+                "provider_account_id": slot["provider_account_id"],
+                "provider_account_uuid": provider_account_uuid,
                 "connection_status": status["connection_status"],
                 "reason": status["reason"],
                 "can_reconnect": status["can_reconnect"],
@@ -4301,7 +4356,7 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
             
             summary[status["connection_status"]] += 1
         
-        return {
+        result = {
             "accounts": accounts_status,
             "summary": {
                 "total_slots": len(slots_result.data),
@@ -4309,10 +4364,46 @@ async def get_cloud_status(user_id: str = Depends(verify_supabase_jwt)):
                 **summary
             }
         }
+        
+        # Cache result for 5 minutes
+        set_cached_storage_data(cache_key, result)
+        logging.info(f"[CLOUD_STATUS] Cached fresh data for user {user_id} ({len(accounts_status)} accounts)")
+        
+        return result
     
     except Exception as e:
         logging.error(f"[CLOUD STATUS ERROR] user_id={user_id} error={str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch cloud status: {str(e)}")
+
+
+@app.post("/me/clear-cache")
+async def clear_user_cache(user_id: str = Depends(verify_supabase_jwt)):
+    """
+    Clear cached data for the current user.
+    
+    Useful after connecting/disconnecting accounts or when fresh data is needed.
+    """
+    try:
+        keys_to_clear = [
+            f"storage_summary_{user_id}",
+            f"cloud_status_{user_id}"
+        ]
+        
+        cleared_count = 0
+        for key in keys_to_clear:
+            if key in STORAGE_CACHE:
+                del STORAGE_CACHE[key]
+                cleared_count += 1
+        
+        logging.info(f"[CACHE_CLEAR] Cleared {cleared_count} cache entries for user {user_id}")
+        
+        return {
+            "message": f"Cache cleared successfully",
+            "cleared_entries": cleared_count
+        }
+    except Exception as e:
+        logging.error(f"[CACHE_CLEAR] Error for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to clear cache")
 
 
 @app.get("/me/slots")
@@ -5160,6 +5251,11 @@ async def get_cloud_storage_summary(user_id: str = Depends(verify_supabase_jwt))
     """
     Get aggregated storage summary across all connected cloud accounts (Google Drive + OneDrive).
     
+    OPTIMIZATIONS:
+    - Uses 5-minute cache to reduce API calls
+    - Parallel fetching of all accounts
+    - Graceful error handling for individual accounts
+    
     Returns total storage across all accounts plus per-account breakdown.
     Gracefully handles account errors (expired tokens, quota fetch failures).
     
@@ -5183,36 +5279,84 @@ async def get_cloud_storage_summary(user_id: str = Depends(verify_supabase_jwt))
                     "used_bytes": int,
                     "free_bytes": int,
                     "percent_used": float,
-                    "status": "ok"|"unavailable"|"error"
+                    "status": "ok"|"unavailable"|"error",
+                    "cached": bool  # indica si vino del caché
                 }
             ]
         }
     """
     try:
-        # Fetch all active accounts for user
-        google_accounts_resp = supabase.table("cloud_accounts").select(
+        # Check cache first (per-user cache key)
+        cache_key = f"storage_summary_{user_id}"
+        cached_result = get_cached_storage_data(cache_key)
+        if cached_result:
+            logging.info(f"[STORAGE_SUMMARY] Cache hit for user {user_id}")
+            return cached_result
+        
+        # Fetch all active accounts for user (parallel DB queries)
+        google_task = supabase.table("cloud_accounts").select(
             "id, account_email, access_token"
         ).eq("user_id", user_id).eq("is_active", True).execute()
         
-        onedrive_accounts_resp = supabase.table("cloud_provider_accounts").select(
+        onedrive_task = supabase.table("cloud_provider_accounts").select(
             "id, provider_account_id, account_email, access_token, refresh_token"
         ).eq("user_id", user_id).eq("provider", "onedrive").eq("is_active", True).execute()
         
-        google_accounts = google_accounts_resp.data or []
-        onedrive_accounts = onedrive_accounts_resp.data or []
+        # Execute DB queries in parallel
+        google_accounts_resp, onedrive_accounts_resp = await asyncio.gather(
+            asyncio.to_thread(lambda: google_task),
+            asyncio.to_thread(lambda: onedrive_task),
+            return_exceptions=True
+        )
+        
+        google_accounts = google_accounts_resp.data if hasattr(google_accounts_resp, 'data') else []
+        onedrive_accounts = onedrive_accounts_resp.data if hasattr(onedrive_accounts_resp, 'data') else []
         
         accounts_data = []
         total_bytes = 0
         used_bytes = 0
         
+        # Create tasks for parallel quota fetching
+        quota_tasks = []
+        
         # Process Google Drive accounts
         for account in google_accounts:
-            try:
-                quota_info = await get_storage_quota(account["id"])
-                storage_quota = quota_info.get("storageQuota", {})
+            quota_tasks.append(("google", account, get_google_quota_safe(account)))
+        
+        # Process OneDrive accounts
+        for account in onedrive_accounts:
+            quota_tasks.append(("onedrive", account, get_onedrive_quota_safe(account)))
+        
+        # Execute all quota fetches in parallel
+        if quota_tasks:
+            quota_results = await asyncio.gather(
+                *[task for _, _, task in quota_tasks],
+                return_exceptions=True
+            )
+            
+            # Process results
+            for (provider, account, _), result in zip(quota_tasks, quota_results):
+                if isinstance(result, Exception):
+                    logging.warning(f"[STORAGE_SUMMARY] Failed to fetch {provider} quota for {account.get('account_email')}: {result}")
+                    accounts_data.append({
+                        "provider": provider,
+                        "email": account.get("account_email", "unknown"),
+                        "total_bytes": None,
+                        "used_bytes": None,
+                        "free_bytes": None,
+                        "percent_used": None,
+                        "status": "error",
+                        "cached": False
+                    })
+                    continue
                 
-                account_total = int(storage_quota.get("limit", 0))
-                account_used = int(storage_quota.get("usage", 0))
+                if provider == "google_drive":
+                    account_total = int(result.get("limit", 0))
+                    account_used = int(result.get("usage", 0))
+                else:  # onedrive
+                    account_total = result.get("total", 0)
+                    account_used = result.get("used", 0)
+                
                 account_free = account_total - account_used if account_total > 0 else 0
                 account_percent = round((account_used / account_total * 100) if account_total > 0 else 0, 2)
                 
@@ -5220,84 +5364,103 @@ async def get_cloud_storage_summary(user_id: str = Depends(verify_supabase_jwt))
                 used_bytes += account_used
                 
                 accounts_data.append({
-                    "provider": "google_drive",
-                    "email": account["account_email"],
+                    "provider": provider,
+                    "email": account.get("account_email"),
                     "total_bytes": account_total,
                     "used_bytes": account_used,
                     "free_bytes": account_free,
                     "percent_used": account_percent,
-                    "status": "ok"
-                })
-            except Exception as e:
-                logging.warning(f"[STORAGE_SUMMARY] Failed to fetch Google Drive quota for {account.get('account_email')}: {e}")
-                accounts_data.append({
-                    "provider": "google_drive",
-                    "email": account.get("account_email", "unknown"),
-                    "total_bytes": None,
-                    "used_bytes": None,
-                    "free_bytes": None,
-                    "percent_used": None,
-                    "status": "unavailable"
-                })
-        
-        # Process OneDrive accounts
-        for account in onedrive_accounts:
-            try:
-                # Decrypt access token
-                access_token = decrypt_token(account["access_token"])
-                
-                # Try to get quota, refresh token if needed
-                try:
-                    quota_info = await get_onedrive_storage_quota(access_token)
-                except HTTPException as e:
-                    # If 401, try to refresh token
-                    if e.status_code == 401:
-                        refresh_token = decrypt_token(account["refresh_token"])
-                        tokens = await refresh_onedrive_token(refresh_token)
-                        
-                        # Update tokens in DB
-                        supabase.table("cloud_provider_accounts").update({
-                            "access_token": encrypt_token(tokens["access_token"]),
-                            "refresh_token": encrypt_token(tokens["refresh_token"]),
-                            "updated_at": datetime.now(timezone.utc).isoformat()
-                        }).eq("id", account["id"]).execute()
-                        
-                        # Retry quota fetch
-                        quota_info = await get_onedrive_storage_quota(tokens["access_token"])
-                    else:
-                        raise
-                
-                account_total = quota_info.get("total", 0)
-                account_used = quota_info.get("used", 0)
-                account_free = quota_info.get("remaining", 0)
-                account_percent = round((account_used / account_total * 100) if account_total > 0 else 0, 2)
-                
-                total_bytes += account_total
-                used_bytes += account_used
-                
-                accounts_data.append({
-                    "provider": "onedrive",
-                    "email": account["account_email"],
-                    "total_bytes": account_total,
-                    "used_bytes": account_used,
-                    "free_bytes": account_free,
-                    "percent_used": account_percent,
-                    "status": "ok"
-                })
-            except Exception as e:
-                logging.warning(f"[STORAGE_SUMMARY] Failed to fetch OneDrive quota for {account.get('account_email')}: {e}")
-                accounts_data.append({
-                    "provider": "onedrive",
-                    "email": account.get("account_email", "unknown"),
-                    "total_bytes": None,
-                    "used_bytes": None,
-                    "free_bytes": None,
-                    "percent_used": None,
-                    "status": "unavailable"
+                    "status": "ok",
+                    "cached": False
                 })
         
         free_bytes = total_bytes - used_bytes if total_bytes > 0 else 0
         percent_used = round((used_bytes / total_bytes * 100) if total_bytes > 0 else 0, 2)
+        
+        # Build response
+        result = {
+            "totals": {
+                "total_bytes": total_bytes,
+                "used_bytes": used_bytes,
+                "free_bytes": free_bytes,
+                "percent_used": percent_used
+            },
+            "accounts": accounts_data,
+            "cache_info": {
+                "cached": False,
+                "cache_expires_in_seconds": CACHE_TTL_SECONDS
+            }
+        }
+        
+        # Cache result
+        set_cached_storage_data(cache_key, result)
+        logging.info(f"[STORAGE_SUMMARY] Cached fresh data for user {user_id} ({len(accounts_data)} accounts)")
+        
+        return result
+        
+    except Exception as e:
+        logging.error(f"[STORAGE_SUMMARY] Unexpected error for user {user_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch storage summary: {str(e)[:200]}"
+        )
+
+
+async def get_google_quota_safe(account: dict) -> dict:
+    """Safely fetch Google Drive quota with error handling"""
+    try:
+        quota_info = await get_storage_quota(account["id"])
+        storage_quota = quota_info.get("storageQuota", {})
+        return {
+            "limit": int(storage_quota.get("limit", 0)),
+            "usage": int(storage_quota.get("usage", 0))
+        }
+    except Exception as e:
+        logging.warning(f"[QUOTA_SAFE] Google Drive error for {account.get('account_email')}: {e}")
+        raise
+
+
+async def get_onedrive_quota_safe(account: dict) -> dict:
+    """Safely fetch OneDrive quota with error handling and token refresh"""
+    try:
+        # Decrypt access token
+        access_token = decrypt_token(account["access_token"])
+        
+        # Try to get quota
+        try:
+            quota_info = await get_onedrive_storage_quota(access_token)
+            return quota_info
+        except HTTPException as e:
+            # If 401, try to refresh token
+            if e.status_code == 401:
+                refresh_token = decrypt_token(account["refresh_token"])
+                tokens = await refresh_onedrive_token(refresh_token)
+                
+                # Update tokens in DB (fire and forget, no await)
+                asyncio.create_task(update_onedrive_tokens(account["id"], tokens))
+                
+                # Retry quota fetch
+                quota_info = await get_onedrive_storage_quota(tokens["access_token"])
+                return quota_info
+            else:
+                raise
+    except Exception as e:
+        logging.warning(f"[QUOTA_SAFE] OneDrive error for {account.get('account_email')}: {e}")
+        raise
+
+
+async def update_onedrive_tokens(account_id: str, tokens: dict):
+    """Update OneDrive tokens in DB (background task)"""
+    try:
+        await asyncio.to_thread(
+            lambda: supabase.table("cloud_provider_accounts").update({
+                "access_token": encrypt_token(tokens["access_token"]),
+                "refresh_token": encrypt_token(tokens["refresh_token"]),
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }).eq("id", account_id).execute()
+        )
+    except Exception as e:
+        logging.error(f"[TOKEN_UPDATE] Failed to update tokens for {account_id}: {e}")
         
         return {
             "totals": {

@@ -137,6 +137,17 @@ function DashboardContent({
   const [data, setData] = useState<StorageSummary | null>(null);
   const [cloudStorage, setCloudStorage] = useState<CloudStorageSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingProgress, setLoadingProgress] = useState<{
+    storage: boolean;
+    quota: boolean;
+    billing: boolean;
+    cloudStatus: boolean;
+  }>({
+    storage: true,
+    quota: true,
+    billing: true,
+    cloudStatus: true,
+  });
   const [softTimeout, setSoftTimeout] = useState(false);
   const [hardError, setHardError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastMessage>(null);
@@ -193,22 +204,32 @@ function DashboardContent({
     try {
       setLoading(true);
       
-      // Fetch cloud storage summary (new unified endpoint)
-      const cloudRes = await authenticatedFetch("/cloud/storage-summary", { signal });
-      if (cloudRes.ok) {
-        const cloudJson = await cloudRes.json();
+      // Fetch all data in parallel instead of sequentially for better performance
+      const [cloudRes, legacyRes] = await Promise.allSettled([
+        // New unified endpoint (primary)
+        authenticatedFetch("/cloud/storage-summary", { signal }),
+        // Legacy endpoint for backwards compatibility (fallback)
+        authenticatedFetch("/storage/summary", { signal })
+      ]);
+      
+      // Process cloud storage summary (primary)
+      if (cloudRes.status === 'fulfilled' && cloudRes.value.ok) {
+        const cloudJson = await cloudRes.value.json();
         setCloudStorage(cloudJson);
       } else {
-        console.warn("Failed to fetch cloud storage summary:", cloudRes.status);
+        console.warn("Failed to fetch cloud storage summary:", 
+                    cloudRes.status === 'fulfilled' ? cloudRes.value.status : cloudRes.reason);
       }
       
-      // Keep legacy endpoint for backwards compatibility (if needed)
-      const res = await authenticatedFetch("/storage/summary", { signal });
-      if (!res.ok) {
-        throw new Error(`Error API: ${res.status}`);
+      // Process legacy storage data (fallback)
+      if (legacyRes.status === 'fulfilled' && legacyRes.value.ok) {
+        const json = await legacyRes.value.json();
+        setData(json);
+      } else if (cloudRes.status === 'rejected') {
+        // Only throw if both endpoints failed
+        throw new Error(`Storage API failed: ${legacyRes.status === 'fulfilled' ? legacyRes.value.status : 'Network error'}`);
       }
-      const json = await res.json();
-      setData(json);
+      
       setHardError(null);
       setSoftTimeout(false);
       setLastUpdated(Date.now());
@@ -262,6 +283,109 @@ function DashboardContent({
       // No need to setCloudStatus here - refetchQueries handles it
     } catch (e) {
       console.error("Failed to fetch cloud status:", e);
+    }
+  };
+
+  // NEW: Optimized parallel data loading with progress tracking
+  const loadAllDashboardData = async (signal?: AbortSignal) => {
+    try {
+      setLoading(true);
+      setHardError(null);
+      
+      // Reset progress tracking
+      setLoadingProgress({
+        storage: true,
+        quota: true,
+        billing: true,
+        cloudStatus: true,
+      });
+      
+      console.log("[DASHBOARD] Loading all data in parallel...");
+      
+      // Execute all API calls in parallel for maximum speed
+      const [summaryResult, quotaResult, billingResult] = await Promise.allSettled([
+        fetchSummaryParallel(signal).then((result) => {
+          setLoadingProgress(prev => ({ ...prev, storage: false }));
+          return result;
+        }),
+        fetchQuota(signal).then((result) => {
+          setLoadingProgress(prev => ({ ...prev, quota: false }));
+          return result;
+        }),
+        fetchBillingQuota(signal).then((result) => {
+          setLoadingProgress(prev => ({ ...prev, billing: false }));
+          return result;
+        })
+      ]);
+      
+      // Handle summary result
+      if (summaryResult.status === 'rejected') {
+        console.error("Summary fetch failed:", summaryResult.reason);
+        // Don't fail entire load for summary errors - dashboard can show without summary
+      }
+      
+      // Handle quota result (optional, won't fail dashboard)
+      if (quotaResult.status === 'rejected') {
+        console.error("Quota fetch failed:", quotaResult.reason);
+      }
+      
+      // Handle billing result (optional, won't fail dashboard)
+      if (billingResult.status === 'rejected') {
+        console.error("Billing fetch failed:", billingResult.reason);
+      }
+      
+      // Refetch cloud status (separate from main loading to avoid blocking)
+      fetchCloudStatusData(false).finally(() => {
+        setLoadingProgress(prev => ({ ...prev, cloudStatus: false }));
+      });
+      
+      setLastUpdated(Date.now());
+      console.log("[DASHBOARD] Parallel loading completed");
+      
+    } catch (e: any) {
+      if (e.name !== "AbortError") {
+        console.error("Dashboard loading error:", e);
+        setHardError(e.message || "Error al cargar dashboard");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Optimized summary fetch with better error handling
+  const fetchSummaryParallel = async (signal?: AbortSignal) => {
+    try {
+      // Fetch all data in parallel instead of sequentially for better performance
+      const [cloudRes, legacyRes] = await Promise.allSettled([
+        // New unified endpoint (primary)
+        authenticatedFetch("/cloud/storage-summary", { signal }),
+        // Legacy endpoint for backwards compatibility (fallback)
+        authenticatedFetch("/storage/summary", { signal })
+      ]);
+      
+      // Process cloud storage summary (primary)
+      if (cloudRes.status === 'fulfilled' && cloudRes.value.ok) {
+        const cloudJson = await cloudRes.value.json();
+        setCloudStorage(cloudJson);
+        console.log("[DASHBOARD] Cloud storage summary loaded successfully");
+      } else {
+        console.warn("Failed to fetch cloud storage summary:", 
+                    cloudRes.status === 'fulfilled' ? cloudRes.value.status : cloudRes.reason);
+      }
+      
+      // Process legacy storage data (fallback)
+      if (legacyRes.status === 'fulfilled' && legacyRes.value.ok) {
+        const json = await legacyRes.value.json();
+        setData(json);
+        console.log("[DASHBOARD] Legacy storage data loaded successfully");
+      } else if (cloudRes.status === 'rejected') {
+        // Only throw if both endpoints failed
+        throw new Error(`Both storage endpoints failed`);
+      }
+      
+    } catch (e: any) {
+      console.error("Storage summary fetch error:", e);
+      throw e; // Re-throw to be handled by caller
     }
   };
 
@@ -330,11 +454,8 @@ function DashboardContent({
           // Clean URL after successful refresh
           window.history.replaceState({}, "", window.location.pathname);
           
-          // Load dashboard data with fresh session
-          fetchSummary(abortController.signal);
-          fetchQuota(abortController.signal);
-          fetchBillingQuota(abortController.signal);
-          fetchCloudStatusData();
+          // Load dashboard data with fresh session using optimized parallel loading
+          loadAllDashboardData(abortController.signal);
           
           // Refetch React Query cache to refresh sidebar (awaits completion)
           await queryClient.refetchQueries({ queryKey: CLOUD_STATUS_KEY });
@@ -375,10 +496,8 @@ function DashboardContent({
           // Clean URL after successful refetch to avoid refresh loops
           router.replace("/app");
           
-          // Refresh dashboard data
-          fetchSummary(abortController.signal);
-          fetchQuota(abortController.signal);
-          fetchBillingQuota(abortController.signal);
+          // Refresh dashboard data with optimized parallel loading
+          loadAllDashboardData(abortController.signal);
         } catch (err) {
           console.error("[ONEDRIVE_CONNECTION] Exception:", err);
           setToast({
@@ -454,10 +573,8 @@ function DashboardContent({
             }
           }
           
-          // Update all data
-          fetchSummary(abortController.signal);
-          fetchQuota(abortController.signal);
-          fetchBillingQuota(abortController.signal);
+          // Update all data with optimized parallel loading
+          loadAllDashboardData(abortController.signal);
           
           // Refetch React Query cache to refresh sidebar AND local cloudStatus (awaits completion)
           await queryClient.refetchQueries({ queryKey: CLOUD_STATUS_KEY });
@@ -504,11 +621,8 @@ function DashboardContent({
         }
       }
       
-      // Load data regardless
-      fetchSummary(abortController.signal);
-      fetchQuota(abortController.signal);
-      fetchBillingQuota(abortController.signal);
-      fetchCloudStatusData();
+      // Load data regardless with optimized parallel loading
+      loadAllDashboardData(abortController.signal);
     } else if (authError === "account_already_linked") {
       // OWNERSHIP BLOCKED: OneDrive account already linked to another Cloud Aggregator user
       const maskedEmail = routeParams.masked_email || "desconocida";
@@ -518,12 +632,9 @@ function DashboardContent({
         type: "error",
       });
       
-      // Clean URL and load dashboard data
+      // Clean URL and load dashboard data with optimized parallel loading
       window.history.replaceState({}, "", window.location.pathname);
-      fetchSummary(abortController.signal);
-      fetchQuota(abortController.signal);
-      fetchBillingQuota(abortController.signal);
-      fetchCloudStatusData();
+      loadAllDashboardData(abortController.signal);
     } else if (authError) {
       // Handle errors (both Google and OneDrive)
       let errorMessage = `Error de autenticación: ${authError}`;
@@ -542,8 +653,7 @@ function DashboardContent({
         type: "error",
       });
       window.history.replaceState({}, "", window.location.pathname);
-      fetchSummary(abortController.signal);
-      fetchQuota(abortController.signal);
+      loadAllDashboardData(abortController.signal);
       fetchBillingQuota(abortController.signal);
       fetchCloudStatusData();
     } else {
@@ -824,9 +934,78 @@ function DashboardContent({
       )}
 
       <div className="w-full max-w-6xl space-y-6">
-        {/* Loading state: solo bloquear UI si cloudStatus no existe o si loading summary sin data */}
+        {/* Loading state con progreso granular */}
         {(loading || softTimeout) && !cloudStatus && (
-          <DashboardLoadingState />
+          <div className="space-y-6">
+            <div className="bg-slate-800/50 rounded-lg p-6 border border-slate-700/50">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-500"></div>
+                <span className="text-slate-300 font-medium">Cargando tu dashboard...</span>
+              </div>
+              
+              {/* Progress indicators */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-3">
+                  {loadingProgress.storage ? (
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-yellow-500"></div>
+                  ) : (
+                    <div className="w-4 h-4 rounded-full bg-green-500 flex items-center justify-center">
+                      <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                  )}
+                  <span className={`text-sm ${loadingProgress.storage ? 'text-yellow-400' : 'text-green-400'}`}>
+                    {loadingProgress.storage ? 'Cargando almacenamiento...' : 'Almacenamiento cargado'}
+                  </span>
+                </div>
+                
+                <div className="flex items-center gap-3">
+                  {loadingProgress.quota ? (
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-yellow-500"></div>
+                  ) : (
+                    <div className="w-4 h-4 rounded-full bg-green-500 flex items-center justify-center">
+                      <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                  )}
+                  <span className={`text-sm ${loadingProgress.quota ? 'text-yellow-400' : 'text-green-400'}`}>
+                    {loadingProgress.quota ? 'Cargando plan...' : 'Plan cargado'}
+                  </span>
+                </div>
+                
+                <div className="flex items-center gap-3">
+                  {loadingProgress.cloudStatus ? (
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-yellow-500"></div>
+                  ) : (
+                    <div className="w-4 h-4 rounded-full bg-green-500 flex items-center justify-center">
+                      <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                  )}
+                  <span className={`text-sm ${loadingProgress.cloudStatus ? 'text-yellow-400' : 'text-green-400'}`}>
+                    {loadingProgress.cloudStatus ? 'Verificando conexiones...' : 'Conexiones verificadas'}
+                  </span>
+                </div>
+              </div>
+            </div>
+            
+            {/* Skeleton cards mientras cargan los datos */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {[...Array(6)].map((_, i) => (
+                <div key={i} className="bg-slate-800/30 rounded-lg p-6 border border-slate-700/30">
+                  <div className="animate-pulse">
+                    <div className="h-4 bg-slate-600 rounded w-3/4 mb-3"></div>
+                    <div className="h-3 bg-slate-600 rounded w-1/2 mb-4"></div>
+                    <div className="h-2 bg-slate-600 rounded w-full mb-2"></div>
+                    <div className="h-8 bg-slate-600 rounded"></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
         
         {/* Fallback UX: Si cloudStatus tarda > 8s, mostrar botón reintentar */}
