@@ -7272,32 +7272,62 @@ async def dropbox_callback(request: Request):
         else:  # mode == "connect"
             # Check if account already exists for this user
             try:
-                existing = supabase.table("cloud_provider_accounts").select("id, is_active").eq(
+                existing = supabase.table("cloud_provider_accounts").select("id, is_active, slot_log_id").eq(
                     "user_id", user_id
                 ).eq("provider", "dropbox").eq("provider_account_id", dropbox_account_id).execute()
                 
                 if existing.data:
                     existing_account = existing.data[0]
+                    account_id = existing_account["id"]
+                    
                     if existing_account.get("is_active"):
-                        logging.warning(f"[DROPBOX_CALLBACK] Account already connected user={user_id} account={dropbox_account_id}")
-                        return RedirectResponse(f"{frontend_origin}/app?error=dropbox_already_connected")
-                    else:
-                        # Reactivate inactive account
-                        logging.info(f"[DROPBOX_CALLBACK] Reactivating account user={user_id} account={dropbox_account_id}")
-                        supabase.table("cloud_provider_accounts").update({
-                            "access_token": encrypted_access,
-                            "refresh_token": encrypted_refresh,
-                            "token_expiry": expiry_iso,
+                        logging.warning(f"[DROPBOX_CALLBACK] Account already connected and active user={user_id} account={dropbox_account_id}")
+                        invalidate_user_cache(user_id, "DROPBOX_ALREADY_CONNECTED")
+                        return RedirectResponse(f"{frontend_origin}/app?connection=success&provider=dropbox&already_connected=true")
+                    
+                    # Reactivate inactive account (reconnect scenario)
+                    logging.info(f"[DROPBOX_CALLBACK] Reactivating account user={user_id} account={dropbox_account_id}")
+                    
+                    # Get or create slot
+                    existing_slot_id = existing_account.get("slot_log_id")
+                    if existing_slot_id:
+                        # Reactivate existing slot
+                        supabase.table("cloud_slots_log").update({
                             "is_active": True,
-                            "updated_at": now_iso
-                        }).eq("id", existing_account["id"]).execute()
-                        
-                        invalidate_user_cache(user_id, "DROPBOX_REACTIVATE")
-                        return RedirectResponse(f"{frontend_origin}/app?connection=success&provider=dropbox")
+                            "disconnected_at": None,
+                            "provider_email": account_email
+                        }).eq("id", existing_slot_id).execute()
+                        slot_id = existing_slot_id
+                    else:
+                        # Create new slot if missing
+                        slot_result = quota.connect_cloud_account_with_slot(
+                            supabase=supabase,
+                            user_id=user_id,
+                            provider="dropbox",
+                            provider_account_id=dropbox_account_id,
+                            provider_email=account_email
+                        )
+                        slot_id = slot_result["id"]
+                    
+                    # Update account with new tokens
+                    supabase.table("cloud_provider_accounts").update({
+                        "access_token": encrypted_access,
+                        "refresh_token": encrypted_refresh,
+                        "token_expiry": expiry_iso,
+                        "is_active": True,
+                        "account_email": account_email,
+                        "slot_log_id": slot_id,
+                        "updated_at": now_iso
+                    }).eq("id", account_id).execute()
+                    
+                    logging.info(f"[DROPBOX_CALLBACK] Reactivation successful user={user_id} account={dropbox_account_id} slot={slot_id}")
+                    invalidate_user_cache(user_id, "DROPBOX_REACTIVATE")
+                    return RedirectResponse(f"{frontend_origin}/app?connection=success&provider=dropbox")
+                    
             except Exception as check_err:
-                logging.error(f"[DROPBOX_CALLBACK] Error checking existing account: {check_err}")
+                logging.error(f"[DROPBOX_CALLBACK] Error checking/reactivating account: {check_err}")
             
-            # Use slot-based connection (handles quota internally)
+            # New account - Use slot-based connection
             try:
                 slot_result = quota.connect_cloud_account_with_slot(
                     supabase=supabase,
@@ -7309,8 +7339,8 @@ async def dropbox_callback(request: Request):
                 
                 slot_id = slot_result["id"]
                 
-                # Insert into cloud_provider_accounts
-                supabase.table("cloud_provider_accounts").insert({
+                # Use UPSERT instead of INSERT to handle duplicates gracefully
+                upsert_result = supabase.table("cloud_provider_accounts").upsert({
                     "user_id": user_id,
                     "provider": "dropbox",
                     "provider_account_id": dropbox_account_id,
@@ -7322,9 +7352,14 @@ async def dropbox_callback(request: Request):
                     "slot_log_id": slot_id,
                     "created_at": now_iso,
                     "updated_at": now_iso
-                }).execute()
+                }, on_conflict="user_id,provider,provider_account_id").execute()
                 
-                logging.info(f"[DROPBOX_CALLBACK] Connect successful user={user_id} account={dropbox_account_id} slot={slot_id}")
+                if upsert_result.data:
+                    account_record_id = upsert_result.data[0].get("id", "unknown")
+                    logging.info(f"[DROPBOX_CALLBACK] Connect successful user={user_id} account={dropbox_account_id} slot={slot_id} record_id={account_record_id}")
+                else:
+                    logging.warning(f"[DROPBOX_CALLBACK] UPSERT returned no data user={user_id} account={dropbox_account_id}")
+                
                 invalidate_user_cache(user_id, "DROPBOX_CONNECT")
                 return RedirectResponse(f"{frontend_origin}/app?connection=success&provider=dropbox")
             
@@ -7333,18 +7368,12 @@ async def dropbox_callback(request: Request):
                     logging.warning(f"[DROPBOX_CALLBACK] Quota exceeded for user={user_id}")
                     return RedirectResponse(f"{frontend_origin}/app?error=cloud_limit_reached")
                 logging.error(f"[DROPBOX_CALLBACK] Slot error: {slot_err.detail}")
-                return RedirectResponse(f"{frontend_origin}/app?error=dropbox_connect_failed")
+                return RedirectResponse(f"{frontend_origin}/app?error=dropbox_connect_failed&reason=slot_error")
                 
             except Exception as connect_err:
                 error_msg = str(connect_err)
-                logging.error(f"[DROPBOX_CALLBACK] Connect failed: {error_msg}")
-                
-                # Check for duplicate key violation (23505 PostgreSQL error)
-                if "23505" in error_msg or "duplicate" in error_msg.lower() or "unique constraint" in error_msg.lower():
-                    logging.warning(f"[DROPBOX_CALLBACK] Duplicate account detected user={user_id} account={dropbox_account_id}")
-                    return RedirectResponse(f"{frontend_origin}/app?error=dropbox_already_connected")
-                
-                return RedirectResponse(f"{frontend_origin}/app?error=dropbox_connect_failed")
+                logging.error(f"[DROPBOX_CALLBACK] Connect failed: {error_msg}", exc_info=True)
+                return RedirectResponse(f"{frontend_origin}/app?error=dropbox_connect_failed&reason=database_error")
     
     except Exception as e:
         logging.error(f"[DROPBOX_CALLBACK] Unexpected error: {str(e)}")
