@@ -222,7 +222,7 @@ export default function DropboxFilesPage() {
       setLoading(true);
       setError(null);
 
-      const url = `/api/dropbox/${accountId}/files${path ? `?path=${encodeURIComponent(path)}` : ""}`;
+      const url = `/dropbox/${accountId}/files${path ? `?path=${encodeURIComponent(path)}` : ""}`;
       const response = await authenticatedFetch(url, { signal: controller.signal });
 
       if (seq !== fetchSeqRef.current) return; // Stale request
