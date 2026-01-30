@@ -1726,6 +1726,24 @@ async def google_callback(request: Request):
         upsert_data,
         on_conflict="google_account_id",
     ).execute()
+    
+    # CRITICAL: Validate UPSERT succeeded
+    if not resp.data or len(resp.data) == 0:
+        logging.error(
+            f"[CONNECT ERROR] cloud_accounts UPSERT returned no data! "
+            f"user_id={user_id} google_account_id={google_account_id} email={account_email}"
+        )
+        return RedirectResponse(f"{frontend_origin}/app?error=account_creation_failed")
+    
+    account_id = resp.data[0].get("id", "unknown")
+    logging.info(
+        f"[CONNECT SUCCESS] cloud_accounts UPSERT completed. "
+        f"user_id={user_id} account_id={account_id} google_account_id={google_account_id} "
+        f"email={account_email} slot_id={slot_id} is_active=True"
+    )
+    
+    # Invalidate cache to ensure fresh data load
+    invalidate_user_cache(user_id, "GOOGLE_DRIVE_CONNECT")
 
     # Redirect to frontend dashboard
     return RedirectResponse(f"{frontend_origin}/app?auth=success")
