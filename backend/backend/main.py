@@ -7347,6 +7347,48 @@ async def dropbox_callback(request: Request):
             
             # New account - Use slot-based connection
             try:
+                # FIRST: Check if account exists globally (maybe from another user or edge case)
+                global_existing = supabase.table("cloud_provider_accounts").select("id, user_id, is_active").eq(
+                    "provider", "dropbox"
+                ).eq("provider_account_id", dropbox_account_id).execute()
+                
+                if global_existing.data:
+                    existing_record = global_existing.data[0]
+                    existing_user_id = existing_record.get("user_id")
+                    
+                    if existing_user_id == user_id:
+                        # Same user - update existing record
+                        logging.info(f"[DROPBOX_CALLBACK] Found existing record for same user, updating user={user_id} account={dropbox_account_id}")
+                        
+                        # Get or create slot
+                        slot_result = quota.connect_cloud_account_with_slot(
+                            supabase=supabase,
+                            user_id=user_id,
+                            provider="dropbox",
+                            provider_account_id=dropbox_account_id,
+                            provider_email=account_email
+                        )
+                        slot_id = slot_result["id"]
+                        
+                        # Update existing record
+                        supabase.table("cloud_provider_accounts").update({
+                            "access_token": encrypted_access,
+                            "refresh_token": encrypted_refresh,
+                            "token_expiry": expiry_iso,
+                            "is_active": True,
+                            "account_email": account_email,
+                            "slot_log_id": slot_id,
+                            "updated_at": now_iso
+                        }).eq("id", existing_record["id"]).execute()
+                        
+                        invalidate_user_cache(user_id, "DROPBOX_UPDATE")
+                        return RedirectResponse(f"{frontend_origin}/app?connection=success&provider=dropbox")
+                    else:
+                        # Different user owns this Dropbox account
+                        logging.warning(f"[DROPBOX_CALLBACK] Account owned by different user. Current={user_id} Owner={existing_user_id} account={dropbox_account_id}")
+                        return RedirectResponse(f"{frontend_origin}/app?error=dropbox_account_owned_by_other")
+                
+                # No existing record - create new
                 slot_result = quota.connect_cloud_account_with_slot(
                     supabase=supabase,
                     user_id=user_id,
@@ -7357,8 +7399,8 @@ async def dropbox_callback(request: Request):
                 
                 slot_id = slot_result["id"]
                 
-                # Use UPSERT instead of INSERT to handle duplicates gracefully
-                upsert_result = supabase.table("cloud_provider_accounts").upsert({
+                # INSERT new record
+                insert_result = supabase.table("cloud_provider_accounts").insert({
                     "user_id": user_id,
                     "provider": "dropbox",
                     "provider_account_id": dropbox_account_id,
@@ -7370,13 +7412,13 @@ async def dropbox_callback(request: Request):
                     "slot_log_id": slot_id,
                     "created_at": now_iso,
                     "updated_at": now_iso
-                }, on_conflict="user_id,provider,provider_account_id").execute()
+                }).execute()
                 
-                if upsert_result.data:
-                    account_record_id = upsert_result.data[0].get("id", "unknown")
+                if insert_result.data:
+                    account_record_id = insert_result.data[0].get("id", "unknown")
                     logging.info(f"[DROPBOX_CALLBACK] Connect successful user={user_id} account={dropbox_account_id} slot={slot_id} record_id={account_record_id}")
                 else:
-                    logging.warning(f"[DROPBOX_CALLBACK] UPSERT returned no data user={user_id} account={dropbox_account_id}")
+                    logging.warning(f"[DROPBOX_CALLBACK] INSERT returned no data user={user_id} account={dropbox_account_id}")
                 
                 invalidate_user_cache(user_id, "DROPBOX_CONNECT")
                 return RedirectResponse(f"{frontend_origin}/app?connection=success&provider=dropbox")

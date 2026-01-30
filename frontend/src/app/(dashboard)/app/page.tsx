@@ -707,6 +707,8 @@ function DashboardContent({
         errorMessage = "❌ Error al conectar Dropbox. Por favor, intenta nuevamente.";
       } else if (authError === "dropbox_token_exchange_failed") {
         errorMessage = "❌ Error al obtener tokens de Dropbox. Intenta más tarde.";
+      } else if (authError === "dropbox_account_owned_by_other") {
+        errorMessage = "❌ Esta cuenta de Dropbox ya está vinculada a otro usuario de Cloud Aggregator.";
       } else if (authError.startsWith("dropbox")) {
         errorMessage = `❌ Error de Dropbox: ${authError.replace("dropbox_", "")}`;
       }
