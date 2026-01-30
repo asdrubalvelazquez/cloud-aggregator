@@ -168,10 +168,13 @@ export default function CloudsPage() {
         }
         
         const data = await response.json();
+        console.log('[OneDrive Reconnect] Response data:', data);
         
-        if (data.login_url) {
-          window.location.href = data.login_url;
+        // Backend returns "url", not "login_url"
+        if (data.url) {
+          window.location.href = data.url;
         } else {
+          console.error('[ERROR] No URL in response:', data);
           toast.error('No se recibió URL de reconexión');
         }
       } catch (error) {
