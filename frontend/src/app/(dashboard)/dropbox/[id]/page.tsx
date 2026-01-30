@@ -103,6 +103,11 @@ export default function DropboxFilesPage() {
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
   const [showReconnectModal, setShowReconnectModal] = useState(false);
   const [isSwitchingAccount, setIsSwitchingAccount] = useState(false);
+  
+  // Filter states
+  const [filterType, setFilterType] = useState<string>("all");
+  const [filterOwner, setFilterOwner] = useState<string>("all");
+  const [filterModified, setFilterModified] = useState<string>("all");
 
   // Fetch sequence for cancellation
   const fetchSeqRef = useRef(0);
@@ -440,6 +445,82 @@ export default function DropboxFilesPage() {
     return iconMap[ext || ""] || "📄";
   };
 
+  // Derived filtered files (with filters applied)
+  const filteredFiles = (() => {
+    if (!displayFiles) return displayFiles;
+    
+    let filtered = [...displayFiles];
+    
+    // Filter by type
+    if (filterType !== "all") {
+      filtered = filtered.filter(file => {
+        const name = file.name?.toLowerCase() || "";
+        
+        switch (filterType) {
+          case "folder":
+            return file.kind === "folder";
+          case "document":
+            return name.endsWith(".docx") || name.endsWith(".doc") || name.endsWith(".txt") || name.endsWith(".rtf");
+          case "spreadsheet":
+            return name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".csv");
+          case "pdf":
+            return name.endsWith(".pdf");
+          case "image":
+            return !!name.match(/\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)$/);
+          case "video":
+            return !!name.match(/\.(mp4|avi|mov|mkv|wmv|webm)$/);
+          default:
+            return true;
+        }
+      });
+    }
+    
+    // Filter by owner (for now "yo" shows all, "shared" shows nothing since we don't have shared info)
+    if (filterOwner !== "all") {
+      if (filterOwner === "shared") {
+        filtered = [];
+      }
+    }
+    
+    // Filter by modification date
+    if (filterModified !== "all") {
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const monthAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const yearAgo = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate());
+      
+      filtered = filtered.filter(file => {
+        if (!file.modifiedTime) return false;
+        const modDate = new Date(file.modifiedTime);
+        switch (filterModified) {
+          case "today":
+            return modDate >= today;
+          case "week":
+            return modDate >= weekAgo;
+          case "month":
+            return modDate >= monthAgo;
+          case "year":
+            return modDate >= yearAgo;
+          default:
+            return true;
+        }
+      });
+    }
+    
+    return filtered;
+  })();
+  
+  // Check if any filters are active
+  const hasActiveFilters = filterType !== "all" || filterOwner !== "all" || filterModified !== "all";
+  
+  // Clear all filters function
+  const clearFilters = () => {
+    setFilterType("all");
+    setFilterOwner("all");
+    setFilterModified("all");
+  };
+
   return (
     <main className="flex min-h-screen flex-col items-center p-8 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
       {/* Debug Panel */}
@@ -548,9 +629,78 @@ export default function DropboxFilesPage() {
             ))}
           </div>
 
-          {/* Action Bar (when files selected) */}
-          <div className="flex items-center justify-between">
-            {selectedFiles.size > 0 && !isSwitchingAccount && (
+          {/* Filters Bar (hidden when files selected) or Action Bar */}
+          <div className="flex items-center justify-between gap-3">
+            {selectedFiles.size === 0 ? (
+              <>
+                <div className="flex items-center gap-2">
+                  {/* Tipo Filter */}
+                  <select
+                    value={filterType}
+                    onChange={(e) => setFilterType(e.target.value)}
+                    className={`px-3 py-1.5 border rounded-lg text-sm transition cursor-pointer ${
+                      filterType !== "all" 
+                        ? "bg-blue-600/20 border-blue-500 text-blue-300" 
+                        : "bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    <option value="all">Tipo</option>
+                    <option value="folder">📁 Carpetas</option>
+                    <option value="document">📄 Documentos</option>
+                    <option value="spreadsheet">📊 Hojas de cálculo</option>
+                    <option value="pdf">📕 PDF</option>
+                    <option value="image">🖼️ Imágenes</option>
+                    <option value="video">🎥 Videos</option>
+                  </select>
+
+                  {/* Personas Filter */}
+                  <select
+                    value={filterOwner}
+                    onChange={(e) => setFilterOwner(e.target.value)}
+                    className={`px-3 py-1.5 border rounded-lg text-sm transition cursor-pointer ${
+                      filterOwner !== "all" 
+                        ? "bg-blue-600/20 border-blue-500 text-blue-300" 
+                        : "bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    <option value="all">Personas</option>
+                    <option value="me">👤 yo</option>
+                    <option value="shared">👥 Compartidos conmigo</option>
+                  </select>
+
+                  {/* Modificado Filter */}
+                  <select
+                    value={filterModified}
+                    onChange={(e) => setFilterModified(e.target.value)}
+                    className={`px-3 py-1.5 border rounded-lg text-sm transition cursor-pointer ${
+                      filterModified !== "all" 
+                        ? "bg-blue-600/20 border-blue-500 text-blue-300" 
+                        : "bg-transparent border-slate-700 text-slate-300 hover:bg-slate-800"
+                    }`}
+                  >
+                    <option value="all">Modificado</option>
+                    <option value="today">📅 Hoy</option>
+                    <option value="week">📅 Esta semana</option>
+                    <option value="month">📅 Este mes</option>
+                    <option value="year">📅 Este año</option>
+                  </select>
+
+                  {/* Clear Filters Button - Only show when filters are active */}
+                  {hasActiveFilters && (
+                    <button
+                      onClick={clearFilters}
+                      className="px-3 py-1.5 bg-red-600/20 border border-red-500 text-red-300 rounded-lg text-sm hover:bg-red-600/30 transition flex items-center gap-1.5"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                      Limpiar filtros
+                    </button>
+                  )}
+                </div>
+              </>
+            ) : (
+              selectedFiles.size > 0 && !isSwitchingAccount && (
               <FileActionBar
                 provider="onedrive"
                 selectedCount={selectedFiles.size}
@@ -600,7 +750,7 @@ export default function DropboxFilesPage() {
                 copyDisabled={true}
                 copyDisabledReason="Transferencia de Dropbox → otras nubes próximamente disponible"
               />
-            )}
+            ))}
 
             {/* View Toggle & Actions */}
             <div className="flex items-center gap-2 ml-auto">
@@ -672,20 +822,29 @@ export default function DropboxFilesPage() {
                   <th className="py-3 px-4 text-left text-slate-400 font-medium text-sm">Propietario</th>
                   <th className="py-3 px-4 text-left text-slate-400 font-medium text-sm">Última modificación</th>
                   <th className="py-3 px-4 text-left text-slate-400 font-medium text-sm">Tamaño</th>
+                  <th className="py-3 px-4 text-center text-slate-400 font-medium text-sm">Acciones</th>
                 </tr>
               </thead>
               <tbody>
-                {displayFiles.length === 0 ? (
+                {filteredFiles.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="py-16 text-center">
+                    <td colSpan={5} className="py-16 text-center">
                       <div className="flex flex-col items-center gap-3">
                         <div className="text-6xl opacity-50">📂</div>
-                        <p className="text-slate-400 text-lg">Esta carpeta está vacía</p>
+                        <p className="text-slate-400 text-lg">{hasActiveFilters ? "No hay archivos que coincidan con los filtros" : "Esta carpeta está vacía"}</p>
+                        {hasActiveFilters && (
+                          <button 
+                            onClick={clearFilters}
+                            className="mt-3 text-blue-400 hover:text-blue-300 text-sm"
+                          >
+                            Limpiar filtros
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
                 ) : (
-                  displayFiles.map((file) => (
+                  filteredFiles.map((file) => (
                     <tr
                       key={file.id}
                       className={`border-b border-slate-700 hover:bg-slate-700/50 transition cursor-pointer ${
@@ -721,6 +880,21 @@ export default function DropboxFilesPage() {
                       <td className="py-3 px-4 text-slate-400 text-sm">
                         {file.kind === "folder" ? "—" : formatSize(file.size)}
                       </td>
+
+                      {/* Acciones */}
+                      <td className="py-3 px-4 text-center">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRowContextMenu(e as any, file);
+                          }}
+                          className="text-slate-400 hover:text-white p-1 hover:bg-slate-700 rounded transition"
+                        >
+                          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+                          </svg>
+                        </button>
+                      </td>
                     </tr>
                   ))
                 )}
@@ -732,16 +906,31 @@ export default function DropboxFilesPage() {
 
         {/* Grid View */}
         {!loading && !error && viewMode === "grid" && (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {displayFiles.length === 0 ? (
+          <>
+            {/* Show filter results count when filters are active */}
+            {hasActiveFilters && filteredFiles.length > 0 && (
+              <div className="mb-3 text-sm text-slate-400">
+                Mostrando {filteredFiles.length} de {displayFiles.length} archivos
+              </div>
+            )}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {filteredFiles.length === 0 ? (
               <div className="col-span-full py-16 text-center">
                 <div className="flex flex-col items-center gap-3">
                   <div className="text-6xl opacity-50">📂</div>
-                  <p className="text-slate-400 text-lg">Esta carpeta está vacía</p>
+                  <p className="text-slate-400 text-lg">{hasActiveFilters ? "No hay archivos que coincidan con los filtros" : "Esta carpeta está vacía"}</p>
+                  {hasActiveFilters && (
+                    <button 
+                      onClick={clearFilters}
+                      className="mt-3 text-blue-400 hover:text-blue-300 text-sm"
+                    >
+                      Limpiar filtros
+                    </button>
+                  )}
                 </div>
               </div>
             ) : (
-              displayFiles.map((file) => (
+              filteredFiles.map((file) => (
                 <div
                   key={file.id}
                   className={`bg-slate-800/50 border border-slate-700 rounded-lg p-4 hover:bg-slate-700/50 transition cursor-pointer ${
@@ -759,6 +948,7 @@ export default function DropboxFilesPage() {
               ))
             )}
           </div>
+          </>
         )}
         </div>
         </>
