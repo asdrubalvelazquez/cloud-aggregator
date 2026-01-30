@@ -97,6 +97,17 @@ from backend.onedrive import (
     get_onedrive_storage_quota,
     GRAPH_API_BASE,
 )
+from backend.dropbox import (
+    refresh_dropbox_token,
+    get_dropbox_storage_quota,
+    get_dropbox_account_info,
+    list_dropbox_files,
+    DROPBOX_AUTH_URL,
+    DROPBOX_TOKEN_URL,
+    DROPBOX_CLIENT_ID,
+    DROPBOX_CLIENT_SECRET,
+    DROPBOX_REDIRECT_URI,
+)
 from backend.auth import create_state_token, decode_state_token, verify_supabase_jwt, get_current_user, get_jwt_user_info
 from backend import quota
 from backend import transfer
@@ -5322,15 +5333,21 @@ async def get_cloud_storage_summary(user_id: str = Depends(verify_supabase_jwt))
             "id, provider_account_id, account_email, access_token, refresh_token"
         ).eq("user_id", user_id).eq("provider", "onedrive").eq("is_active", True).execute()
         
+        dropbox_task = supabase.table("cloud_provider_accounts").select(
+            "id, provider_account_id, account_email, access_token, refresh_token"
+        ).eq("user_id", user_id).eq("provider", "dropbox").eq("is_active", True).execute()
+        
         # Execute DB queries in parallel
-        google_accounts_resp, onedrive_accounts_resp = await asyncio.gather(
+        google_accounts_resp, onedrive_accounts_resp, dropbox_accounts_resp = await asyncio.gather(
             asyncio.to_thread(lambda: google_task),
             asyncio.to_thread(lambda: onedrive_task),
+            asyncio.to_thread(lambda: dropbox_task),
             return_exceptions=True
         )
         
         google_accounts = google_accounts_resp.data if hasattr(google_accounts_resp, 'data') else []
         onedrive_accounts = onedrive_accounts_resp.data if hasattr(onedrive_accounts_resp, 'data') else []
+        dropbox_accounts = dropbox_accounts_resp.data if hasattr(dropbox_accounts_resp, 'data') else []
         
         accounts_data = []
         total_bytes = 0
@@ -5346,6 +5363,10 @@ async def get_cloud_storage_summary(user_id: str = Depends(verify_supabase_jwt))
         # Process OneDrive accounts
         for account in onedrive_accounts:
             quota_tasks.append(("onedrive", account, get_onedrive_quota_safe(account)))
+        
+        # Process Dropbox accounts
+        for account in dropbox_accounts:
+            quota_tasks.append(("dropbox", account, get_dropbox_quota_safe(account)))
         
         # Execute all quota fetches in parallel
         if quota_tasks:
@@ -5373,6 +5394,9 @@ async def get_cloud_storage_summary(user_id: str = Depends(verify_supabase_jwt))
                 if provider == "google_drive":
                     account_total = int(result.get("limit", 0))
                     account_used = int(result.get("usage", 0))
+                elif provider == "dropbox":
+                    account_total = result.get("total", 0)
+                    account_used = result.get("used", 0)
                 else:  # onedrive
                     account_total = result.get("total", 0)
                     account_used = result.get("used", 0)
@@ -5477,6 +5501,54 @@ async def update_onedrive_tokens(account_id: str, tokens: dict):
                 "access_token": encrypt_token(tokens["access_token"]),
                 "refresh_token": encrypt_token(tokens["refresh_token"]),
                 "updated_at": datetime.now(timezone.utc).isoformat()
+            }).eq("id", account_id).execute()
+        )
+    except Exception as e:
+        logging.error(f"[UPDATE_TOKENS] Failed to update OneDrive tokens for {account_id}: {e}")
+
+
+async def get_dropbox_quota_safe(account: dict) -> dict:
+    """Safely fetch Dropbox quota with error handling and token refresh"""
+    try:
+        # Decrypt access token
+        access_token = decrypt_token(account["access_token"])
+        
+        # Try to get quota
+        try:
+            quota_info = await get_dropbox_storage_quota(access_token)
+            return quota_info
+        except HTTPException as e:
+            # If 401, try to refresh token
+            if e.status_code == 401 and account.get("refresh_token"):
+                refresh_token = decrypt_token(account["refresh_token"])
+                tokens = await refresh_dropbox_token(refresh_token)
+                
+                # Update tokens in DB (fire and forget, no await)
+                asyncio.create_task(update_dropbox_tokens(account["id"], tokens))
+                
+                # Retry quota fetch
+                quota_info = await get_dropbox_storage_quota(tokens["access_token"])
+                return quota_info
+            else:
+                raise
+    except Exception as e:
+        logging.warning(f"[QUOTA_SAFE] Dropbox error for {account.get('account_email')}: {e}")
+        raise
+
+
+async def update_dropbox_tokens(account_id: str, tokens: dict):
+    """Update Dropbox tokens in DB (background task)"""
+    try:
+        await asyncio.to_thread(
+            lambda: supabase.table("cloud_provider_accounts").update({
+                "access_token": encrypt_token(tokens["access_token"]),
+                "refresh_token": encrypt_token(tokens["refresh_token"]),
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }).eq("id", account_id).execute()
+        )
+    except Exception as e:
+        logging.error(f"[UPDATE_TOKENS] Failed to update Dropbox tokens for {account_id}: {e}")
+
             }).eq("id", account_id).execute()
         )
     except Exception as e:
@@ -7039,6 +7111,326 @@ async def disconnect_cloud_account(
     except Exception as e:
         logging.error(f"[DISCONNECT_ERROR] user_id={user_id} provider={provider} account_id={account_id} error={str(e)}")
         raise HTTPException(status_code=500, detail="Failed to disconnect account")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DROPBOX OAUTH & ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/auth/dropbox/login-url")
+async def dropbox_login_url(
+    mode: str = "connect",
+    reconnect_account_id: Optional[str] = None,
+    user_id: str = Depends(verify_supabase_jwt)
+):
+    """
+    Generate Dropbox OAuth authorization URL.
+    
+    Query params:
+        mode: "connect" (new account) or "reconnect" (refresh existing)
+        reconnect_account_id: Required if mode=reconnect (Dropbox account_id from cloud_provider_accounts)
+        
+    Returns:
+        {"url": str}  # Dropbox OAuth consent screen URL
+    """
+    try:
+        # Create state token with user context
+        state_data = {
+            "user_id": user_id,
+            "mode": mode,
+            "type": "oauth_state"
+        }
+        
+        if mode == "reconnect" and reconnect_account_id:
+            state_data["reconnect_account_id"] = reconnect_account_id
+            
+            # Get slot_log_id for reconnection tracking
+            try:
+                slot_result = supabase.table("cloud_slots_log").select("id").eq(
+                    "provider", "dropbox"
+                ).eq("provider_account_id", reconnect_account_id).eq(
+                    "user_id", user_id
+                ).order("created_at", desc=True).limit(1).execute()
+                
+                if slot_result.data and len(slot_result.data) > 0:
+                    state_data["slot_log_id"] = slot_result.data[0]["id"]
+            except Exception as slot_err:
+                logging.warning(f"[DROPBOX_LOGIN_URL] Could not fetch slot_log_id: {slot_err}")
+        
+        # Generate state token
+        state_token = create_state_token(state_data)
+        
+        # Build Dropbox OAuth URL
+        oauth_url = (
+            f"{DROPBOX_AUTH_URL}"
+            f"?client_id={DROPBOX_CLIENT_ID}"
+            f"&response_type=code"
+            f"&redirect_uri={DROPBOX_REDIRECT_URI}"
+            f"&state={state_token}"
+            f"&token_access_type=offline"  # Request refresh token
+        )
+        
+        logging.info(f"[DROPBOX_LOGIN_URL] user={user_id} mode={mode} reconnect_id={reconnect_account_id}")
+        
+        return {"url": oauth_url}
+        
+    except Exception as e:
+        logging.error(f"[DROPBOX_LOGIN_URL] Error generating URL: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate Dropbox login URL: {str(e)}")
+
+
+@app.get("/auth/dropbox/callback")
+async def dropbox_callback(request: Request):
+    """
+    Handle Dropbox OAuth callback after user authorizes.
+    
+    Query params (from Dropbox):
+        code: Authorization code
+        state: State token (contains user_id, mode, etc.)
+        
+    Returns:
+        RedirectResponse to frontend with success/error
+    """
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    frontend_origin = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    
+    if not code or not state:
+        logging.error("[DROPBOX_CALLBACK] Missing code or state")
+        return RedirectResponse(f"{frontend_origin}/app?error=dropbox_missing_params")
+    
+    try:
+        # Decode state token
+        state_data = decode_state_token(state)
+        user_id = state_data.get("user_id")
+        mode = state_data.get("mode", "connect")
+        reconnect_account_id = state_data.get("reconnect_account_id")
+        slot_log_id = state_data.get("slot_log_id")
+        
+        if not user_id:
+            logging.error("[DROPBOX_CALLBACK] No user_id in state token")
+            return RedirectResponse(f"{frontend_origin}/app?error=dropbox_invalid_state")
+        
+        # Exchange code for tokens
+        async with httpx.AsyncClient() as client:
+            token_response = await client.post(
+                DROPBOX_TOKEN_URL,
+                data={
+                    "code": code,
+                    "grant_type": "authorization_code",
+                    "client_id": DROPBOX_CLIENT_ID,
+                    "client_secret": DROPBOX_CLIENT_SECRET,
+                    "redirect_uri": DROPBOX_REDIRECT_URI
+                },
+                timeout=30.0
+            )
+            
+            if token_response.status_code != 200:
+                error_data = token_response.json() if token_response.headers.get("content-type") == "application/json" else {}
+                error_desc = error_data.get("error_description", token_response.text)
+                logging.error(f"[DROPBOX_CALLBACK] Token exchange failed: {error_desc}")
+                return RedirectResponse(f"{frontend_origin}/app?error=dropbox_token_exchange_failed")
+            
+            tokens = token_response.json()
+            access_token = tokens["access_token"]
+            refresh_token = tokens.get("refresh_token")  # May not be present
+            expires_in = tokens.get("expires_in", 14400)  # Default 4 hours
+        
+        # Get Dropbox account info
+        account_info = await get_dropbox_account_info(access_token)
+        dropbox_account_id = account_info["account_id"]
+        account_email = account_info["email"]
+        
+        # Encrypt tokens
+        encrypted_access = encrypt_token(access_token)
+        encrypted_refresh = encrypt_token(refresh_token) if refresh_token else None
+        
+        now_iso = datetime.now(timezone.utc).isoformat()
+        expiry_iso = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
+        
+        if mode == "reconnect":
+            # Update existing account
+            try:
+                update_data = {
+                    "access_token": encrypted_access,
+                    "token_expiry": expiry_iso,
+                    "updated_at": now_iso,
+                    "is_active": True
+                }
+                
+                if encrypted_refresh:
+                    update_data["refresh_token"] = encrypted_refresh
+                
+                supabase.table("cloud_provider_accounts").update(update_data).eq(
+                    "provider", "dropbox"
+                ).eq("provider_account_id", dropbox_account_id).eq("user_id", user_id).execute()
+                
+                # Reactivate slot
+                if slot_log_id:
+                    supabase.table("cloud_slots_log").update({
+                        "is_active": True,
+                        "disconnected_at": None
+                    }).eq("id", slot_log_id).execute()
+                
+                logging.info(f"[DROPBOX_CALLBACK] Reconnect successful user={user_id} account={dropbox_account_id}")
+                return RedirectResponse(f"{frontend_origin}/app?connection=success&provider=dropbox")
+                
+            except Exception as update_err:
+                logging.error(f"[DROPBOX_CALLBACK] Reconnect update failed: {update_err}")
+                return RedirectResponse(f"{frontend_origin}/app?error=dropbox_reconnect_failed")
+        
+        else:  # mode == "connect"
+            # Check quota before connecting
+            try:
+                quota_check = quota.check_quota_available_hybrid(supabase, user_id)
+                if not quota_check["can_connect"]:
+                    logging.warning(f"[DROPBOX_CALLBACK] Quota exceeded for user={user_id}")
+                    return RedirectResponse(f"{frontend_origin}/app?error=quota_exceeded")
+            except Exception as quota_err:
+                logging.error(f"[DROPBOX_CALLBACK] Quota check failed: {quota_err}")
+                return RedirectResponse(f"{frontend_origin}/app?error=quota_check_failed")
+            
+            # Use slot-based connection
+            try:
+                slot_result = quota.connect_cloud_account_with_slot(
+                    supabase=supabase,
+                    user_id=user_id,
+                    provider="dropbox",
+                    provider_account_id=dropbox_account_id,
+                    provider_email=account_email
+                )
+                
+                slot_log_id = slot_result["slot_log_id"]
+                
+                # Insert into cloud_provider_accounts
+                supabase.table("cloud_provider_accounts").insert({
+                    "user_id": user_id,
+                    "provider": "dropbox",
+                    "provider_account_id": dropbox_account_id,
+                    "account_email": account_email,
+                    "access_token": encrypted_access,
+                    "refresh_token": encrypted_refresh,
+                    "token_expiry": expiry_iso,
+                    "is_active": True,
+                    "created_at": now_iso,
+                    "updated_at": now_iso
+                }).execute()
+                
+                logging.info(f"[DROPBOX_CALLBACK] Connect successful user={user_id} account={dropbox_account_id} slot={slot_log_id}")
+                invalidate_user_cache(user_id, "DROPBOX_CONNECT")
+                return RedirectResponse(f"{frontend_origin}/app?connection=success&provider=dropbox")
+                
+            except Exception as connect_err:
+                logging.error(f"[DROPBOX_CALLBACK] Connect failed: {connect_err}")
+                return RedirectResponse(f"{frontend_origin}/app?error=dropbox_connect_failed")
+    
+    except Exception as e:
+        logging.error(f"[DROPBOX_CALLBACK] Unexpected error: {str(e)}")
+        return RedirectResponse(f"{frontend_origin}/app?error=dropbox_auth_error")
+
+
+@app.get("/dropbox/{account_id}/storage")
+async def get_dropbox_storage(
+    account_id: str,
+    user_id: str = Depends(verify_supabase_jwt),
+):
+    """
+    Get Dropbox storage quota for a specific account.
+    
+    Security:
+    - Validates JWT authentication
+    - Verifies account ownership (user_id match)
+    - Ensures provider is 'dropbox' and account is active
+    
+    Args:
+        account_id: UUID from cloud_provider_accounts table
+        user_id: Extracted from JWT by dependency
+        
+    Returns:
+        {
+            "total": int (bytes),
+            "used": int (bytes),
+            "remaining": int (bytes),
+            "state": str ("normal" | "nearing" | "critical" | "exceeded")
+        }
+    """
+    try:
+        # Fetch account with security validation
+        account = (
+            supabase.table("cloud_provider_accounts")
+            .select("id, provider, provider_account_id, account_email, access_token, refresh_token, is_active")
+            .eq("id", account_id)
+            .eq("user_id", user_id)
+            .eq("provider", "dropbox")
+            .eq("is_active", True)
+            .single()
+            .execute()
+        )
+        
+        if not account.data:
+            raise HTTPException(
+                status_code=404,
+                detail={"error_code": "ACCOUNT_NOT_FOUND", "message": f"Dropbox account {account_id} not found or doesn't belong to you"}
+            )
+        
+        account = account.data
+        
+        if not account.get("is_active", False):
+            raise HTTPException(
+                status_code=403,
+                detail={"error_code": "ACCOUNT_INACTIVE", "message": "Dropbox account is inactive"}
+            )
+        
+        # Decrypt tokens
+        access_token = decrypt_token(account["access_token"]) if account.get("access_token") else None
+        refresh_token = decrypt_token(account["refresh_token"]) if account.get("refresh_token") else None
+        
+        if not access_token:
+            raise HTTPException(
+                status_code=401,
+                detail={"error_code": "NO_ACCESS_TOKEN", "message": "Dropbox account needs reconnection"}
+            )
+        
+        # Try to get storage quota
+        try:
+            quota_info = await get_dropbox_storage_quota(access_token)
+            return quota_info
+        except HTTPException as e:
+            # If 401, try to refresh token
+            if e.status_code == 401 and refresh_token:
+                try:
+                    tokens = await refresh_dropbox_token(refresh_token)
+                    
+                    # Update tokens in DB
+                    supabase.table("cloud_provider_accounts").update({
+                        "access_token": encrypt_token(tokens["access_token"]),
+                        "refresh_token": encrypt_token(tokens["refresh_token"]),
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }).eq("id", account_id).execute()
+                    
+                    # Retry storage quota fetch
+                    quota_info = await get_dropbox_storage_quota(tokens["access_token"])
+                    return quota_info
+                except Exception as refresh_err:
+                    logging.error(f"[DROPBOX_STORAGE] Token refresh failed for account {account_id}: {refresh_err}")
+                    raise HTTPException(
+                        status_code=401,
+                        detail={"error_code": "DROPBOX_NEEDS_RECONNECT", "message": "Dropbox account needs reconnection"}
+                    )
+            else:
+                raise
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception(f"[DROPBOX_STORAGE] Failed to get storage for account {account_id}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_code": "INTERNAL_ERROR",
+                "message": "Failed to get Dropbox storage quota",
+                "detail": str(e)
+            }
+        )
 
 
 if __name__ == "__main__":

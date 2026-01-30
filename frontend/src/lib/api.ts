@@ -211,6 +211,36 @@ export async function fetchOneDriveLoginUrl(params?: {
 }
 
 /**
+ * Dropbox login URL
+ */
+export async function fetchDropboxLoginUrl(params?: {
+  mode?: "connect" | "reauth" | "reconnect" | "consent";
+  reconnect_account_id?: string;
+}): Promise<GoogleLoginUrlResponse> {
+  const queryParams = new URLSearchParams();
+  if (params?.mode) {
+    queryParams.set("mode", params.mode);
+  }
+  if (params?.reconnect_account_id) {
+    queryParams.set("reconnect_account_id", params.reconnect_account_id);
+  }
+  
+  const endpoint = `/auth/dropbox/login-url${
+    queryParams.toString() ? `?${queryParams.toString()}` : ""
+  }`;
+  
+  const res = await authenticatedFetch(endpoint);
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    const error: any = new Error(`Failed to get OAuth URL: ${res.status}`);
+    error.status = res.status;
+    error.body = errorData;
+    throw error;
+  }
+  return await res.json();
+}
+
+/**
  * OneDrive file/folder item type
  */
 export type OneDriveItem = {

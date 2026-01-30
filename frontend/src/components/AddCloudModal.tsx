@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { fetchGoogleLoginUrl, fetchOneDriveLoginUrl } from "@/lib/api";
+import { fetchGoogleLoginUrl, fetchOneDriveLoginUrl, fetchDropboxLoginUrl } from "@/lib/api";
 
 type AddCloudModalProps = {
   open: boolean;
@@ -9,7 +9,7 @@ type AddCloudModalProps = {
 };
 
 export default function AddCloudModal({ open, onClose }: AddCloudModalProps) {
-  const [connecting, setConnecting] = useState<"google" | "onedrive" | null>(null);
+  const [connecting, setConnecting] = useState<"google" | "onedrive" | "dropbox" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleConnectGoogle = async () => {
@@ -39,6 +39,21 @@ export default function AddCloudModal({ open, onClose }: AddCloudModalProps) {
       setError(message);
       setConnecting(null);
       console.error("[AddCloudModal] OneDrive connect error:", err);
+    }
+  };
+
+  const handleConnectDropbox = async () => {
+    setConnecting("dropbox");
+    setError(null);
+    
+    try {
+      const { url } = await fetchDropboxLoginUrl({ mode: "connect" });
+      window.location.href = url;
+    } catch (err: any) {
+      const message = err?.message || "Error al conectar Dropbox";
+      setError(message);
+      setConnecting(null);
+      console.error("[AddCloudModal] Dropbox connect error:", err);
     }
   };
 
@@ -117,6 +132,33 @@ export default function AddCloudModal({ open, onClose }: AddCloudModalProps) {
                 </div>
               )}
               {connecting !== "onedrive" && (
+                <div className="flex-shrink-0 text-slate-500 group-hover:text-white transition">
+                  →
+                </div>
+              )}
+            </button>
+
+            {/* Dropbox Button */}
+            <button
+              onClick={handleConnectDropbox}
+              disabled={connecting !== null}
+              className="w-full flex items-center gap-4 p-4 bg-slate-900 hover:bg-slate-700 border border-slate-600 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed group"
+            >
+              <div className="flex-shrink-0 w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center group-hover:scale-110 transition p-2">
+                <svg width="100%" height="100%" viewBox="0 0 43 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="m12.5 0l-12.5 8.1 8.7 7 12.5-7.8-8.7-7.3zm-12.5 21.9l12.5 8.2 8.7-7.3-12.5-7.7-8.7 6.8zm21.2 0.9l8.8 7.3 12.4-8.1-8.6-6.9-12.6 7.7zm21.2-14.7l-12.4-8.1-8.8 7.3 12.6 7.8 8.6-7zm-21.1 16.3l-8.8 7.3-3.7-2.5v2.8l12.5 7.5 12.5-7.5v-2.8l-3.8 2.5-8.7-7.3z" fill="white"/>
+                </svg>
+              </div>
+              <div className="flex-1 text-left">
+                <h3 className="font-semibold text-white">Dropbox</h3>
+                <p className="text-xs text-slate-400">Conectar cuenta de Dropbox</p>
+              </div>
+              {connecting === "dropbox" && (
+                <div className="flex-shrink-0">
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                </div>
+              )}
+              {connecting !== "dropbox" && (
                 <div className="flex-shrink-0 text-slate-500 group-hover:text-white transition">
                   →
                 </div>
