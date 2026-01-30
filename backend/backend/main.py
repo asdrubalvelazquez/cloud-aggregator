@@ -7270,6 +7270,33 @@ async def dropbox_callback(request: Request):
                 return RedirectResponse(f"{frontend_origin}/app?error=dropbox_reconnect_failed")
         
         else:  # mode == "connect"
+            # Check if account already exists for this user
+            try:
+                existing = supabase.table("cloud_provider_accounts").select("id, is_active").eq(
+                    "user_id", user_id
+                ).eq("provider", "dropbox").eq("provider_account_id", dropbox_account_id).execute()
+                
+                if existing.data:
+                    existing_account = existing.data[0]
+                    if existing_account.get("is_active"):
+                        logging.warning(f"[DROPBOX_CALLBACK] Account already connected user={user_id} account={dropbox_account_id}")
+                        return RedirectResponse(f"{frontend_origin}/app?error=dropbox_already_connected")
+                    else:
+                        # Reactivate inactive account
+                        logging.info(f"[DROPBOX_CALLBACK] Reactivating account user={user_id} account={dropbox_account_id}")
+                        supabase.table("cloud_provider_accounts").update({
+                            "access_token": encrypted_access,
+                            "refresh_token": encrypted_refresh,
+                            "token_expiry": expiry_iso,
+                            "is_active": True,
+                            "updated_at": now_iso
+                        }).eq("id", existing_account["id"]).execute()
+                        
+                        invalidate_user_cache(user_id, "DROPBOX_REACTIVATE")
+                        return RedirectResponse(f"{frontend_origin}/app?connection=success&provider=dropbox")
+            except Exception as check_err:
+                logging.error(f"[DROPBOX_CALLBACK] Error checking existing account: {check_err}")
+            
             # Use slot-based connection (handles quota internally)
             try:
                 slot_result = quota.connect_cloud_account_with_slot(
@@ -7309,7 +7336,14 @@ async def dropbox_callback(request: Request):
                 return RedirectResponse(f"{frontend_origin}/app?error=dropbox_connect_failed")
                 
             except Exception as connect_err:
-                logging.error(f"[DROPBOX_CALLBACK] Connect failed: {connect_err}")
+                error_msg = str(connect_err)
+                logging.error(f"[DROPBOX_CALLBACK] Connect failed: {error_msg}")
+                
+                # Check for duplicate key violation (23505 PostgreSQL error)
+                if "23505" in error_msg or "duplicate" in error_msg.lower() or "unique constraint" in error_msg.lower():
+                    logging.warning(f"[DROPBOX_CALLBACK] Duplicate account detected user={user_id} account={dropbox_account_id}")
+                    return RedirectResponse(f"{frontend_origin}/app?error=dropbox_already_connected")
+                
                 return RedirectResponse(f"{frontend_origin}/app?error=dropbox_connect_failed")
     
     except Exception as e:

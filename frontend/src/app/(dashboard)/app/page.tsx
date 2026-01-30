@@ -700,8 +700,18 @@ function DashboardContent({
       // Handle errors (both Google and OneDrive)
       let errorMessage = `Error de autenticación: ${authError}`;
       
+      // Dropbox-specific error messages
+      if (authError === "dropbox_already_connected") {
+        errorMessage = "⚠️ Esta cuenta de Dropbox ya está conectada. Ve a 'Clouds' para administrarla.";
+      } else if (authError === "dropbox_connect_failed") {
+        errorMessage = "❌ Error al conectar Dropbox. Por favor, intenta nuevamente.";
+      } else if (authError === "dropbox_token_exchange_failed") {
+        errorMessage = "❌ Error al obtener tokens de Dropbox. Intenta más tarde.";
+      } else if (authError.startsWith("dropbox")) {
+        errorMessage = `❌ Error de Dropbox: ${authError.replace("dropbox_", "")}`;
+      }
       // OneDrive-specific error messages
-      if (authError === "onedrive_invalid_grant") {
+      else if (authError === "onedrive_invalid_grant") {
         errorMessage = "⚠️ Código de OneDrive expirado. Por favor, intenta conectar nuevamente.";
       } else if (authError === "onedrive_token_exchange_failed") {
         errorMessage = "❌ Error al conectar OneDrive. Intenta más tarde.";
