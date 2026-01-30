@@ -168,7 +168,7 @@ def set_cached_storage_data(cache_key: str, data: dict) -> None:
     """Cache storage data with current timestamp"""
     STORAGE_CACHE[cache_key] = (data, time.time())
 
-def clear_user_cache(user_id: str, context: str = "unknown") -> int:
+def invalidate_user_cache(user_id: str, context: str = "unknown") -> int:
     """Clear cached data for a specific user after account changes"""
     cache_keys_to_clear = [
         f"storage_summary_{user_id}",
@@ -4772,7 +4772,7 @@ async def disconnect_slot(
         logging.info(f"[DISCONNECT] Successfully disconnected {provider} account {provider_email}")
         
         # Clear user cache after disconnection to ensure fresh data
-        clear_user_cache(user_id, f"{provider.upper()}_DISCONNECT")
+        invalidate_user_cache(user_id, f"{provider.upper()}_DISCONNECT")
         
         return {
             "success": True,
@@ -6014,7 +6014,7 @@ async def onedrive_callback(request: Request):
                                 )
                             
                             # Clear cache after successful reconnection
-                            clear_user_cache(user_id, "ONEDRIVE_SAME_USER_RECONNECT")
+                            invalidate_user_cache(user_id, "ONEDRIVE_SAME_USER_RECONNECT")
                             
                             return RedirectResponse(f"{frontend_origin}/app?connection=success")
                         else:
@@ -6286,7 +6286,7 @@ async def onedrive_callback(request: Request):
         )
         
         # CRITICAL: Clear user cache after successful reconnection to ensure fresh data
-        clear_user_cache(user_id, "ONEDRIVE_RECONNECT_SUCCESS")
+        invalidate_user_cache(user_id, "ONEDRIVE_RECONNECT_SUCCESS")
         
         return RedirectResponse(f"{frontend_origin}/app?reconnect=success&slot_id={validated_slot_id}")
     
@@ -6907,7 +6907,7 @@ async def onedrive_callback(request: Request):
             return RedirectResponse(f"{frontend_origin}/app?error=database_error")
 
     # CRITICAL: Clear user cache after successful connection to ensure fresh data
-    clear_user_cache(user_id, "ONEDRIVE_CONNECTION_SUCCESS")
+    invalidate_user_cache(user_id, "ONEDRIVE_CONNECTION_SUCCESS")
 
     # Redirect to frontend dashboard
     return RedirectResponse(f"{frontend_origin}/app?connection=success")
@@ -6953,7 +6953,7 @@ async def update_cloud_nickname(
             raise HTTPException(status_code=404, detail="Cloud account not found")
         
         # Clear cache to ensure fresh data
-        clear_user_cache(user_id, f"NICKNAME_UPDATE_{provider}")
+        invalidate_user_cache(user_id, f"NICKNAME_UPDATE_{provider}")
         
         logging.info(f"[NICKNAME_UPDATE] user_id={user_id} provider={provider} account_id={account_id} nickname='{nickname}'")
         
@@ -7022,7 +7022,7 @@ async def disconnect_cloud_account(
             ).eq("provider_account_id", account_id).execute()
         
         # Clear cache to ensure immediate refresh
-        clear_user_cache(user_id, f"DISCONNECT_{provider}")
+        invalidate_user_cache(user_id, f"DISCONNECT_{provider}")
         
         display_name = nickname or provider_email
         logging.info(f"[CLOUD_DISCONNECT] user_id={user_id} provider={provider} account='{display_name}' slot_id={slot_id}")
