@@ -10,7 +10,8 @@ interface CloudAccount {
   email: string;
   provider_email: string;
   cloud_account_id: string | number;
-  provider_account_uuid?: string | null;
+  provider_account_id?: string | null;  // Microsoft/Google account ID (for reconnect)
+  provider_account_uuid?: string | null; // UUID from cloud_provider_accounts (for file routes)
   connection_status?: "connected" | "needs_reconnect" | "disconnected";
   can_reconnect?: boolean;
 }
@@ -107,8 +108,15 @@ export default function ProviderAccountsPage() {
     
     if (account.provider === 'onedrive') {
       try {
-        const accountId = account.provider_account_uuid || account.cloud_account_id;
-        console.log('[OneDrive Reconnect] Using account ID:', accountId);
+        // Use provider_account_id (Microsoft account ID) for OneDrive reconnection
+        const accountId = account.provider_account_id;
+        console.log('[OneDrive Reconnect] Using provider_account_id:', accountId);
+        
+        if (!accountId) {
+          console.error('[ERROR] No provider_account_id found for account:', account);
+          toast.error('No se encontró el ID de la cuenta para reconectar');
+          return;
+        }
         
         const response = await authenticatedFetch(`/auth/onedrive/login-url?mode=reconnect&reconnect_account_id=${accountId}`);
         
