@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCloudStatusQuery } from "@/queries/useCloudStatusQuery";
+import { useBillingQuotaQuery } from "@/queries/useBillingQuotaQuery";
 import AddCloudModal from "@/components/AddCloudModal";
 
 type Props = {
@@ -20,6 +21,7 @@ type Props = {
 export function SimpleSidebar({ onNavigate }: Props) {
   const pathname = usePathname();
   const { data: cloudStatus, isLoading } = useCloudStatusQuery();
+  const { data: billingQuota } = useBillingQuotaQuery();
   const [showAddCloudModal, setShowAddCloudModal] = useState(false);
 
   // Group accounts by provider for organized display
@@ -132,12 +134,64 @@ export function SimpleSidebar({ onNavigate }: Props) {
 
 
 
-      {/* Footer Status */}
-      {cloudStatus && (
+      {/* Footer Status - Dynamic Plan & Storage */}
+      {billingQuota && (
         <div className="px-4 py-3 border-t border-slate-700">
-          <div className="text-xs text-slate-500 mb-1">Status</div>
-          <div className="text-xs text-slate-400">Plan: PRO</div>
-          <div className="text-xs text-slate-500 mt-1">Usage: 16%</div>
+          <div className="space-y-2">
+            {/* Plan Badge - Dynamic */}
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-slate-500">Plan</span>
+              <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                billingQuota.plan?.toLowerCase().includes('free') 
+                  ? 'bg-slate-700 text-slate-300'
+                  : billingQuota.plan?.toLowerCase().includes('standard') || billingQuota.plan?.toLowerCase().includes('plus')
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-purple-600 text-white'
+              }`}>
+                {billingQuota.plan?.toUpperCase() || 'FREE'}
+              </span>
+            </div>
+
+            {/* Storage Usage Bar (Google Drive style) */}
+            <div>
+              <div className="flex items-baseline justify-between mb-1">
+                <span className="text-xs text-slate-500">
+                  {billingQuota.transfer.used_gb.toFixed(2)} GB de{' '}
+                  {billingQuota.transfer.limit_gb === null 
+                    ? '∞' 
+                    : `${billingQuota.transfer.limit_gb.toFixed(0)} GB`}
+                </span>
+                {billingQuota.transfer.limit_gb && billingQuota.transfer.limit_gb > 0 && (
+                  <span className="text-xs text-slate-500">
+                    {((billingQuota.transfer.used_gb / billingQuota.transfer.limit_gb) * 100).toFixed(0)}%
+                  </span>
+                )}
+              </div>
+              {billingQuota.transfer.limit_gb && billingQuota.transfer.limit_gb > 0 && (
+                <div className="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-blue-500 transition-all duration-300"
+                    style={{ 
+                      width: `${Math.min((billingQuota.transfer.used_gb / billingQuota.transfer.limit_gb) * 100, 100)}%` 
+                    }}
+                  />
+                </div>
+              )}
+              {(!billingQuota.transfer.limit_gb || billingQuota.transfer.limit_gb === 0) && (
+                <div className="text-xs text-blue-400">Transferencia ilimitada</div>
+              )}
+            </div>
+
+            {/* Upgrade Link (only for free users) */}
+            {billingQuota.plan?.toLowerCase().includes('free') && (
+              <a
+                href="/pricing"
+                className="block text-center text-xs text-emerald-400 hover:text-emerald-300 transition font-medium mt-1"
+              >
+                ⬆️ Actualizar plan
+              </a>
+            )}
+          </div>
         </div>
       )}
 

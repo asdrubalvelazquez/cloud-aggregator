@@ -339,3 +339,36 @@ export function getOneDriveDownloadUrl(accountId: string, itemId: string): strin
   return `${API_BASE_URL}/onedrive/download?account_id=${accountId}&item_id=${itemId}`;
 }
 
+/**
+ * Billing Quota Types
+ */
+export type BillingQuotaResponse = {
+  plan: string; // "free", "plus", "pro"
+  plan_type: string; // "FREE", "PAID"
+  copies: {
+    used: number;
+    limit: number | null;
+    is_lifetime: boolean;
+  };
+  transfer: {
+    used_bytes: number;
+    limit_bytes: number | null;
+    used_gb: number;
+    limit_gb: number | null;
+    is_lifetime: boolean;
+  };
+  max_file_bytes: number;
+  max_file_gb: number;
+};
+
+/**
+ * Fetch user's billing quota and plan information
+ */
+export async function fetchBillingQuota(): Promise<BillingQuotaResponse> {
+  const res = await authenticatedFetch("/billing/quota");
+  if (!res.ok) {
+    throw new Error(`Failed to fetch billing quota: ${res.status}`);
+  }
+  return await res.json();
+}
+

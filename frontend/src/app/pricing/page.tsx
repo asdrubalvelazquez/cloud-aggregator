@@ -4,6 +4,7 @@ import { useState, useEffect, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { authenticatedFetch } from "@/lib/api";
+import { supabase } from "@/lib/supabaseClient";
 import PricingPaymentStatus from "@/components/PricingPaymentStatus";
 
 type PlanFeatures = {
@@ -66,6 +67,7 @@ export default function PricingPage() {
   const [currentBillingPeriod, setCurrentBillingPeriod] = useState<string>("MONTHLY");
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>("");
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
 
   // Callback para actualizar plan desde componente de payment status
   const handlePlanRefresh = (newPlan: string) => {
@@ -73,29 +75,37 @@ export default function PricingPage() {
   };
 
   useEffect(() => {
-    const fetchCurrentPlan = async () => {
+    const checkAuthAndPlan = async () => {
       try {
-        const res = await authenticatedFetch("/me/plan");
-        if (res.ok) {
-          const data = await res.json();
-          const plan = data.plan?.toLowerCase() || "free";
-          const billing = data.billing_period?.toUpperCase() || "MONTHLY";
-          
-          // Extract base plan name (remove _monthly or _yearly suffix)
-          const basePlan = plan.replace(/_monthly|_yearly/, '');
-          
-          setCurrentPlan(basePlan);
-          setCurrentBillingPeriod(billing);
-        } else {
-          setCurrentPlan("free");
-          setCurrentBillingPeriod("MONTHLY");
+        // Check if user is authenticated
+        const { data: { session } } = await supabase.auth.getSession();
+        setIsAuthenticated(!!session);
+        
+        if (session) {
+          // Fetch current plan only if authenticated
+          const res = await authenticatedFetch("/me/plan");
+          if (res.ok) {
+            const data = await res.json();
+            const plan = data.plan?.toLowerCase() || "free";
+            const billing = data.billing_period?.toUpperCase() || "MONTHLY";
+            
+            // Extract base plan name (remove _monthly or _yearly suffix)
+            const basePlan = plan.replace(/_monthly|_yearly/, '');
+            
+            setCurrentPlan(basePlan);
+            setCurrentBillingPeriod(billing);
+          } else {
+            setCurrentPlan("free");
+            setCurrentBillingPeriod("MONTHLY");
+          }
         }
       } catch (e) {
+        setIsAuthenticated(false);
         setCurrentPlan("free");
         setCurrentBillingPeriod("MONTHLY");
       }
     };
-    fetchCurrentPlan();
+    checkAuthAndPlan();
   }, []);
 
   const handleUpgrade = async (basePlanName: string) => {
@@ -175,16 +185,21 @@ export default function PricingPage() {
       <div className="w-full max-w-6xl space-y-8">
         {/* Header */}
         <header className="text-center space-y-4">
-          <Link
-            href="/app"
-            className="inline-block text-sm text-emerald-400 hover:text-emerald-300 transition font-medium"
-          >
-            Dashboard
-          </Link>
           <h1 className="text-4xl font-bold">Planes y Precios</h1>
           <p className="text-slate-400">
             Elige el plan que mejor se adapte a tus necesidades
           </p>
+          {isAuthenticated && (
+            <Link
+              href="/app"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-400 hover:text-emerald-300 rounded-lg transition font-medium mx-auto border border-slate-700"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+              </svg>
+              Volver al Dashboard
+            </Link>
+          )}
         </header>
 
         {/* Payment Status Banner */}
