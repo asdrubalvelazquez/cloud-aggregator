@@ -111,7 +111,12 @@ from backend.dropbox import (
 from backend.auth import create_state_token, decode_state_token, verify_supabase_jwt, get_current_user, get_jwt_user_info
 from backend import quota
 from backend import transfer
-from backend.stripe_utils import STRIPE_PRICE_PLUS, STRIPE_PRICE_PRO, map_price_to_plan
+from backend.stripe_utils import (
+    STRIPE_PRICE_STANDARD_MONTHLY, STRIPE_PRICE_STANDARD_YEARLY,
+    STRIPE_PRICE_PREMIUM_MONTHLY, STRIPE_PRICE_PREMIUM_YEARLY,
+    STRIPE_PRICE_PLUS, STRIPE_PRICE_PRO,
+    map_price_to_plan
+)
 
 app = FastAPI()
 
@@ -414,10 +419,6 @@ def create_checkout_session(
     missing_vars = []
     if not STRIPE_SECRET_KEY:
         missing_vars.append("STRIPE_SECRET_KEY")
-    if not STRIPE_PRICE_PLUS:
-        missing_vars.append("STRIPE_PRICE_PLUS")
-    if not STRIPE_PRICE_PRO:
-        missing_vars.append("STRIPE_PRICE_PRO")
     if not os.getenv("FRONTEND_URL"):
         missing_vars.append("FRONTEND_URL")
     
@@ -433,12 +434,34 @@ def create_checkout_session(
         )
     
     # Validation 2: plan_code allowlist
-    plan_code = request.plan_code.upper()
-    if plan_code not in ["PLUS", "PRO"]:
-        raise HTTPException(status_code=400, detail="Invalid plan_code. Must be PLUS or PRO")
+    plan_code = request.plan_code.lower()
+    valid_plans = [
+        "standard_monthly", "standard_yearly",
+        "premium_monthly", "premium_yearly",
+        "plus", "pro"  # Legacy plans
+    ]
+    if plan_code not in valid_plans:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid plan_code. Must be one of: {', '.join(valid_plans)}"
+        )
     
     # Map plan_code to Stripe price_id
-    price_id = STRIPE_PRICE_PLUS if plan_code == "PLUS" else STRIPE_PRICE_PRO
+    price_map = {
+        "standard_monthly": STRIPE_PRICE_STANDARD_MONTHLY,
+        "standard_yearly": STRIPE_PRICE_STANDARD_YEARLY,
+        "premium_monthly": STRIPE_PRICE_PREMIUM_MONTHLY,
+        "premium_yearly": STRIPE_PRICE_PREMIUM_YEARLY,
+        "plus": STRIPE_PRICE_PLUS,
+        "pro": STRIPE_PRICE_PRO
+    }
+    
+    price_id = price_map.get(plan_code)
+    if not price_id:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Price ID not configured for plan: {plan_code}"
+        )
     
     try:
         # Query 1: Check if user already has active subscription
@@ -456,21 +479,42 @@ def create_checkout_session(
         
         user_plan = user_plan_result.data[0]
         
-        # Validation 3: Allow ONLY upgrades (block downgrades and lateral moves)
-        # Plan hierarchy: free < plus < pro
-        PLAN_HIERARCHY = {"free": 0, "plus": 1, "pro": 2}
+        # Validation 3: Allow upgrades and plan changes
+        # Plan hierarchy: free < standard < premium (monthly/yearly variants treated as same tier)
+        def get_plan_tier(plan: str) -> int:
+            """Extract plan tier ignoring billing frequency."""
+            if "premium" in plan:
+                return 2
+            elif "standard" in plan:
+                return 1
+            elif plan in ["plus", "pro"]:
+                return 1  # Legacy plans considered standard tier
+            else:
+                return 0  # free
         
         current_plan = user_plan.get("plan", "free").lower()
         target_plan = plan_code.lower()
         
-        current_level = PLAN_HIERARCHY.get(current_plan, 0)
-        target_level = PLAN_HIERARCHY.get(target_plan, 0)
+        current_tier = get_plan_tier(current_plan)
+        target_tier = get_plan_tier(target_plan)
         
-        # Block if trying to downgrade or stay same
-        if target_level <= current_level:
+        # Allow:
+        # - Upgrades (higher tier)
+        # - Same tier but different billing frequency (monthly <-> yearly)
+        # Block:
+        # - Exact same plan (e.g., standard_monthly -> standard_monthly)
+        # - Downgrades
+        
+        if current_plan == target_plan:
             raise HTTPException(
                 status_code=409,
-                detail=f"Solo se permiten upgrades. Plan actual: {current_plan.upper()}, plan solicitado: {target_plan.upper()}. Contacta soporte para cambios de plan."
+                detail="Ya tienes este plan activo. Contacta soporte para cambios."
+            )
+        
+        if target_tier < current_tier:
+            raise HTTPException(
+                status_code=409,
+                detail=f"No se permiten downgrades. Plan actual: {current_plan}, plan solicitado: {target_plan}. Contacta soporte."
             )
         
         # Query 2: Get user email for Stripe Customer
@@ -728,11 +772,24 @@ def handle_checkout_completed(event: dict):
         raise HTTPException(status_code=400, detail="Missing plan_code in metadata")
     
     # Normalize and validate plan_code
-    plan_code = plan_code.lower()  # "plus" or "pro"
+    plan_code = plan_code.lower()
     
-    if plan_code not in ["plus", "pro"]:
+    valid_plans = [
+        "standard_monthly", "standard_yearly",
+        "premium_monthly", "premium_yearly",
+        "plus", "pro"  # Legacy
+    ]
+    
+    if plan_code not in valid_plans:
         logging.error(f"[STRIPE_WEBHOOK] Invalid plan_code: {plan_code}, session_id={session.get('id')}")
         raise HTTPException(status_code=400, detail=f"Invalid plan_code: {plan_code}")
+    
+    # Extract billing_period from plan_code
+    billing_period = "MONTHLY"  # Default
+    if "yearly" in plan_code:
+        billing_period = "YEARLY"
+    elif plan_code in ["plus", "pro"]:
+        billing_period = "MONTHLY"  # Legacy plans are monthly
     
     # Update user_plans
     try:
@@ -797,6 +854,7 @@ def handle_checkout_completed(event: dict):
             "plan": plan_code,
             "plan_type": "PAID",  # Required by check_paid_plan_has_expiration
             "plan_expires_at": plan_expires_at,  # Required for PAID plans
+            "billing_period": billing_period,  # "MONTHLY" or "YEARLY"
             "stripe_customer_id": customer_id,
             "stripe_subscription_id": subscription_id,
             "subscription_status": "active",
@@ -804,6 +862,7 @@ def handle_checkout_completed(event: dict):
             # Use REAL column names: copies_limit_month, transfer_bytes_limit_month
             "copies_limit_month": plan_limits.copies_limit_month,
             "transfer_bytes_limit_month": plan_limits.transfer_bytes_limit_month,
+            "max_file_bytes": plan_limits.max_file_bytes,  # File size limit
             # Reset usage counters for new billing period
             "copies_used_month": 0,
             "transfer_bytes_used_month": 0,

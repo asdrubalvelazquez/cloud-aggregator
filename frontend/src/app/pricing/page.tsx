@@ -6,20 +6,19 @@ import Link from "next/link";
 import { authenticatedFetch } from "@/lib/api";
 import PricingPaymentStatus from "@/components/PricingPaymentStatus";
 
-type Plan = {
-  name: string;
-  price: string;
-  transfer_gb: number | null; // null = ilimitado
-  max_file_gb: number;
+type PlanFeatures = {
+  storage: string;
+  price_monthly: number;
+  price_yearly: number;
   features: string[];
+  isPopular?: boolean;
 };
 
-const plans: Plan[] = [
-  {
-    name: "Free",
-    price: "$0",
-    transfer_gb: 5,
-    max_file_gb: 1,
+const planDetails: Record<string, PlanFeatures> = {
+  free: {
+    storage: "5GB",
+    price_monthly: 0,
+    price_yearly: 0,
     features: [
       "Cuentas ilimitadas (Google Drive & OneDrive)",
       "Copias ilimitadas",
@@ -28,39 +27,43 @@ const plans: Plan[] = [
       "Detección de duplicados",
     ],
   },
-  {
-    name: "Plus",
-    price: "$9",
-    transfer_gb: 100,
-    max_file_gb: 10,
+  standard: {
+    storage: "100GB",
+    price_monthly: 9.99,
+    price_yearly: 59.99,
     features: [
       "Cuentas ilimitadas",
       "Copias ilimitadas",
       "100 GB de transferencia/mes",
+      "1200 GB de transferencia/año",
       "Archivos hasta 10 GB",
       "Todas las funciones Free",
       "Soporte prioritario",
     ],
+    isPopular: true,
   },
-  {
-    name: "Pro",
-    price: "$19",
-    transfer_gb: null, // ilimitado
-    max_file_gb: 50,
+  premium: {
+    storage: "200GB",
+    price_monthly: 17.99,
+    price_yearly: 99.98,
     features: [
       "Cuentas ilimitadas",
       "Copias ilimitadas",
-      "Transferencia ilimitada 🚀",
+      "200 GB de transferencia/mes",
+      "2400 GB de transferencia/año",
       "Archivos hasta 50 GB",
-      "Todas las funciones Plus",
+      "Todas las funciones Standard",
       "API access (próximamente)",
+      "Soporte prioritario VIP",
     ],
   },
-];
+};
 
 export default function PricingPage() {
   const router = useRouter();
+  const [billingPeriod, setBillingPeriod] = useState<"MONTHLY" | "YEARLY">("MONTHLY");
   const [currentPlan, setCurrentPlan] = useState<string>("free");
+  const [currentBillingPeriod, setCurrentBillingPeriod] = useState<string>("MONTHLY");
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>("");
 
@@ -75,68 +78,96 @@ export default function PricingPage() {
         const res = await authenticatedFetch("/me/plan");
         if (res.ok) {
           const data = await res.json();
-          setCurrentPlan(data.plan?.toLowerCase() || "free");
+          const plan = data.plan?.toLowerCase() || "free";
+          const billing = data.billing_period?.toUpperCase() || "MONTHLY";
+          
+          // Extract base plan name (remove _monthly or _yearly suffix)
+          const basePlan = plan.replace(/_monthly|_yearly/, '');
+          
+          setCurrentPlan(basePlan);
+          setCurrentBillingPeriod(billing);
         } else {
           setCurrentPlan("free");
+          setCurrentBillingPeriod("MONTHLY");
         }
       } catch (e) {
-        // Default to free on error (no auth or network error)
         setCurrentPlan("free");
+        setCurrentBillingPeriod("MONTHLY");
       }
     };
     fetchCurrentPlan();
   }, []);
 
-  const handleUpgrade = async (planCode: string) => {
+  const handleUpgrade = async (basePlanName: string) => {
+    if (basePlanName === "free") return;
+    
     setErrorMessage("");
-    setLoadingPlan(planCode);
+    setLoadingPlan(basePlanName);
 
     try {
+      // Construct plan_code with billing frequency
+      const billingFreq = billingPeriod === "YEARLY" ? "yearly" : "monthly";
+      const plan_code = `${basePlanName}_${billingFreq}`;
+      
       const res = await authenticatedFetch("/stripe/create-checkout-session", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ plan_code: planCode }),
+        body: JSON.stringify({ plan_code }),
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        // Redirigir a Stripe Checkout
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ detail: "Error desconocido" }));
+        const errorMsg = typeof errorData.detail === "string" 
+          ? errorData.detail 
+          : errorData.detail?.message || "Error al crear sesión de pago";
+        
+        setErrorMessage(errorMsg);
+        setLoadingPlan(null);
+        return;
+      }
+
+      const data = await res.json();
+      if (data.url) {
         window.location.href = data.url;
       } else {
-        const errorData = await res.json().catch(() => ({}));
-        
-        // Manejar errores estructurados del backend
-        let message = "Error al procesar el pago";
-        
-        if (typeof errorData.detail === 'object' && errorData.detail.message) {
-          // Error estructurado con JSON
-          message = errorData.detail.message;
-          
-          // Agregar detalles técnicos si están disponibles (para debugging)
-          if (errorData.detail.error === 'stripe_not_configured' && errorData.detail.missing) {
-            console.error('[PRICING] Missing Stripe env vars:', errorData.detail.missing);
-            message += ' (Sistema de pagos no configurado)';
-          } else if (errorData.detail.code) {
-            console.error('[PRICING] Stripe error code:', errorData.detail.code);
-          }
-        } else if (typeof errorData.detail === 'string') {
-          // Error simple con string
-          message = errorData.detail;
-        } else {
-          // Fallback genérico
-          message = `Error al procesar el pago (${res.status})`;
-        }
-        
-        setErrorMessage(message);
+        setErrorMessage("No se recibió URL de checkout");
         setLoadingPlan(null);
       }
     } catch (error) {
-      console.error('[PRICING] Network error:', error);
-      setErrorMessage("Error de conexión. Intenta nuevamente.");
+      setErrorMessage("Error de red. Por favor intenta nuevamente.");
       setLoadingPlan(null);
     }
+  };
+
+  const getButtonText = (planName: string) => {
+    if (planName === "free") {
+      return currentPlan === "free" ? "Plan Actual" : "Downgrade no disponible";
+    }
+    
+    if (currentPlan === planName) {
+      // Same tier, check billing period
+      if (currentBillingPeriod === billingPeriod) {
+        return "Plan Actual";
+      } else {
+        return billingPeriod === "YEARLY" ? "Cambiar a Anual" : "Cambiar a Mensual";
+      }
+    }
+    
+    return "Seleccionar Plan";
+  };
+
+  const isButtonDisabled = (planName: string) => {
+    if (planName === "free") return true;
+    if (loadingPlan) return true;
+    
+    // Disable if same plan and same billing period
+    if (currentPlan === planName && currentBillingPeriod === billingPeriod) {
+      return true;
+    }
+    
+    return false;
   };
 
   return (
@@ -161,84 +192,33 @@ export default function PricingPage() {
           <PricingPaymentStatus onPlanRefresh={handlePlanRefresh} />
         </Suspense>
 
-        {/* Pricing Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {plans.map((plan) => {
-            const isCurrent = plan.name.toLowerCase() === currentPlan;
-            const planCode = plan.name.toUpperCase();
-            const isLoading = loadingPlan === planCode;
-            
-            return (
-              <div
-                key={plan.name}
-                className={`bg-slate-800 rounded-xl p-6 border ${
-                  isCurrent
-                    ? "border-emerald-500 shadow-lg shadow-emerald-500/20"
-                    : "border-slate-700"
-                } flex flex-col`}
-              >
-              {/* Plan Header */}
-              <div className="text-center mb-6">
-                <h2 className="text-2xl font-bold mb-2">{plan.name}</h2>
-                <div className="flex items-baseline justify-center gap-1">
-                  <span className="text-4xl font-bold">{plan.price}</span>
-                  {plan.price !== "$0" && (
-                    <span className="text-slate-400">/mes</span>
-                  )}
-                </div>
-              </div>
-
-              {/* Limits */}
-              <div className="space-y-3 mb-6">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-400">Transferencia:</span>
-                  <span className="font-semibold">
-                    {plan.transfer_gb === null ? "Ilimitada ✨" : `${plan.transfer_gb} GB`}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-slate-400">Max archivo:</span>
-                  <span className="font-semibold">{plan.max_file_gb} GB</span>
-                </div>
-              </div>
-
-              {/* Features */}
-              <ul className="space-y-2 mb-6 flex-grow">
-                {plan.features.map((feature, idx) => (
-                  <li key={idx} className="flex items-start gap-2 text-sm">
-                    <span className="text-emerald-400 mt-0.5">✓</span>
-                    <span className="text-slate-300">{feature}</span>
-                  </li>
-                ))}
-              </ul>
-
-              {/* CTA Button */}
-              {isCurrent ? (
-                <button
-                  disabled
-                  className="w-full rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold cursor-not-allowed opacity-50"
-                >
-                  Plan actual
-                </button>
-              ) : plan.name === "Free" ? (
-                <button
-                  disabled
-                  className="w-full rounded-lg bg-slate-700 px-4 py-2 text-sm font-semibold cursor-not-allowed opacity-50"
-                >
-                  Plan básico
-                </button>
-              ) : (
-                <button
-                  onClick={() => handleUpgrade(planCode)}
-                  disabled={isLoading}
-                  className="w-full rounded-lg bg-emerald-500 hover:bg-emerald-600 transition px-4 py-2 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isLoading ? "Procesando..." : "Actualizar"}
-                </button>
-              )}
-            </div>
-          );
-          })}
+        {/* Billing Period Toggle */}
+        <div className="flex justify-center mb-8">
+          <div className="bg-slate-800 rounded-full p-1 border border-slate-700 inline-flex">
+            <button
+              onClick={() => setBillingPeriod("MONTHLY")}
+              className={`px-6 py-2 rounded-full text-sm font-medium transition-all ${
+                billingPeriod === "MONTHLY"
+                  ? "bg-emerald-500 text-white"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              Mensual
+            </button>
+            <button
+              onClick={() => setBillingPeriod("YEARLY")}
+              className={`px-6 py-2 rounded-full text-sm font-medium transition-all ${
+                billingPeriod === "YEARLY"
+                  ? "bg-emerald-500 text-white"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              Anual
+              <span className="ml-2 text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded">
+                Ahorra 40%
+              </span>
+            </button>
+          </div>
         </div>
 
         {/* Error Message */}
@@ -248,9 +228,100 @@ export default function PricingPage() {
           </div>
         )}
 
+        {/* Pricing Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {Object.entries(planDetails).map(([planName, plan]) => {
+            const isCurrentPlan = currentPlan === planName && currentBillingPeriod === billingPeriod;
+            const price = billingPeriod === "MONTHLY" ? plan.price_monthly : plan.price_yearly;
+            const priceLabel = billingPeriod === "MONTHLY" ? "/mes" : "/año";
+            
+            return (
+              <div
+                key={planName}
+                className={`bg-slate-800 rounded-xl p-6 border ${
+                  plan.isPopular
+                    ? "border-emerald-500 shadow-lg shadow-emerald-500/20 relative"
+                    : isCurrentPlan
+                    ? "border-blue-500 shadow-lg shadow-blue-500/20"
+                    : "border-slate-700"
+                } flex flex-col`}
+              >
+                {/* Popular Badge */}
+                {plan.isPopular && (
+                  <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
+                    <span className="bg-emerald-500 text-white text-xs font-bold px-3 py-1 rounded-full">
+                      MÁS POPULAR
+                    </span>
+                  </div>
+                )}
+
+                {/* Current Plan Badge */}
+                {isCurrentPlan && (
+                  <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
+                    <span className="bg-blue-500 text-white text-xs font-bold px-3 py-1 rounded-full">
+                      PLAN ACTUAL
+                    </span>
+                  </div>
+                )}
+
+                {/* Plan Header */}
+                <div className="text-center mb-6 mt-2">
+                  <h2 className="text-2xl font-bold mb-2 capitalize">{planName}</h2>
+                  <p className="text-slate-400 text-sm mb-4">{plan.storage}/mes</p>
+                  
+                  <div className="flex items-baseline justify-center gap-1">
+                    <span className="text-4xl font-bold">${price.toFixed(2)}</span>
+                    <span className="text-slate-400 text-sm">{priceLabel}</span>
+                  </div>
+                  
+                  {/* Yearly savings indicator */}
+                  {billingPeriod === "YEARLY" && planName !== "free" && (
+                    <p className="mt-2 text-xs text-emerald-400">
+                      Ahorra ${(plan.price_monthly * 12 - plan.price_yearly).toFixed(2)} al año
+                    </p>
+                  )}
+                </div>
+
+                {/* Features */}
+                <ul className="space-y-2 mb-6 flex-grow">
+                  {plan.features.map((feature, idx) => (
+                    <li key={idx} className="flex items-start gap-2 text-sm">
+                      <span className="text-emerald-400 mt-0.5">✓</span>
+                      <span className="text-slate-300">{feature}</span>
+                    </li>
+                  ))}
+                </ul>
+
+                {/* CTA Button */}
+                <button
+                  onClick={() => handleUpgrade(planName)}
+                  disabled={isButtonDisabled(planName)}
+                  className={`w-full rounded-lg px-4 py-3 text-sm font-semibold transition-all ${
+                    isButtonDisabled(planName)
+                      ? "bg-slate-700 cursor-not-allowed opacity-50"
+                      : plan.isPopular
+                      ? "bg-emerald-500 hover:bg-emerald-600"
+                      : "bg-slate-700 hover:bg-slate-600"
+                  }`}
+                >
+                  {loadingPlan === planName ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></span>
+                      Procesando...
+                    </span>
+                  ) : (
+                    getButtonText(planName)
+                  )}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+
         {/* Footer Note */}
         <p className="text-center text-sm text-slate-500">
-          * Pagos seguros procesados por Stripe. Cancela cuando quieras.
+          ✓ Todos los planes incluyen copias ilimitadas y detección de duplicados<br/>
+          ¿Necesitas un plan personalizado? <a href="mailto:support@cloudaggregatorapp.com" className="text-emerald-400 hover:underline">Contáctanos</a>
         </p>
       </div>
     </main>

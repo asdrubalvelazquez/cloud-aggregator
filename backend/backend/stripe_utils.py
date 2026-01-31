@@ -3,6 +3,12 @@ Stripe utilities for Cloud Aggregator.
 
 Pure functions for Stripe integration (no API calls, no side effects).
 Production-ready with environment variable configuration.
+
+Price IDs:
+- Standard Monthly: price_1SvPSsJtzJiOgNkJR2fZj8sR ($9.99/month)
+- Standard Yearly: price_1SvPtYJtzJiOgNkJ2hwQ0Us9 ($59.99/year)
+- Premium Monthly: price_1SvPVRJtzJiOgNkJIgIiEUFw ($17.99/month)
+- Premium Yearly: price_1SvPvoJtzJiOgNkJxjKgngM5 ($99.98/year)
 """
 
 import os
@@ -11,19 +17,34 @@ from typing import Optional
 
 
 # Stripe price IDs (loaded from environment variables)
-# These must be set in production via Fly.io secrets
+# Defaults are TEST MODE Price IDs for local development
+# Must be overridden in production via Fly.io secrets with LIVE mode Price IDs
+STRIPE_PRICE_STANDARD_MONTHLY = os.getenv("STRIPE_PRICE_STANDARD_MONTHLY", "price_1Svf9GJtzJiOgNkJBXle45Op")
+STRIPE_PRICE_STANDARD_YEARLY = os.getenv("STRIPE_PRICE_STANDARD_YEARLY", "price_1Svf88JtzJiOgNkJWKvPkoal")
+STRIPE_PRICE_PREMIUM_MONTHLY = os.getenv("STRIPE_PRICE_PREMIUM_MONTHLY", "price_1Svf8hJtzJiOgNkJoeO0BgPu")
+STRIPE_PRICE_PREMIUM_YEARLY = os.getenv("STRIPE_PRICE_PREMIUM_YEARLY", "price_1Svf7OJtzJiOgNkJSZRX6NsY")
+
+# Legacy price IDs (for backward compatibility)
 STRIPE_PRICE_PLUS = os.getenv("STRIPE_PRICE_PLUS")
 STRIPE_PRICE_PRO = os.getenv("STRIPE_PRICE_PRO")
 
 # Validate configuration on module load
-if not STRIPE_PRICE_PLUS or not STRIPE_PRICE_PRO:
+if not all([STRIPE_PRICE_STANDARD_MONTHLY, STRIPE_PRICE_STANDARD_YEARLY, 
+            STRIPE_PRICE_PREMIUM_MONTHLY, STRIPE_PRICE_PREMIUM_YEARLY]):
     logging.warning(
-        "[STRIPE_CONFIG] ⚠️ Missing STRIPE_PRICE_PLUS or STRIPE_PRICE_PRO environment variables. "
+        "[STRIPE_CONFIG] ⚠️ Missing Stripe price IDs. "
         "Stripe functionality will be disabled."
     )
 
 # Allowlist of valid price IDs (dynamically built from env vars)
-VALID_PRICE_IDS = {STRIPE_PRICE_PLUS, STRIPE_PRICE_PRO} - {None}
+VALID_PRICE_IDS = {
+    STRIPE_PRICE_STANDARD_MONTHLY,
+    STRIPE_PRICE_STANDARD_YEARLY,
+    STRIPE_PRICE_PREMIUM_MONTHLY,
+    STRIPE_PRICE_PREMIUM_YEARLY,
+    STRIPE_PRICE_PLUS,  # Legacy
+    STRIPE_PRICE_PRO   # Legacy
+} - {None}
 
 
 def map_price_to_plan(price_id: str) -> Optional[str]:
@@ -42,21 +63,17 @@ def map_price_to_plan(price_id: str) -> Optional[str]:
         price_id: Stripe price ID from webhook event
         
     Returns:
-        "plus" for PLUS plan
-        "pro" for PRO plan
+        Plan code string (e.g., "standard_monthly", "premium_yearly")
         None for invalid/unknown price_id
         
     Examples:
-        >>> map_price_to_plan("price_1SiPP5JtzJiOgNkJ0Yy2fNEi")
-        "plus"
+        >>> map_price_to_plan("price_1SvPSsJtzJiOgNkJR2fZj8sR")
+        "standard_monthly"
         
-        >>> map_price_to_plan("price_1SiPRdJtzJiOgNkJyOQ2XxCX")
-        "pro"
+        >>> map_price_to_plan("price_1SvPtYJtzJiOgNkJ2hwQ0Us9")
+        "standard_yearly"
         
         >>> map_price_to_plan("price_invalid_123")
-        None
-        
-        >>> map_price_to_plan("")
         None
     """
     # Strict allowlist check
@@ -64,13 +81,17 @@ def map_price_to_plan(price_id: str) -> Optional[str]:
         return None
     
     # Map to internal plan codes
-    if price_id == STRIPE_PRICE_PLUS:
-        return "plus"
-    elif price_id == STRIPE_PRICE_PRO:
-        return "pro"
+    price_map = {
+        STRIPE_PRICE_STANDARD_MONTHLY: "standard_monthly",
+        STRIPE_PRICE_STANDARD_YEARLY: "standard_yearly",
+        STRIPE_PRICE_PREMIUM_MONTHLY: "premium_monthly",
+        STRIPE_PRICE_PREMIUM_YEARLY: "premium_yearly",
+        # Legacy plans
+        STRIPE_PRICE_PLUS: "plus",
+        STRIPE_PRICE_PRO: "pro"
+    }
     
-    # Fallback (should never reach here due to allowlist check)
-    return None
+    return price_map.get(price_id)
 
 
 def validate_price_id(price_id: str) -> bool:

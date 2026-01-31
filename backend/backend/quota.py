@@ -30,14 +30,19 @@ def get_or_create_user_plan(supabase: Client, user_id: str) -> Dict:
     if result.data and len(result.data) > 0:
         plan = result.data[0]
         plan_name = plan.get("plan", "free")
+        plan_type = plan.get("plan_type", "FREE")
+        billing_period = plan.get("billing_period", "MONTHLY")
         
-        # Check if month changed - auto reset (PAID only)
-        if plan_name in ("plus", "pro"):
+        # Check if month changed - auto reset (PAID MONTHLY only)
+        # Yearly plans reset annually, not monthly
+        is_monthly_paid = plan_type == "PAID" and billing_period == "MONTHLY"
+        
+        if is_monthly_paid:
             period_start = datetime.fromisoformat(plan["period_start"].replace("Z", "+00:00"))
             now = datetime.now(period_start.tzinfo)
             
             if period_start.month != now.month or period_start.year != now.year:
-                # Reset monthly counters for PAID plans
+                # Reset monthly counters for MONTHLY PAID plans
                 updated = supabase.table("user_plans").update({
                     "copies_used_month": 0,
                     "transfer_bytes_used_month": 0,
@@ -689,18 +694,24 @@ def check_file_size_limit_bytes(supabase: Client, user_id: str, file_size_bytes:
         file_name: File name for error message
     """
     plan = get_or_create_user_plan(supabase, user_id)
-    plan_name = plan.get("plan", "free").upper()
+    plan_name = plan.get("plan", "free")
     max_bytes = plan.get("max_file_bytes", 1_073_741_824)  # Default 1GB
     
     if file_size_bytes > max_bytes:
-        # Determine suggested upgrade plan
-        suggested_plan = "PLUS" if plan_name == "FREE" else "PRO"
+        # Determine suggested upgrade plan based on file size
+        # Standard: up to 10GB, Premium: up to 50GB
+        if file_size_bytes <= 10_737_418_240:  # 10GB
+            suggested_plan = "STANDARD"
+        else:
+            suggested_plan = "PREMIUM"
+        
+        plan_display = plan_name.upper().replace("_MONTHLY", "").replace("_YEARLY", "")
         
         raise HTTPException(
             status_code=413,  # Payload Too Large
             detail={
                 "code": "FILE_TOO_LARGE",
-                "message": f"Archivo demasiado grande para tu plan {plan_name}",
+                "message": f"Archivo demasiado grande para tu plan {plan_display}",
                 "file": {
                     "name": file_name,
                     "size_bytes": file_size_bytes,
@@ -711,7 +722,7 @@ def check_file_size_limit_bytes(supabase: Client, user_id: str, file_size_bytes:
                     "max_file_gb": round(bytes_to_gb(max_bytes), 1)
                 },
                 "plan": {
-                    "tier": plan_name
+                    "tier": plan_display
                 },
                 "action": {
                     "type": "UPGRADE",
@@ -727,6 +738,8 @@ def check_transfer_bytes_available(supabase: Client, user_id: str, file_size_byt
     FREE: Check transfer_bytes_used_lifetime vs transfer_bytes_limit_lifetime
     PAID: Check transfer_bytes_used_month vs transfer_bytes_limit_month
     
+    Uses billing_plans.py to get accurate limits for each plan.
+    
     Raises HTTPException(402) if transfer quota exceeded.
     
     Args:
@@ -739,41 +752,60 @@ def check_transfer_bytes_available(supabase: Client, user_id: str, file_size_byt
     """
     plan = get_or_create_user_plan(supabase, user_id)
     plan_name = plan.get("plan", "free")
+    billing_period = plan.get("billing_period", "MONTHLY")
+    
+    # Get plan limits from centralized billing_plans.py
+    from backend.billing_plans import get_plan_limits
+    plan_limits = get_plan_limits(plan_name)
     
     if plan_name == "free":
         # FREE: Lifetime transfer
         used_bytes = plan.get("transfer_bytes_used_lifetime", 0)
-        limit_bytes = plan.get("transfer_bytes_limit_lifetime", 5_368_709_120)  # 5GB default
+        limit_bytes = plan_limits.transfer_bytes_limit_lifetime
         
         if used_bytes + file_size_bytes > limit_bytes:
             raise HTTPException(
                 status_code=402,
                 detail={
                     "error": "transfer_quota_exceeded",
-                    "message": f"Has usado {bytes_to_gb(used_bytes):.2f}GB de {bytes_to_gb(limit_bytes):.0f}GB lifetime. Este archivo requiere {bytes_to_gb(file_size_bytes):.2f}GB.",
+                    "message": f"Has usado {bytes_to_gb(used_bytes):.2f}GB de {bytes_to_gb(limit_bytes):.0f}GB lifetime. Este archivo requiere {bytes_to_gb(file_size_bytes):.2f}GB. Actualiza a Standard o Premium.",
                     "used_bytes": used_bytes,
                     "limit_bytes": limit_bytes,
                     "required_bytes": file_size_bytes,
                     "used_gb": round(bytes_to_gb(used_bytes), 2),
-                    "limit_gb": round(bytes_to_gb(limit_bytes), 1)
+                    "limit_gb": round(bytes_to_gb(limit_bytes), 1),
+                    "action": {
+                        "type": "UPGRADE",
+                        "to": "STANDARD"
+                    }
                 }
             )
     else:
-        # PAID: Monthly transfer
+        # PAID: Monthly or yearly transfer (both track monthly usage)
         used_bytes = plan.get("transfer_bytes_used_month", 0)
-        limit_bytes = plan.get("transfer_bytes_limit_month", 214_748_364_800)  # 200GB default
+        limit_bytes = plan_limits.transfer_bytes_limit_month
+        
+        # Determine period label for error message
+        period_label = "este mes" if billing_period == "MONTHLY" else "este mes"
         
         if used_bytes + file_size_bytes > limit_bytes:
+            # Suggest upgrade based on current tier
+            suggested_upgrade = "PREMIUM" if "standard" in plan_name else "PREMIUM"
+            
             raise HTTPException(
                 status_code=402,
                 detail={
                     "error": "transfer_quota_exceeded",
-                    "message": f"Has usado {bytes_to_gb(used_bytes):.2f}GB de {bytes_to_gb(limit_bytes):.0f}GB este mes. Este archivo requiere {bytes_to_gb(file_size_bytes):.2f}GB.",
+                    "message": f"Has usado {bytes_to_gb(used_bytes):.2f}GB de {bytes_to_gb(limit_bytes):.0f}GB {period_label}. Este archivo requiere {bytes_to_gb(file_size_bytes):.2f}GB.",
                     "used_bytes": used_bytes,
                     "limit_bytes": limit_bytes,
                     "required_bytes": file_size_bytes,
                     "used_gb": round(bytes_to_gb(used_bytes), 2),
-                    "limit_gb": round(bytes_to_gb(limit_bytes), 1)
+                    "limit_gb": round(bytes_to_gb(limit_bytes), 1),
+                    "action": {
+                        "type": "UPGRADE",
+                        "to": suggested_upgrade
+                    }
                 }
             )
     
